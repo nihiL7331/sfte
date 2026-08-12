@@ -47,8 +47,8 @@ int sfte_run(int argc, char **argv);
 /*=== IMPLEMENTATION =========================================================*/
 #ifdef SFTE_IMPL
 
-#include "xdg-shell.h"
 #include "xdg-shell.c"
+#include "xdg-shell.h"
 
 // >>memory
 
@@ -56,9 +56,10 @@ int sfte_run(int argc, char **argv);
 
 // >>api
 int sfte_run(int argc, char **argv) {
-    (void)argc; (void)argv;
+    (void)argc;
+    (void)argv;
     printf("[sfte] starting...\n");
     return 0;
 }
 
-#endif // SFTE_IMPL
+#endif  // SFTE_IMPL
