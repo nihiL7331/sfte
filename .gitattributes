@@ -1,0 +1,3 @@
+*.h language=C
+xdg-shell.xml linguist-vendored
+nob.h linguist-vendored
