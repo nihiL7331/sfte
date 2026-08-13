@@ -39,26 +39,263 @@
         3. This notice may not be removed or altered from any source
         distribution.
 */
+#include <stdint.h>
 #include <stdio.h>
 
+// >>config
+#ifndef SFTE_LOG_LEVEL
+#define SFTE_LOG_LEVEL 3
+#endif  // SFTE_LOG_LEVEL
+
+#ifndef SFTE_STARTUP_WIDTH
+#define SFTE_STARTUP_WIDTH 800
+#endif  // SFTE_STARTUP_WIDTH
+
+#ifndef SFTE_STARTUP_HEIGHT
+#define SFTE_STARTUP_HEIGHT 600
+#endif  // SFTE_STARTUP_HEIGHT
+
+#ifndef SFTE_LOGGER_FUNC
+#define SFTE_LOGGER_FUNC _sfte_logger_default
+#endif  // SFTE_LOGGER_FUNC
+
 // >>api
-int sfte_run(int argc, char **argv);
+int sfte_run(void);
 
 /*=== IMPLEMENTATION =========================================================*/
+#define SFTE_IMPL
 #ifdef SFTE_IMPL
 
-#include "xdg-shell.h"
 #include "xdg-shell.c"
+#include "xdg-shell.h"
+#include <fcntl.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <wayland-client.h>
+
+// >>structs
+typedef struct sfte_logger {
+    void (*func)(const char *tag,              // always "sfte"
+                 uint32_t log_level,           // 0=panic, 1=error, 2=warning, 3=info
+                 const char *message_or_null,  // a message string, may be nullptr in release mode
+                 uint32_t line_nr              // line number in sfte.h
+    );
+} sfte_logger;
+
+typedef struct {
+    struct wl_display *display;
+    struct wl_registry *registry;
+    struct wl_compositor *compositor;
+    struct wl_shm *shm;
+    struct wl_seat *seat;
+    struct xdg_wm_base *xdg_wm_base;
+    struct wl_surface *surface;
+    struct xdg_surface *xdg_surface;
+    struct xdg_toplevel *xdg_toplevel;
+    struct wl_buffer *buffer;
+    uint32_t *shm_data;
+    int shm_size;
+
+    int width;
+    int height;
+    uint8_t running;
+
+    sfte_logger logger;
+} _sfte_state;
+static _sfte_state _sfte;
 
 // >>memory
 
 // >>logging
+#ifndef SFTE_ASSERT
+#include <assert.h>
+#define SFTE_ASSERT(c, m) assert(c &&m)
+#endif  // SFTE_ASSERT
+
+static void _sfte_logger_default(const char *tag, uint32_t log_level, const char *msg,
+                                 uint32_t line_nr) {
+    const char *level_str = "???";
+    switch (log_level) {
+    case 0: level_str = "PANIC"; break;
+    case 1: level_str = "ERROR"; break;
+    case 2: level_str = "WARN"; break;
+    case 3: level_str = "INFO"; break;
+    }
+    fprintf(stderr, "[%s:%d](%s) %s\n", tag, line_nr, level_str, msg);
+}
+
+#define _SFTE_LOG_ITEMS _SFTE_LOGITEM_XMACRO(OK, "Ok")
+#define _SFTE_LOGITEM_XMACRO(item, msg) item,
+typedef enum { _SFTE_LOG_ITEMS } _sfte_log_item_t;
+#undef _SFTE_LOGITEM_XMACRO
+#define _SFTE_LOGITEM_XMACRO(item, msg) #item ": " msg,
+static const char *_sfte_log_messages[] = {_SFTE_LOG_ITEMS};
+#undef _SFTE_LOGITEM_XMACRO
+
+static void _sfte_log(_sfte_log_item_t log_item, uint32_t log_level, uint32_t line_nr) {
+    if (log_level > SFTE_LOG_LEVEL) return;
+    void (*log_func)(const char *, uint32_t, const char *,
+                     uint32_t) = _sfte.logger.func ? _sfte.logger.func : _sfte_logger_default;
+    log_func("sfte", log_level, _sfte_log_messages[log_item], line_nr);
+
+    // for log level PANIC it would be 'undefined behaviour' to continue
+    if (log_level == 0) abort();
+}
+
+#define _SFTE_PANIC(code) _sfte_log(code, 0, __LINE__)
+#define _SFTE_ERROR(code) _sfte_log(code, 1, __LINE__)
+#define _SFTE_WARN(code) _sfte_log(code, 2, __LINE__)
+#define _SFTE_INFO(code) _sfte_log(code, 3, __LINE__)
+
+// >>wayland
+static void _sfte_wayland_create_buffer(void) {
+    int stride = _sfte.width * 4;  // 4B/px (ARGB)
+    _sfte.shm_size = stride * _sfte.height;
+    int fd = memfd_create("sfte-buffer", MFD_CLOEXEC);
+    SFTE_ASSERT(fd != -1, "failed to create memfd");
+    SFTE_ASSERT(ftruncate(fd, _sfte.shm_size) != -1, "failed to truncate memfd");
+    _sfte.shm_data = (uint32_t *)mmap(NULL, _sfte.shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+                                      0);
+    SFTE_ASSERT(_sfte.shm_data != MAP_FAILED, "failed to mmap shm data");
+    struct wl_shm_pool *pool = wl_shm_create_pool(_sfte.shm, fd, _sfte.shm_size);
+    _sfte.buffer = wl_shm_pool_create_buffer(pool, 0, _sfte.width, _sfte.height, stride,
+                                             WL_SHM_FORMAT_XRGB8888);
+    wl_shm_pool_destroy(pool);
+    close(fd);
+}
+
+static void _sfte_wayland_render(void) {
+    wl_surface_attach(_sfte.surface, _sfte.buffer, 0, 0);
+    wl_surface_damage_buffer(_sfte.surface, 0, 0, _sfte.width, _sfte.height);
+    wl_surface_commit(_sfte.surface);
+}
+
+static void _sfte_wayland_xdg_wm_base_ping(void *data, struct xdg_wm_base *xdg_wm_base,
+                                           uint32_t serial) {
+    (void)data;
+    xdg_wm_base_pong(xdg_wm_base, serial);  // compositor pinged, pong back with same serial
+}
+
+static const struct xdg_wm_base_listener _sfte_wayland_xdg_wm_base_listener = {
+    .ping = _sfte_wayland_xdg_wm_base_ping,
+};
+
+static void _sfte_wayland_registry_global(void *data, struct wl_registry *registry, uint32_t name,
+                                          const char *interface, uint32_t version) {
+    (void)data, (void)version;
+    if (strcmp(interface, wl_compositor_interface.name) == 0)
+        _sfte.compositor = (struct wl_compositor *)wl_registry_bind(registry, name,
+                                                                    &wl_compositor_interface, 4);
+    else if (strcmp(interface, wl_shm_interface.name) == 0)
+        _sfte.shm = (struct wl_shm *)wl_registry_bind(registry, name, &wl_shm_interface, 1);
+    else if (strcmp(interface, wl_seat_interface.name) == 0)
+        _sfte.seat = (struct wl_seat *)wl_registry_bind(registry, name, &wl_seat_interface, 7);
+    else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
+        _sfte.xdg_wm_base = (struct xdg_wm_base *)wl_registry_bind(registry, name,
+                                                                   &xdg_wm_base_interface, 1);
+        xdg_wm_base_add_listener(_sfte.xdg_wm_base, &_sfte_wayland_xdg_wm_base_listener, &_sfte);
+    }
+}
+
+static void _sfte_wayland_registry_global_remove(void *data, struct wl_registry *registry,
+                                                 uint32_t name) {
+    (void)data, (void)registry, (void)name;
+}
+
+static const struct wl_registry_listener _sfte_wayland_registry_listener = {
+    .global = _sfte_wayland_registry_global,
+    .global_remove = _sfte_wayland_registry_global_remove,
+};
+
+static void _sfte_wayland_xdg_surface_configure(void *data, struct xdg_surface *xdg_surface,
+                                                uint32_t serial) {
+    (void)data;
+    xdg_surface_ack_configure(xdg_surface, serial);
+
+    // resize recalc
+    int needed_size = _sfte.width * _sfte.height * 4;
+    if (_sfte.shm_size != needed_size) {
+        if (_sfte.buffer) wl_buffer_destroy(_sfte.buffer);
+        if (_sfte.shm_data) munmap(_sfte.shm_data, _sfte.shm_size);
+        _sfte_wayland_create_buffer();
+    }
+
+    _sfte_wayland_render();
+}
+
+static const struct xdg_surface_listener _sfte_wayland_xdg_surface_listener = {
+    .configure = _sfte_wayland_xdg_surface_configure,
+};
+
+static void _sfte_wayland_xdg_toplevel_configure(void *data, struct xdg_toplevel *xdg_toplevel,
+                                                 int32_t width, int32_t height,
+                                                 struct wl_array *states) {
+    (void)data, (void)xdg_toplevel, (void)states;
+    if (width > 0 && height > 0) {
+        _sfte.width = width;
+        _sfte.height = height;
+    }
+}
+
+static void _sfte_wayland_xdg_toplevel_close(void *data, struct xdg_toplevel *xdg_toplevel) {
+    (void)data, (void)xdg_toplevel;
+    _sfte.running = 0;
+}
+
+static const struct xdg_toplevel_listener _sfte_wayland_xdg_toplevel_listener = {
+    .configure = _sfte_wayland_xdg_toplevel_configure,
+    .close = _sfte_wayland_xdg_toplevel_close,
+};
+
+static void _sfte_wayland_load(void) {
+    _sfte.display = wl_display_connect(NULL);
+    SFTE_ASSERT(_sfte.display, "failed to connect to Wayland display\n");
+    _sfte.registry = wl_display_get_registry(_sfte.display);
+    wl_registry_add_listener(_sfte.registry, &_sfte_wayland_registry_listener, &_sfte);
+    wl_display_roundtrip(_sfte.display);
+    SFTE_ASSERT(_sfte.compositor, "failed to initialize compositor\n");
+    SFTE_ASSERT(_sfte.shm, "compositor missing required interfaces\n");
+    SFTE_ASSERT(_sfte.xdg_wm_base, "failed to bind xdg_wm_base\n");
+    _sfte.surface = wl_compositor_create_surface(_sfte.compositor);
+    _sfte.xdg_surface = xdg_wm_base_get_xdg_surface(_sfte.xdg_wm_base, _sfte.surface);
+    xdg_surface_add_listener(_sfte.xdg_surface, &_sfte_wayland_xdg_surface_listener, &_sfte);
+    _sfte.xdg_toplevel = xdg_surface_get_toplevel(_sfte.xdg_surface);
+    xdg_toplevel_add_listener(_sfte.xdg_toplevel, &_sfte_wayland_xdg_toplevel_listener, &_sfte);
+    xdg_toplevel_set_title(_sfte.xdg_toplevel, "sfte");
+    xdg_toplevel_set_app_id(_sfte.xdg_toplevel, "sfte");
+    wl_surface_commit(_sfte.surface);
+    wl_display_roundtrip(_sfte.display);
+}
+
+static void _sfte_wayland_unload(void) {
+    if (_sfte.buffer) wl_buffer_destroy(_sfte.buffer);
+    if (_sfte.shm_data) munmap(_sfte.shm_data, _sfte.shm_size);
+    if (_sfte.xdg_toplevel) xdg_toplevel_destroy(_sfte.xdg_toplevel);
+    if (_sfte.xdg_surface) xdg_surface_destroy(_sfte.xdg_surface);
+    if (_sfte.surface) wl_surface_destroy(_sfte.surface);
+    if (_sfte.xdg_wm_base) xdg_wm_base_destroy(_sfte.xdg_wm_base);
+    wl_registry_destroy(_sfte.registry);
+    wl_display_disconnect(_sfte.display);
+}
+
+// >>state
+static void _sfte_state_load(void) {
+    memset(&_sfte, 0, sizeof(_sfte));
+    _sfte.width = SFTE_STARTUP_WIDTH;
+    _sfte.height = SFTE_STARTUP_HEIGHT;
+    _sfte.running = 1;
+    _sfte.logger.func = SFTE_LOGGER_FUNC;
+}
 
 // >>api
-int sfte_run(int argc, char **argv) {
-    (void)argc; (void)argv;
-    printf("[sfte] starting...\n");
+int sfte_run(void) {
+    _sfte_state_load();
+    _sfte_wayland_load();
+    _SFTE_INFO(OK);
+    while (_sfte.running && wl_display_dispatch(_sfte.display) != -1);
+    _sfte_wayland_unload();
     return 0;
 }
 
-#endif // SFTE_IMPL
+#endif  // SFTE_IMPL
