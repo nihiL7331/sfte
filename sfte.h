@@ -96,6 +96,7 @@ typedef struct {
     struct xdg_toplevel *xdg_toplevel;
     struct wl_buffer *buffer;
     uint32_t *shm_data;
+    int shm_size;
 
     int width;
     int height;
@@ -149,6 +150,28 @@ static void _sfte_log(_sfte_log_item_t log_item, uint32_t log_level, uint32_t li
 #define _SFTE_INFO(code) _sfte_log(code, 3, __LINE__)
 
 // >>wayland
+static void _sfte_wayland_create_buffer(void) {
+    int stride = _sfte.width * 4;  // 4B/px (ARGB)
+    _sfte.shm_size = stride * _sfte.height;
+    int fd = memfd_create("sfte-buffer", MFD_CLOEXEC);
+    SFTE_ASSERT(fd != -1, "failed to create memfd");
+    SFTE_ASSERT(ftruncate(fd, _sfte.shm_size) != -1, "failed to truncate memfd");
+    _sfte.shm_data = (uint32_t *)mmap(NULL, _sfte.shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+                                      0);
+    SFTE_ASSERT(_sfte.shm_data != MAP_FAILED, "failed to mmap shm data");
+    struct wl_shm_pool *pool = wl_shm_create_pool(_sfte.shm, fd, _sfte.shm_size);
+    _sfte.buffer = wl_shm_pool_create_buffer(pool, 0, _sfte.width, _sfte.height, stride,
+                                             WL_SHM_FORMAT_XRGB8888);
+    wl_shm_pool_destroy(pool);
+    close(fd);
+}
+
+static void _sfte_wayland_render(void) {
+    wl_surface_attach(_sfte.surface, _sfte.buffer, 0, 0);
+    wl_surface_damage_buffer(_sfte.surface, 0, 0, _sfte.width, _sfte.height);
+    wl_surface_commit(_sfte.surface);
+}
+
 static void _sfte_wayland_xdg_wm_base_ping(void *data, struct xdg_wm_base *xdg_wm_base,
                                            uint32_t serial) {
     (void)data;
@@ -190,6 +213,16 @@ static void _sfte_wayland_xdg_surface_configure(void *data, struct xdg_surface *
                                                 uint32_t serial) {
     (void)data;
     xdg_surface_ack_configure(xdg_surface, serial);
+
+    // resize recalc
+    int needed_size = _sfte.width * _sfte.height * 4;
+    if (_sfte.shm_size != needed_size) {
+        if (_sfte.buffer) wl_buffer_destroy(_sfte.buffer);
+        if (_sfte.shm_data) munmap(_sfte.shm_data, _sfte.shm_size);
+        _sfte_wayland_create_buffer();
+    }
+
+    _sfte_wayland_render();
 }
 
 static const struct xdg_surface_listener _sfte_wayland_xdg_surface_listener = {
@@ -199,8 +232,11 @@ static const struct xdg_surface_listener _sfte_wayland_xdg_surface_listener = {
 static void _sfte_wayland_xdg_toplevel_configure(void *data, struct xdg_toplevel *xdg_toplevel,
                                                  int32_t width, int32_t height,
                                                  struct wl_array *states) {
-    (void)data, (void)xdg_toplevel, (void)width, (void)height, (void)states;
-    // TODO: use width/height to resize terminal grid
+    (void)data, (void)xdg_toplevel, (void)states;
+    if (width > 0 && height > 0) {
+        _sfte.width = width;
+        _sfte.height = height;
+    }
 }
 
 static void _sfte_wayland_xdg_toplevel_close(void *data, struct xdg_toplevel *xdg_toplevel) {
@@ -235,34 +271,13 @@ static void _sfte_wayland_load(void) {
 
 static void _sfte_wayland_unload(void) {
     if (_sfte.buffer) wl_buffer_destroy(_sfte.buffer);
-    if (_sfte.shm_data) munmap(_sfte.shm_data, _sfte.width * _sfte.height * 4);
+    if (_sfte.shm_data) munmap(_sfte.shm_data, _sfte.shm_size);
     if (_sfte.xdg_toplevel) xdg_toplevel_destroy(_sfte.xdg_toplevel);
     if (_sfte.xdg_surface) xdg_surface_destroy(_sfte.xdg_surface);
     if (_sfte.surface) wl_surface_destroy(_sfte.surface);
     if (_sfte.xdg_wm_base) xdg_wm_base_destroy(_sfte.xdg_wm_base);
     wl_registry_destroy(_sfte.registry);
     wl_display_disconnect(_sfte.display);
-}
-
-static void _sfte_wayland_create_buffer(void) {
-    int stride = _sfte.width * 4;  // 4B/px (ARGB)
-    int size = stride * _sfte.height;
-    int fd = memfd_create("sfte-buffer", MFD_CLOEXEC);
-    SFTE_ASSERT(fd != -1, "failed to create memfd");
-    SFTE_ASSERT(ftruncate(fd, size) != -1, "failed to truncate memfd");
-    _sfte.shm_data = (uint32_t *)mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    SFTE_ASSERT(_sfte.shm_data != MAP_FAILED, "failed to mmap shm data");
-    struct wl_shm_pool *pool = wl_shm_create_pool(_sfte.shm, fd, size);
-    _sfte.buffer = wl_shm_pool_create_buffer(pool, 0, _sfte.width, _sfte.height, stride,
-                                             WL_SHM_FORMAT_XRGB8888);
-    wl_shm_pool_destroy(pool);
-    close(fd);
-}
-
-static void _sfte_wayland_render(void) {
-    wl_surface_attach(_sfte.surface, _sfte.buffer, 0, 0);
-    wl_surface_damage_buffer(_sfte.surface, 0, 0, _sfte.width, _sfte.height);
-    wl_surface_commit(_sfte.surface);
 }
 
 // >>state
@@ -278,8 +293,6 @@ static void _sfte_state_load(void) {
 int sfte_run(void) {
     _sfte_state_load();
     _sfte_wayland_load();
-    _sfte_wayland_create_buffer();
-    _sfte_wayland_render();
     _SFTE_INFO(OK);
     while (_sfte.running && wl_display_dispatch(_sfte.display) != -1);
     _sfte_wayland_unload();
