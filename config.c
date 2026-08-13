@@ -3,5 +3,5 @@
 #include "sfte.h"
 
 int main(void) {
-    sfte_run(NULL);
+    sfte_run();
 }
