@@ -84,6 +84,9 @@ int sfte_run(void);
 #include <sys/mman.h>
 #include <unistd.h>  // exec/fork/env
 #include <wayland-client.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
+#include <xkbcommon/xkbcommon-names.h>
+#include <xkbcommon/xkbcommon.h>
 
 // >>structs
 typedef struct sfte_logger {
@@ -100,6 +103,10 @@ typedef struct {
     struct wl_compositor *compositor;
     struct wl_shm *shm;
     struct wl_seat *seat;
+    struct wl_keyboard *keyboard;
+    struct xkb_context *xkb_context;
+    struct xkb_keymap *xkb_keymap;
+    struct xkb_state *xkb_state;
     struct xdg_wm_base *xdg_wm_base;
     struct wl_surface *surface;
     struct xdg_surface *xdg_surface;
@@ -186,6 +193,128 @@ static void _sfte_wayland_render(void) {
     wl_surface_commit(_sfte.surface);
 }
 
+static void _sfte_wayland_keyboard_keymap(void *data, struct wl_keyboard *keyboard, uint32_t format,
+                                          int32_t fd, uint32_t size) {
+    (void)data, (void)keyboard;
+    SFTE_ASSERT(format == WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, "unsupported keymap format");
+    char *map_str = (char *)mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+    SFTE_ASSERT(map_str != MAP_FAILED, "failed to mmap keyboard");
+    if (_sfte.xkb_keymap) xkb_keymap_unref(_sfte.xkb_keymap);
+    if (_sfte.xkb_state) xkb_state_unref(_sfte.xkb_state);
+    _sfte.xkb_keymap = xkb_keymap_new_from_string(
+        _sfte.xkb_context, map_str, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
+    _sfte.xkb_state = xkb_state_new(_sfte.xkb_keymap);
+    munmap(map_str, size);
+    close(fd);  // close the fd to avoid leak
+}
+
+static void _sfte_wayland_keyboard_enter(void *data, struct wl_keyboard *keyboard, uint32_t serial,
+                                         struct wl_surface *surface, struct wl_array *keys) {
+    (void)data, (void)keyboard, (void)serial, (void)surface, (void)keys;
+}
+
+static void _sfte_wayland_keyboard_leave(void *data, struct wl_keyboard *keyboard, uint32_t serial,
+                                         struct wl_surface *surface) {
+    (void)data, (void)keyboard, (void)serial, (void)surface;
+}
+
+static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard, uint32_t serial,
+                                       uint32_t time, uint32_t key, uint32_t state) {
+    (void)data, (void)keyboard, (void)serial, (void)time;
+    if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !_sfte.xkb_state) return;
+    xkb_keycode_t keycode = key + 8;  // WARN: evdev codes are offset by 8 from xkb keycodes
+    xkb_keysym_t sym = xkb_state_key_get_one_sym(_sfte.xkb_state, keycode);
+    bool ctrl = xkb_state_mod_name_is_active(_sfte.xkb_state, XKB_MOD_NAME_CTRL,
+                                             XKB_STATE_MODS_EFFECTIVE);
+    bool alt = xkb_state_mod_name_is_active(_sfte.xkb_state, XKB_MOD_NAME_ALT,
+                                            XKB_STATE_MODS_EFFECTIVE);
+    char buf[128];
+    int size = 0;
+#define MAP_KEY(str)                                                                               \
+    do {                                                                                           \
+        size = sizeof(str) - 1;                                                                    \
+        memcpy(buf, str, size);                                                                    \
+    } while (0)
+    switch (sym) {
+    case XKB_KEY_Up: MAP_KEY("\033[A"); break;
+    case XKB_KEY_Down: MAP_KEY("\033[B"); break;
+    case XKB_KEY_Right: MAP_KEY("\033[C"); break;
+    case XKB_KEY_Left: MAP_KEY("\033[D"); break;
+    case XKB_KEY_BackSpace: MAP_KEY("\x7f"); break;
+    case XKB_KEY_Delete: MAP_KEY("\033[3~"); break;
+    case XKB_KEY_Home: MAP_KEY("\033[H"); break;
+    case XKB_KEY_End: MAP_KEY("\033[F"); break;
+    default:
+        if (ctrl) {
+            if (sym >= XKB_KEY_a && sym <= XKB_KEY_z) {
+                buf[0] = sym - XKB_KEY_a + 1;
+                size = 1;
+            } else if (sym >= XKB_KEY_A && sym <= XKB_KEY_Z) {
+                buf[0] = sym - XKB_KEY_A + 1;
+                size = 1;
+            } else if (sym == XKB_KEY_space) {
+                buf[0] = '\0';
+                size = 1;
+            }
+        }
+
+        if (size == 0) size = xkb_state_key_get_utf8(_sfte.xkb_state, keycode, buf, sizeof(buf));
+    }
+    // if alt is held, prepend esc byte
+    if (alt && size > 0 && size < (int)(sizeof(buf) - 1)) {
+        memmove(buf + 1, buf, size++);
+        buf[0] = '\033';
+    }
+    if (size > 0) write(_sfte.pty_fd, buf, size);
+}
+
+static void _sfte_wayland_keyboard_modifiers(void *data, struct wl_keyboard *keyboard,
+                                             uint32_t serial, uint32_t mods_depressed,
+                                             uint32_t mods_latched, uint32_t mods_locked,
+                                             uint32_t group) {
+    (void)data, (void)keyboard, (void)serial;
+    if (!_sfte.xkb_state) return;
+    xkb_state_update_mask(_sfte.xkb_state, mods_depressed, mods_latched, mods_locked, 0, 0, group);
+}
+
+static void _sfte_wayland_keyboard_repeat_info(void *data, struct wl_keyboard *keyboard,
+                                               int32_t rate, int32_t delay) {
+    (void)data, (void)keyboard, (void)rate, (void)delay;
+}
+
+static const struct wl_keyboard_listener _sfte_wayland_keyboard_listener = {
+    .keymap = _sfte_wayland_keyboard_keymap,
+    .enter = _sfte_wayland_keyboard_enter,
+    .leave = _sfte_wayland_keyboard_leave,
+    .key = _sfte_wayland_keyboard_key,
+    .modifiers = _sfte_wayland_keyboard_modifiers,
+    .repeat_info = _sfte_wayland_keyboard_repeat_info,
+};
+
+static void _sfte_wayland_seat_capabilities(void *data, struct wl_seat *seat,
+                                            uint32_t capabilities) {
+    (void)data;
+    // if seat has a keyboard and we haven't grabbed it yet
+    if ((capabilities & WL_SEAT_CAPABILITY_KEYBOARD) && !_sfte.keyboard) {
+        _sfte.keyboard = wl_seat_get_keyboard(seat);
+        wl_keyboard_add_listener(_sfte.keyboard, &_sfte_wayland_keyboard_listener, &_sfte);
+    }
+    // if seat lost keyboard and we still hold the ptr
+    else if (!(capabilities & WL_SEAT_CAPABILITY_KEYBOARD) && _sfte.keyboard) {
+        wl_keyboard_release(_sfte.keyboard);
+        _sfte.keyboard = NULL;
+    }
+}
+
+static void _sfte_wayland_seat_name(void *data, struct wl_seat *seat, const char *name) {
+    (void)data, (void)seat, (void)name;
+}
+
+static const struct wl_seat_listener _sfte_wayland_seat_listener = {
+    .capabilities = _sfte_wayland_seat_capabilities,
+    .name = _sfte_wayland_seat_name,
+};
+
 static void _sfte_wayland_xdg_wm_base_ping(void *data, struct xdg_wm_base *xdg_wm_base,
                                            uint32_t serial) {
     (void)data;
@@ -205,10 +334,11 @@ static void _sfte_wayland_registry_global(void *data, struct wl_registry *regist
     else if (strcmp(interface, wl_shm_interface.name) == 0)
         _sfte.shm = (struct wl_shm *)wl_registry_bind(registry, name, &wl_shm_interface,
                                                       1 /* wl shm version */);
-    else if (strcmp(interface, wl_seat_interface.name) == 0)
+    else if (strcmp(interface, wl_seat_interface.name) == 0) {
         _sfte.seat = (struct wl_seat *)wl_registry_bind(registry, name, &wl_seat_interface,
                                                         7 /* wl seat version */);
-    else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
+        wl_seat_add_listener(_sfte.seat, &_sfte_wayland_seat_listener, &_sfte);
+    } else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
         _sfte.xdg_wm_base = (struct xdg_wm_base *)wl_registry_bind(
             registry, name, &xdg_wm_base_interface, 1 /* xdg wm base version */);
         xdg_wm_base_add_listener(_sfte.xdg_wm_base, &_sfte_wayland_xdg_wm_base_listener, &_sfte);
@@ -266,6 +396,8 @@ static const struct xdg_toplevel_listener _sfte_wayland_xdg_toplevel_listener = 
 };
 
 static void _sfte_wayland_load(void) {
+    _sfte.xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    SFTE_ASSERT(_sfte.xkb_context, "failed to create xkb context");
     _sfte.display = wl_display_connect(NULL);
     SFTE_ASSERT(_sfte.display, "failed to connect to Wayland display\n");
     _sfte.registry = wl_display_get_registry(_sfte.display);
@@ -292,8 +424,13 @@ static void _sfte_wayland_unload(void) {
     if (_sfte.xdg_surface) xdg_surface_destroy(_sfte.xdg_surface);
     if (_sfte.surface) wl_surface_destroy(_sfte.surface);
     if (_sfte.xdg_wm_base) xdg_wm_base_destroy(_sfte.xdg_wm_base);
+    if (_sfte.keyboard) wl_keyboard_release(_sfte.keyboard);
+    if (_sfte.seat) wl_seat_release(_sfte.seat);
     wl_registry_destroy(_sfte.registry);
     wl_display_disconnect(_sfte.display);
+    if (_sfte.xkb_state) xkb_state_unref(_sfte.xkb_state);
+    if (_sfte.xkb_keymap) xkb_keymap_unref(_sfte.xkb_keymap);
+    if (_sfte.xkb_context) xkb_context_unref(_sfte.xkb_context);
 }
 
 // >>state
