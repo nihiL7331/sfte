@@ -66,6 +66,18 @@ int sfte_run(const sfte_desc *desc);
 #include "xdg-shell.c"
 #include "xdg-shell.h"
 #include <string.h>
+#include <wayland-client.h>
+
+// >>structs
+typedef struct {
+    struct wl_display *display;
+    struct wl_registry *registry;
+    struct wl_compositor *compositor;
+    struct wl_shm *shm;
+    struct wl_seat *seat;
+    sfte_logger logger;
+} _sfte_state;
+static _sfte_state _sfte;
 
 // >>memory
 
@@ -114,9 +126,50 @@ static void _sfte_log(_sfte_log_item_t log_item, uint32_t log_level, uint32_t li
 #define _SFTE_WARN(code) _sfte_log(code, 2, __LINE__)
 #define _SFTE_INFO(code) _sfte_log(code, 3, __LINE__)
 
+// >>wayland
+static void _sfte_wayland_reg_global(void *data, struct wl_registry *registry, uint32_t name,
+                                     const char *interface, uint32_t version) {
+    (void)data, (void)version;
+    if (strcmp(interface, wl_compositor_interface.name) == 0)
+        _sfte.compositor = (struct wl_compositor *)wl_registry_bind(registry, name,
+                                                                    &wl_compositor_interface, 4);
+    else if (strcmp(interface, wl_shm_interface.name) == 0)
+        _sfte.shm = (struct wl_shm *)wl_registry_bind(registry, name, &wl_shm_interface, 1);
+    else if (strcmp(interface, wl_seat_interface.name) == 0)
+        _sfte.seat = (struct wl_seat *)wl_registry_bind(registry, name, &wl_seat_interface, 7);
+}
+
+static void _sfte_wayland_reg_global_remove(void *data, struct wl_registry *registry,
+                                            uint32_t name) {
+    (void)data, (void)registry, (void)name;
+}
+
+static const struct wl_registry_listener _sfte_wayland_reg_listener = {
+    .global = _sfte_wayland_reg_global,
+    .global_remove = _sfte_wayland_reg_global_remove,
+};
+
+static void _sfte_wayland_load(void) {
+    _sfte.display = wl_display_connect(NULL);
+    SFTE_ASSERT(_sfte.display, "failed to connect to Wayland display\n");
+    _sfte.registry = wl_display_get_registry(_sfte.display);
+    wl_registry_add_listener(_sfte.registry, &_sfte_wayland_reg_listener, &_sfte);
+    wl_display_roundtrip(_sfte.display);
+    SFTE_ASSERT(_sfte.compositor, "failed to initialize compositor\n");
+    SFTE_ASSERT(_sfte.shm, "compositor missing required interfaces\n");
+}
+
+static void _sfte_wayland_unload(void) {
+    wl_registry_destroy(_sfte.registry);
+    wl_display_disconnect(_sfte.display);
+}
+
 // >>api
 int sfte_run(const sfte_desc *desc) {
+    memset(&_sfte, 0, sizeof(_sfte));
     if (desc) _sfte.logger = desc->logger;
+    _sfte_wayland_load();
+    _sfte_wayland_unload();
     _SFTE_INFO(OK);
     return 0;
 }
