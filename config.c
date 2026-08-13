@@ -1,7 +1,7 @@
+#define SFTE_DEBUG
 #define SFTE_IMPL
 #include "sfte.h"
 
-int main(int argc, char **argv) {
-    sfte_run(argc, argv);
-    return 0;
+int main(void) {
+    sfte_run(NULL);
 }
