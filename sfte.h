@@ -59,15 +59,6 @@
 #define SFTE_LOGGER_FUNC _sfte_logger_default
 #endif  // SFTE_LOGGER_FUNC
 
-// >>structs
-typedef struct sfte_logger {
-    void (*func)(const char *tag,              // always "sfte"
-                 uint32_t log_level,           // 0=panic, 1=error, 2=warning, 3=info
-                 const char *message_or_null,  // a message string, may be nullptr in release mode
-                 uint32_t line_nr              // line number in sfte.h
-    );
-} sfte_logger;
-
 // >>api
 int sfte_run(void);
 
@@ -84,6 +75,14 @@ int sfte_run(void);
 #include <wayland-client.h>
 
 // >>structs
+typedef struct sfte_logger {
+    void (*func)(const char *tag,              // always "sfte"
+                 uint32_t log_level,           // 0=panic, 1=error, 2=warning, 3=info
+                 const char *message_or_null,  // a message string, may be nullptr in release mode
+                 uint32_t line_nr              // line number in sfte.h
+    );
+} sfte_logger;
+
 typedef struct {
     struct wl_display *display;
     struct wl_registry *registry;
