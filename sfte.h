@@ -42,6 +42,15 @@
 #include <stdint.h>
 #include <stdio.h>
 
+// >>config
+#ifndef SFTE_LOG_LEVEL
+#define SFTE_LOG_LEVEL 3
+#endif  // SFTE_LOG_LEVEL
+
+#ifndef SFTE_LOGGER_FUNC
+#define SFTE_LOGGER_FUNC _sfte_logger_default
+#endif  // SFTE_LOGGER_FUNC
+
 // >>structs
 typedef struct sfte_logger {
     void (*func)(const char *tag,              // always "sfte"
@@ -51,14 +60,8 @@ typedef struct sfte_logger {
     );
 } sfte_logger;
 
-typedef struct {
-    int argc;            // currently unused
-    char **argv;         // currently unused
-    sfte_logger logger;  // optional
-} sfte_desc;
-
 // >>api
-int sfte_run(const sfte_desc *desc);
+int sfte_run(void);
 
 /*=== IMPLEMENTATION =========================================================*/
 #ifdef SFTE_IMPL
@@ -86,10 +89,6 @@ static _sfte_state _sfte;
 #include <assert.h>
 #define SFTE_ASSERT(c, m) assert(c &&m)
 #endif  // SFTE_ASSERT
-
-#ifndef SFTE_LOG_LEVEL
-#define SFTE_LOG_LEVEL 3
-#endif  // SFTE_LOG_LEVEL
 
 static void _sfte_logger_default(const char *tag, uint32_t log_level, const char *msg,
                                  uint32_t line_nr) {
@@ -164,10 +163,15 @@ static void _sfte_wayland_unload(void) {
     wl_display_disconnect(_sfte.display);
 }
 
-// >>api
-int sfte_run(const sfte_desc *desc) {
+// >>state
+static void _sfte_state_load(void) {
     memset(&_sfte, 0, sizeof(_sfte));
-    if (desc) _sfte.logger = desc->logger;
+    _sfte.logger.func = SFTE_LOGGER_FUNC;
+}
+
+// >>api
+int sfte_run(void) {
+    _sfte_state_load();
     _sfte_wayland_load();
     _sfte_wayland_unload();
     _SFTE_INFO(OK);
