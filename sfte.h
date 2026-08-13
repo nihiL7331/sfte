@@ -59,6 +59,14 @@
 #define SFTE_LOGGER_FUNC _sfte_logger_default
 #endif  // SFTE_LOGGER_FUNC
 
+#ifndef SFTE_TERM_ENV
+#define SFTE_TERM_ENV "xterm-256color"
+#endif  // SFTE_TERM_ENV
+
+#ifndef SFTE_PTY_BUF_SIZE
+#define SFTE_PTY_BUF_SIZE 4096
+#endif  // SFTE_PTY_BUF_SIZE
+
 // >>api
 int sfte_run(void);
 
@@ -69,9 +77,12 @@ int sfte_run(void);
 #include "xdg-shell.c"
 #include "xdg-shell.h"
 #include <fcntl.h>
-#include <string.h>
+#include <poll.h>
+#include <pty.h>     // forkpty
+#include <stdlib.h>  // getenv/setenv
+#include <string.h>  // memset
 #include <sys/mman.h>
-#include <unistd.h>
+#include <unistd.h>  // exec/fork/env
 #include <wayland-client.h>
 
 // >>structs
@@ -97,6 +108,9 @@ typedef struct {
     uint32_t *shm_data;
     int shm_size;
 
+    int pty_fd;     // master fd to r/w from
+    pid_t pty_pid;  // pid of shell
+
     int width;
     int height;
     uint8_t running;
@@ -106,6 +120,7 @@ typedef struct {
 static _sfte_state _sfte;
 
 // >>memory
+#define _SFTE_ARRAY_LEN(x) (sizeof(x) / sizeof((x)[0]))
 
 // >>logging
 #ifndef SFTE_ASSERT
@@ -185,15 +200,17 @@ static void _sfte_wayland_registry_global(void *data, struct wl_registry *regist
                                           const char *interface, uint32_t version) {
     (void)data, (void)version;
     if (strcmp(interface, wl_compositor_interface.name) == 0)
-        _sfte.compositor = (struct wl_compositor *)wl_registry_bind(registry, name,
-                                                                    &wl_compositor_interface, 4);
+        _sfte.compositor = (struct wl_compositor *)wl_registry_bind(
+            registry, name, &wl_compositor_interface, 4 /* wl compositor version */);
     else if (strcmp(interface, wl_shm_interface.name) == 0)
-        _sfte.shm = (struct wl_shm *)wl_registry_bind(registry, name, &wl_shm_interface, 1);
+        _sfte.shm = (struct wl_shm *)wl_registry_bind(registry, name, &wl_shm_interface,
+                                                      1 /* wl shm version */);
     else if (strcmp(interface, wl_seat_interface.name) == 0)
-        _sfte.seat = (struct wl_seat *)wl_registry_bind(registry, name, &wl_seat_interface, 7);
+        _sfte.seat = (struct wl_seat *)wl_registry_bind(registry, name, &wl_seat_interface,
+                                                        7 /* wl seat version */);
     else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
-        _sfte.xdg_wm_base = (struct xdg_wm_base *)wl_registry_bind(registry, name,
-                                                                   &xdg_wm_base_interface, 1);
+        _sfte.xdg_wm_base = (struct xdg_wm_base *)wl_registry_bind(
+            registry, name, &xdg_wm_base_interface, 1 /* xdg wm base version */);
         xdg_wm_base_add_listener(_sfte.xdg_wm_base, &_sfte_wayland_xdg_wm_base_listener, &_sfte);
     }
 }
@@ -288,12 +305,55 @@ static void _sfte_state_load(void) {
     _sfte.logger.func = SFTE_LOGGER_FUNC;
 }
 
+// >>pty
+static void _sfte_pty_spawn(void) {
+    // NOTE: ws_col/ws_row will not be hardcoded when font rendering will be present
+    struct winsize ws = {
+        .ws_row = 24,
+        .ws_col = 80,
+        .ws_xpixel = (unsigned short)_sfte.width,
+        .ws_ypixel = (unsigned short)_sfte.height,
+    };
+    _sfte.pty_pid = forkpty(&_sfte.pty_fd, NULL, NULL, &ws);
+    SFTE_ASSERT(_sfte.pty_pid != -1, "failed to forkpty");
+    if (_sfte.pty_pid == 0) {
+        setenv("TERM", SFTE_TERM_ENV, 1);
+        char *shell = getenv("SHELL");
+        if (!shell) shell = "/bin/sh";
+        execlp(shell, shell, NULL);  // replace current pimg with shell
+        abort();                     // if execlp returns, it failed to exec the shell
+    }
+    _SFTE_INFO(OK);
+}
+
+// >>loop
+static void _sfte_loop(void) {
+    int wl_fd = wl_display_get_fd(_sfte.display);
+    while (_sfte.running) {
+        wl_display_dispatch_pending(_sfte.display);
+        wl_display_flush(_sfte.display);
+        struct pollfd fds[] = {{.fd = wl_fd, .events = POLLIN},
+                               {.fd = _sfte.pty_fd, .events = POLLIN}};
+        if (poll(fds, _SFTE_ARRAY_LEN(fds), -1 /* infinite timeout */) == -1) break;
+        if (fds[0].revents & (POLLIN | POLLERR | POLLHUP))
+            if (wl_display_dispatch(_sfte.display) == -1) _sfte.running = 0;
+        if (fds[1].revents & POLLIN) {
+            char buf[SFTE_PTY_BUF_SIZE];
+            ssize_t n = read(_sfte.pty_fd, buf, SFTE_PTY_BUF_SIZE);
+            if (n > 0)
+                write(STDOUT_FILENO, buf, n);
+            else
+                _sfte.running = 0;
+        }
+    }
+}
+
 // >>api
 int sfte_run(void) {
     _sfte_state_load();
     _sfte_wayland_load();
-    _SFTE_INFO(OK);
-    while (_sfte.running && wl_display_dispatch(_sfte.display) != -1);
+    _sfte_pty_spawn();
+    _sfte_loop();
     _sfte_wayland_unload();
     return 0;
 }
