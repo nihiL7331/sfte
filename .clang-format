@@ -11,6 +11,7 @@ AllowShortFunctionsOnASingleLine: Inline
 AllowShortIfStatementsOnASingleLine: WithoutElse
 AllowShortEnumsOnASingleLine: true
 AllowShortBlocksOnASingleLine: Always
+AllowShortLoopsOnASingleLine: true
 InsertBraces: false
 AlwaysBreakAfterReturnType: None
 BinPackArguments: true
@@ -20,3 +21,5 @@ IndentPPDirectives: None
 KeepEmptyLinesAtTheStartOfBlocks: false
 MaxEmptyLinesToKeep: 1
 SpacesBeforeTrailingComments: 2
+AllowShortCaseLabelsOnASingleLine: true
+PenaltyBreakAssignment: 1000
