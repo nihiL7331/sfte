@@ -3356,7 +3356,7 @@ static const uint32_t _sfte_ansi_palette[16] = {
     0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C, 0xEBDBB2};
 
 static void _sfte_term_resize(int new_cols, int new_rows) {
-    sfte_cell *new_cells = calloc(new_cols * new_rows, sizeof(sfte_cell));
+    sfte_cell *new_cells = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
     SFTE_ASSERT(new_cells, "failed to allocate resized terminal grid");
     int min_cols = new_cols < _sfte.term.cols ? new_cols : _sfte.term.cols;
     int min_rows = new_rows < _sfte.term.rows ? new_rows : _sfte.term.rows;
