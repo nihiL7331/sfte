@@ -67,6 +67,22 @@
 #define SFTE_PTY_BUF_SIZE 4096
 #endif  // SFTE_PTY_BUF_SIZE
 
+#ifndef SFTE_BG_COLOR
+#define SFTE_BG_COLOR 0x000000
+#endif  // SFTE_BG_COLOR
+
+#ifndef SFTE_FONT_PATH
+#define SFTE_FONT_PATH "/usr/share/fonts/TTF/DejaVuSansMono.ttf"
+#endif  // SFTE_FONT_PATH
+
+#ifndef SFTE_DEFAULT_FONT_SIZE
+#define SFTE_DEFAULT_FONT_SIZE 12.0f
+#endif  // SFTE_DEFAULT_FONT_SIZE
+
+#ifndef SFTE_FONT_RESIZE_SPEED
+#define SFTE_FONT_RESIZE_SPEED 2.0f
+#endif  // SFTE_FONT_RESIZE_SPEED
+
 // >>api
 int sfte_run(void);
 
