@@ -3447,13 +3447,14 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
             _sfte.term.cells[idx].attr = 0;
         }
         break;
-    case 'n':  // device status report
+    case 'n': {  // device status report
         if (p[0] != 6) break;
         char buf[32];
         int len = snprintf(buf, sizeof(buf), "\033[%d;%dR", _sfte.term.cursor_y + 1,
                            _sfte.term.cursor_x + 1);
         write(_sfte.pty_fd, buf, len);
         break;
+    }
     case 'A':  // cursor up
         _sfte.term.cursor_y -= (p[0] > 0 ? p[0] : 1);
         if (_sfte.term.cursor_y < 0) _sfte.term.cursor_y = 0;
