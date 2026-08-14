@@ -92,15 +92,13 @@ int sfte_run(void);
 #define STBTT_STATIC
 #define STB_TRUETYPE_IMPLEMENTATION
 #ifdef STB_TRUETYPE_IMPLEMENTATION
-// #define your own (u)stbtt_int8/16/32 before including to override this
-#ifndef stbtt_uint8
-typedef unsigned char stbtt_uint8;
-typedef signed char stbtt_int8;
-typedef unsigned short stbtt_uint16;
-typedef signed short stbtt_int16;
-typedef unsigned int stbtt_uint32;
-typedef signed int stbtt_int32;
-#endif
+
+typedef uint8_t stbtt_uint8;
+typedef int8_t stbtt_int8;
+typedef uint16_t stbtt_uint16;
+typedef int16_t stbtt_int16;
+typedef uint32_t stbtt_uint32;
+typedef int32_t stbtt_int32;
 
 typedef char stbtt__check_size32[sizeof(stbtt_int32) == 4 ? 1 : -1];
 typedef char stbtt__check_size16[sizeof(stbtt_int16) == 2 ? 1 : -1];
@@ -125,6 +123,7 @@ typedef char stbtt__check_size16[sizeof(stbtt_int16) == 2 ? 1 : -1];
 #define STBTT_strlen(x) strlen(x)
 #define STBTT_memcpy memcpy
 #define STBTT_memset memset
+#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
@@ -136,15 +135,7 @@ typedef char stbtt__check_size16[sizeof(stbtt_int16) == 2 ? 1 : -1];
 #ifndef __STB_INCLUDE_STB_TRUETYPE_H__
 #define __STB_INCLUDE_STB_TRUETYPE_H__
 
-#ifdef STBTT_STATIC
 #define STBTT_DEF static
-#else
-#define STBTT_DEF extern
-#endif
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 // private structure
 typedef struct {
@@ -463,10 +454,6 @@ enum {  // languageID for STBTT_PLATFORM_ID_MAC
     STBTT_MAC_LANG_ITALIAN = 3,
     STBTT_MAC_LANG_CHINESE_TRAD = 19
 };
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif  // __STB_INCLUDE_STB_TRUETYPE_H__
 
@@ -2749,11 +2736,6 @@ struct stbrp_rect {
 // font name matching -- recommended not to use this
 //
 
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wcast-qual"
-#endif
-
 STBTT_DEF int stbtt_BakeFontBitmap(const unsigned char *data, int offset, float pixel_height,
                                    unsigned char *pixels, int pw, int ph, int first_char,
                                    int num_chars, stbtt_bakedchar *chardata) {
@@ -2764,10 +2746,6 @@ STBTT_DEF int stbtt_BakeFontBitmap(const unsigned char *data, int offset, float 
 STBTT_DEF int stbtt_InitFont(stbtt_fontinfo *info, const unsigned char *data, int offset) {
     return stbtt_InitFont_internal(info, (unsigned char *)data, offset);
 }
-
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
 
 #endif  // STB_TRUETYPE_IMPLEMENTATION
 
