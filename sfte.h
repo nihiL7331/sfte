@@ -822,6 +822,13 @@ typedef struct {
 } sfte_cell;
 
 typedef struct {
+    uint32_t rune;
+    int x0, y0, x1, y1;  // atlas tex coords
+    int xoff, yoff;      // render offsets
+    int xadvance;
+} sfte_glyph;
+
+typedef struct {
     sfte_cell *cells;
     sfte_cell *alt_cells;
     int cols;
@@ -849,17 +856,33 @@ typedef struct {
     int vt_params[16];  // stores nums from esc sequences
     int vt_param_idx;
     uint8_t vt_dec_priv;  // tracks if seq starts with ?
+    // utf-8 state
+    uint32_t utf8_rune;
+    int utf8_bytes_left;
 } sfte_term;
 
 typedef struct {
     uint8_t *ttf_buf;
     float cur_size;  // starts at SFTE_DEFAULT_FONT_SIZE
+
     uint8_t *atlas_pxs;
     int atlas_width;
     int atlas_height;
-    stbtt_bakedchar char_data[96];  // ASCII 32-126
-    int cell_width;                 // width of a single mono char
-    int cell_height;                // height of a single mono char
+
+    stbtt_fontinfo info;
+    float scale;
+
+    // hash map
+    sfte_glyph *glyphs;
+    int glyph_cap;
+
+    // allocator
+    int atlas_x;
+    int atlas_y;
+    int atlas_bottom;
+
+    int cell_width;   // width of a single mono char
+    int cell_height;  // height of a single mono char
 } sfte_font;
 
 typedef struct {
@@ -958,15 +981,77 @@ static void _sfte_log(_sfte_log_item_t log_item, uint32_t log_level, uint32_t li
 #define _SFTE_INFO(code, ...) _sfte_log(code, 3, __LINE__, ##__VA_ARGS__)
 
 // >>font
-static void _sfte_font_bake(void) {
+static sfte_glyph *_sfte_font_get_glyph(uint32_t rune) {
+    if (rune == 0) rune = ' ';
+    uint32_t h = rune % _sfte.font.glyph_cap;
+
+    // hash map logic
+    for (int i = 0; i < _sfte.font.glyph_cap; ++i) {
+        int idx = (h + i) % _sfte.font.glyph_cap;
+
+        if (_sfte.font.glyphs[idx].rune == rune) return &_sfte.font.glyphs[idx];  // cache hit
+
+        if (_sfte.font.glyphs[idx].rune != 0) continue;  // cache miss, taken, continue
+
+        // cache miss, free, take space
+        sfte_glyph *g = &_sfte.font.glyphs[idx];
+        g->rune = rune;
+
+        int advance_width, left_side_bearing;
+        stbtt_GetCodepointHMetrics(&_sfte.font.info, rune, &advance_width, &left_side_bearing);
+        g->xadvance = (int)(advance_width * _sfte.font.scale + 0.5f);
+
+        int x0, y0, x1, y1;
+        stbtt_GetCodepointBitmapBox(&_sfte.font.info, rune, _sfte.font.scale, _sfte.font.scale, &x0,
+                                    &y0, &x1, &y1);
+
+        int glyph_width = x1 - x0;
+        int glyph_height = y1 - y0;
+
+        // wrap to next row if out of horizontal space
+        if (_sfte.font.atlas_x + glyph_width >= _sfte.font.atlas_width) {
+            _sfte.font.atlas_x = 0;
+            _sfte.font.atlas_y = _sfte.font.atlas_bottom;
+        }
+
+        SFTE_ASSERT(_sfte.font.atlas_y + glyph_height < _sfte.font.atlas_height,
+                    "glyph atlas full");
+
+        g->x0 = _sfte.font.atlas_x;
+        g->y0 = _sfte.font.atlas_y;
+        g->x1 = g->x0 + glyph_width;
+        g->y1 = g->y0 + glyph_height;
+        g->xoff = x0;
+        g->yoff = y0;
+
+        if (glyph_width > 0 && glyph_height > 0) {
+            int byte_off = g->y0 * _sfte.font.atlas_width + g->x0;
+            stbtt_MakeCodepointBitmap(&_sfte.font.info, &_sfte.font.atlas_pxs[byte_off],
+                                      glyph_width, glyph_height, _sfte.font.atlas_width,
+                                      _sfte.font.scale, _sfte.font.scale, rune);
+        }
+
+        _sfte.font.atlas_x += glyph_width + 1;  // padding to prevent bleeding
+        if (g->y1 > _sfte.font.atlas_bottom) _sfte.font.atlas_bottom = g->y1;
+
+        return g;
+    }
+
+    return NULL;  // out of space
+}
+
+static void _sfte_font_reset_cache(void) {
     memset(_sfte.font.atlas_pxs, 0, _sfte.font.atlas_width * _sfte.font.atlas_height);
+    memset(_sfte.font.glyphs, 0, _sfte.font.glyph_cap * sizeof(sfte_glyph));
+    _sfte.font.atlas_x = 0;
+    _sfte.font.atlas_y = 0;
+    _sfte.font.atlas_bottom = 0;
 
-    int ret = stbtt_BakeFontBitmap(_sfte.font.ttf_buf, 0, _sfte.font.cur_size, _sfte.font.atlas_pxs,
-                                   _sfte.font.atlas_width, _sfte.font.atlas_height, 32, 96,
-                                   _sfte.font.char_data);
-    SFTE_ASSERT(ret > 0, "font atlas not large enough for this font size");
+    _sfte.font.scale = stbtt_ScaleForPixelHeight(&_sfte.font.info, _sfte.font.cur_size);
 
-    _sfte.font.cell_width = (int)(_sfte.font.char_data['A' - 32].xadvance + 0.5f);
+    // monospace grid using standard 'M' glyph
+    sfte_glyph *m = _sfte_font_get_glyph('M');
+    _sfte.font.cell_width = m->xadvance;
     _sfte.font.cell_height = (int)(_sfte.font.cur_size * 1.2f + 0.5f);
 }
 
@@ -988,7 +1073,13 @@ static void _sfte_font_load(void) {
     SFTE_ASSERT(fread(_sfte.font.ttf_buf, 1, size, f) == size, "failed to read font file");
 
     fclose(f);
-    _sfte_font_bake();
+
+    _sfte.font.glyph_cap = 4096;
+    _sfte.font.glyphs = (sfte_glyph *)calloc(_sfte.font.glyph_cap, sizeof(sfte_glyph));
+    SFTE_ASSERT(_sfte.font.glyphs, "failed to allocate glyphs storage");
+    stbtt_InitFont(&_sfte.font.info, _sfte.font.ttf_buf, 0);
+    _sfte_font_reset_cache();
+
     _SFTE_INFO(FONT_LOADED);
 }
 
@@ -1002,7 +1093,7 @@ static void _sfte_font_resize(const sfte_arg *arg) {
     if (new_size < 4.0f || new_size > 96.0f) return;
     _sfte.font.cur_size = new_size;
 
-    _sfte_font_bake();
+    _sfte_font_reset_cache();
 
     int new_cols = (_sfte.width - (2 * SFTE_PAD_X)) / _sfte.font.cell_width;
     int new_rows = (_sfte.height - (2 * SFTE_PAD_Y)) / _sfte.font.cell_height;
@@ -1024,10 +1115,9 @@ static void _sfte_font_reset(const sfte_arg *dummy) {
 static const sfte_shortcut _sfte_shortcuts[] = SFTE_SHORTCUTS;
 
 // >>render
-static void _sfte_render_cell(int col, int row, uint32_t rune, uint32_t fg, uint32_t bg) {
+static void _sfte_render_bg(int col, int row, uint32_t bg) {
     int cx = col * _sfte.font.cell_width + SFTE_PAD_X;
     int cy = row * _sfte.font.cell_height + SFTE_PAD_Y;
-
     uint32_t final_bg = (bg & 0x00FFFFFF) | (SFTE_BG_OPACITY << 24);
 
     for (int y = 0; y < _sfte.font.cell_height; ++y) {
@@ -1036,19 +1126,25 @@ static void _sfte_render_cell(int col, int row, uint32_t rune, uint32_t fg, uint
             if (px_idx < _sfte.width * _sfte.height) _sfte.shm_data[px_idx] = final_bg;
         }
     }
+}
 
-    if (rune <= 32 || rune > 126) return;
+static void _sfte_render_fg(int col, int row, uint32_t rune, uint32_t fg) {
+    if (rune == ' ') return;
 
-    stbtt_bakedchar *b = &_sfte.font.char_data[rune - 32];
-    int glyph_width = b->x1 - b->x0;
-    int glyph_height = b->y1 - b->y0;
+    sfte_glyph *g = _sfte_font_get_glyph(rune);
+    if (!g) return;
+
+    int cx = col * _sfte.font.cell_width + SFTE_PAD_X;
+    int cy = row * _sfte.font.cell_height + SFTE_PAD_Y;
+
+    int glyph_width = g->x1 - g->x0;
+    int glyph_height = g->y1 - g->y0;
 
     int baseline = (int)(_sfte.font.cell_height * 0.8f);
-    int draw_x = cx + (int)b->xoff;
-    int draw_y = cy + baseline + (int)b->yoff;
+    int draw_x = cx + (int)g->xoff;
+    int draw_y = cy + baseline + (int)g->yoff;
 
     uint8_t fg_r = (fg >> 16) & 0xFF, fg_g = (fg >> 8) & 0xFF, fg_b = fg & 0xFF;
-    uint8_t bg_r = (bg >> 16) & 0xFF, bg_g = (bg >> 8) & 0xFF, bg_b = bg & 0xFF;
 
     for (int y = 0; y < glyph_height; ++y) {
         for (int x = 0; x < glyph_width; ++x) {
@@ -1058,13 +1154,19 @@ static void _sfte_render_cell(int col, int row, uint32_t rune, uint32_t fg, uint
                 continue;
 
             uint8_t alpha = _sfte.font
-                                .atlas_pxs[(b->y0 + y) * _sfte.font.atlas_width + (b->x0 + x)];
+                                .atlas_pxs[(g->y0 + y) * _sfte.font.atlas_width + (g->x0 + x)];
             if (alpha == 0) continue;
 
             int px_idx = screen_y * _sfte.width + screen_x;
+
             if (alpha == 255)
                 _sfte.shm_data[px_idx] = (0xFF << 24) | (fg & 0x00FFFFFF);
             else {
+                uint32_t dst = _sfte.shm_data[px_idx];
+                uint8_t bg_r = (dst >> 16) & 0xFF;
+                uint8_t bg_g = (dst >> 8) & 0xFF;
+                uint8_t bg_b = dst & 0xFF;
+
                 uint8_t col_r = (fg_r * alpha + bg_r * (255 - alpha)) >> 8;
                 uint8_t col_g = (fg_g * alpha + bg_g * (255 - alpha)) >> 8;
                 uint8_t col_b = (fg_b * alpha + bg_b * (255 - alpha)) >> 8;
@@ -1115,6 +1217,25 @@ static void _sfte_wayland_render(void) {
     for (int r = 0; r < _sfte.term.rows; ++r) {
         for (int c = 0; c < _sfte.term.cols; ++c) {
             int idx = _SFTE_IDX(c, r);
+            uint32_t fg = _sfte.term.cells[idx].fg ? _sfte.term.cells[idx].fg : 0xFFFFFF;
+            uint32_t bg = _sfte.term.cells[idx].bg ? _sfte.term.cells[idx].bg : SFTE_BG_COLOR;
+
+            int is_cursor = (c == vis_cx && r == _sfte.term.cursor_y && !_sfte.term.hide_cursor);
+
+#if SFTE_CURSOR_BLINK
+            if (!_sfte.term.blink_visible) is_cursor = 0;
+#endif  // SFTE_CURSOR_BLINK
+
+            if (is_cursor && SFTE_CURSOR_STYLE == SFTE_CURSOR_BLOCK)
+                _sfte_render_bg(c, r, fg);  // inverse if under cursor block
+            else
+                _sfte_render_bg(c, r, bg);
+        }
+    }
+
+    for (int r = 0; r < _sfte.term.rows; ++r) {
+        for (int c = 0; c < _sfte.term.cols; ++c) {
+            int idx = _SFTE_IDX(c, r);
             uint32_t rune = _sfte.term.cells[idx].rune;
             if (rune == 0) rune = ' ';
 
@@ -1128,11 +1249,11 @@ static void _sfte_wayland_render(void) {
 #endif  // SFTE_CURSOR_BLINK
 
             if (is_cursor && SFTE_CURSOR_STYLE == SFTE_CURSOR_BLOCK)
-                _sfte_render_cell(c, r, rune, bg, fg);  // inverse for cursor
+                _sfte_render_fg(c, r, rune, bg);  // inverse if under cursor block
             else {
-                _sfte_render_cell(c, r, rune, fg, bg);
+                _sfte_render_fg(c, r, rune, fg);
 
-                if (is_cursor) {  // bar/underline
+                if (is_cursor && SFTE_CURSOR_STYLE != SFTE_CURSOR_BLOCK) {  // bar/underline
                     int cx = c * _sfte.font.cell_width + SFTE_PAD_X;
                     int cy = r * _sfte.font.cell_height + SFTE_PAD_Y;
 
@@ -1493,7 +1614,7 @@ static void _sfte_pty_spawn(void) {
     if (_sfte.pty_pid == 0) {
         setenv("TERM", SFTE_TERM_ENV, 1);
         char *shell = getenv("SHELL");
-        if (!shell) shell = "/bin/sh";
+        if (!shell) shell = (char *)"/bin/sh";
         execlp(shell, shell, NULL);  // replace current pimg with shell
         abort();                     // if execlp returns, it failed to exec the shell
     }
@@ -1885,15 +2006,37 @@ static void _sfte_parse_byte(uint8_t b) {
         else if ((b == '\b' || b == '\x7f') && _sfte.term.cursor_x > 0)
             _sfte.term.cursor_x--;
         else if (b >= 0x20) {
-            if (b >= 0x80 && b <= 0xBF)
-                break;  // FIX: utf-8 continuation bytes skipped until supported
+            if (_sfte.term.utf8_bytes_left > 0) {
+                if ((b & 0xC0) == 0x80) {  // continuation byte
+                    _sfte.term.utf8_rune = (_sfte.term.utf8_rune << 6) | (b & 0x3F);
+                    _sfte.term.utf8_bytes_left--;
+                } else
+                    _sfte.term.utf8_bytes_left = 0;  // invalid sequence, abort
+            } else {                                 // start of a new rune
+                if ((b & 0x80) == 0) {
+                    _sfte.term.utf8_rune = b;
+                    _sfte.term.utf8_bytes_left = 0;
+                } else if ((b & 0xE0) == 0xC0) {
+                    _sfte.term.utf8_rune = b & 0x1F;
+                    _sfte.term.utf8_bytes_left = 1;
+                } else if ((b & 0xF0) == 0xE0) {
+                    _sfte.term.utf8_rune = b & 0x0F;
+                    _sfte.term.utf8_bytes_left = 2;
+                } else if ((b & 0xF8) == 0xF0) {
+                    _sfte.term.utf8_rune = b & 0x07;
+                    _sfte.term.utf8_bytes_left = 3;
+                }
+            }
+
+            // only write to grid when multibyte sequence is ready
+            if (_sfte.term.utf8_bytes_left != 0) break;
 
             // evaluate line wrapping before drawing
             // ensures chars placed in the final col enter a pending wrap state
             // instead of immediately dropping to the next line
             _sfte_check_wrap();
             int idx = _SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y);
-            _sfte.term.cells[idx].rune = b;
+            _sfte.term.cells[idx].rune = _sfte.term.utf8_rune;
             _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
             _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
             _sfte.term.cells[idx].attr = _sfte.term.cur_attr;
