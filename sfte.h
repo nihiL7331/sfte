@@ -2901,6 +2901,8 @@ static _sfte_state _sfte;
 
 // >>memory
 #define _SFTE_ARRAY_LEN(x) (sizeof(x) / sizeof((x)[0]))
+#define _SFTE_CLAMP(val, min, max) ((val) < (min) ? (min) : ((val) > (max) ? (max) : (val)))
+#define _SFTE_IDX(c, r) ((r) * _sfte.term.cols + (c))
 
 // >>logging
 #ifndef SFTE_ASSERT
@@ -3404,6 +3406,15 @@ static void _sfte_term_resize(int new_cols, int new_rows) {
     for (int i = 0; i < _sfte.width * _sfte.height; ++i) _sfte.shm_data[i] = SFTE_BG_COLOR;
 }
 
+static inline void _sfte_clear_cells(int start_idx, int cnt) {
+    for (int i = 0; i < cnt; ++i) {
+        _sfte.term.cells[start_idx + i].rune = ' ';
+        _sfte.term.cells[start_idx + i].fg = _sfte.term.cur_fg;
+        _sfte.term.cells[start_idx + i].bg = _sfte.term.cur_bg;
+        _sfte.term.cells[start_idx + i].attr = 0;
+    }
+}
+
 static void _sfte_scroll(int lines) {
     int top = _sfte.term.scroll_top;
     int bot = _sfte.term.scroll_bottom;
@@ -3439,6 +3450,21 @@ static void _sfte_scroll(int lines) {
     }
 }
 
+static inline void _sfte_cursor_advance(void) {
+    _sfte.term.cursor_x++;
+    if (_sfte.term.cursor_x >= _sfte.term.cols) {
+        _sfte.term.cursor_x = 0;
+        if (_sfte.term.cursor_y == _sfte.term.scroll_bottom)
+            _sfte_scroll(1);
+        else if (_sfte.term.cursor_y < _sfte.term.rows - 1)
+            _sfte.term.cursor_y++;
+    }
+}
+
+static inline uint32_t _sfte_parse_truecolor(int *p, int i) {
+    return (p[i + 2] << 16) | (p[i + 3] << 8) | p[i + 4];
+}
+
 static void _sfte_dispatch_csi(uint8_t cmd) {
     int *p = _sfte.term.vt_params;
     int cnt = _sfte.term.vt_param_idx + 1;
@@ -3467,10 +3493,10 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
             else if (p[i] == 49)  // default bg
                 _sfte.term.cur_bg = SFTE_BG_COLOR;
             else if (p[i] == 38 && i + 4 < cnt && p[i + 1] == 2) {  // true fg
-                _sfte.term.cur_fg = (p[i + 2] << 16) | (p[i + 3] << 8) | p[i + 4];
+                _sfte.term.cur_fg = _sfte_parse_truecolor(p, i);
                 i += 4;
             } else if (p[i] == 48 && i + 4 < cnt && p[i + 1] == 2) {  // true bg
-                _sfte.term.cur_bg = (p[i + 2] << 16) | (p[i + 3] << 8) | p[i + 4];
+                _sfte.term.cur_bg = _sfte_parse_truecolor(p, i);
                 i += 4;
             }
         }
@@ -3499,15 +3525,12 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         _sfte.term.cursor_x = 0;
         _sfte.term.cursor_y = 0;
         break;
-    case 'K':  // erase in line
-        if (p[0] != 0) break;
-        for (int x = _sfte.term.cursor_x; x < _sfte.term.cols; ++x) {
-            int idx = (_sfte.term.cursor_y * _sfte.term.cols) + x;
-            _sfte.term.cells[idx].rune = ' ';
-            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
-            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
-            _sfte.term.cells[idx].attr = 0;
-        }
+    case 'K':           // erase in line
+        if (p[0] == 0)  // 0K / clear to eol
+            _sfte_clear_cells(_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y),
+                              _sfte.term.cols - _sfte.term.cursor_x);
+        else if (p[0] == 2)  // 2K / clear entire line
+            _sfte_clear_cells(_SFTE_IDX(0, _sfte.term.cursor_y), _sfte.term.cols);
         break;
     case 'n': {  // device status report
         if (p[0] != 6) break;
@@ -3598,10 +3621,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
     case 'd':  // line pos abs / VPA
     {
         // move to specific row, keep column same
-        int r = (p[0] > 0 ? p[0] : 1) - 1;
-        if (r < 0) r = 0;
-        if (r >= _sfte.term.rows) r = _sfte.term.rows - 1;
-        _sfte.term.cursor_y = r;
+        _sfte.term.cursor_y = _SFTE_CLAMP((p[0] > 0 ? p[0] : 1) - 1, 0, _sfte.term.rows - 1);
         break;
     }
     case 'X':  // erase char / ECH
@@ -3737,19 +3757,12 @@ static void _sfte_parse_byte(uint8_t b) {
         else if (b >= 0x20) {
             if (b >= 0x80 && b <= 0xBF)
                 break;  // FIX: utf-8 continuation bytes skipped until supported
-            if (_sfte.term.cursor_x >= _sfte.term.cols) {
-                _sfte.term.cursor_x = 0;
-                if (_sfte.term.cursor_y == _sfte.term.scroll_bottom)
-                    _sfte_scroll(1);
-                else if (_sfte.term.cursor_y < _sfte.term.rows - 1)
-                    _sfte.term.cursor_y++;
-            }
             int idx = (_sfte.term.cursor_y * _sfte.term.cols) + _sfte.term.cursor_x;
             _sfte.term.cells[idx].rune = b;
             _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
             _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
             _sfte.term.cells[idx].attr = _sfte.term.cur_attr;
-            _sfte.term.cursor_x++;
+            _sfte_cursor_advance();
         }
         break;
     case VT_ESCAPE:
