@@ -71,6 +71,10 @@
 #define SFTE_BG_COLOR 0x000000
 #endif  // SFTE_BG_COLOR
 
+#ifndef SFTE_BG_OPACITY  // 0x00-0xFF
+#define SFTE_BG_OPACITY 0xFF
+#endif  // SFTE_BG_OPACITY
+
 #ifndef SFTE_FONT_PATH
 #define SFTE_FONT_PATH "/usr/share/fonts/TTF/DejaVuSansMono.ttf"
 #endif  // SFTE_FONT_PATH
@@ -3011,10 +3015,11 @@ static void _sfte_font_resize(float delta) {
 static void _sfte_render_cell(int col, int row, uint32_t rune, uint32_t fg, uint32_t bg) {
     int cx = col * _sfte.font.cell_width + SFTE_PAD_X;
     int cy = row * _sfte.font.cell_height + SFTE_PAD_Y;
+    uint32_t final_bg = (bg & 0x00FFFFFF) | (SFTE_BG_OPACITY << 24);
     for (int y = 0; y < _sfte.font.cell_height; ++y) {
         for (int x = 0; x < _sfte.font.cell_width; ++x) {
             int px_idx = (cy + y) * _sfte.width + (cx + x);
-            if (px_idx < _sfte.width * _sfte.height) _sfte.shm_data[px_idx] = bg;
+            if (px_idx < _sfte.width * _sfte.height) _sfte.shm_data[px_idx] = final_bg;
         }
     }
     if (rune <= 32 || rune > 126) return;
@@ -3037,12 +3042,13 @@ static void _sfte_render_cell(int col, int row, uint32_t rune, uint32_t fg, uint
             if (alpha == 0) continue;
             int px_idx = screen_y * _sfte.width + screen_x;
             if (alpha == 255)
-                _sfte.shm_data[px_idx] = fg;
+                _sfte.shm_data[px_idx] = (0xFF << 24) | (fg & 0x00FFFFFF);
             else {
                 uint8_t col_r = (fg_r * alpha + bg_r * (255 - alpha)) >> 8;
                 uint8_t col_g = (fg_g * alpha + bg_g * (255 - alpha)) >> 8;
                 uint8_t col_b = (fg_b * alpha + bg_b * (255 - alpha)) >> 8;
-                _sfte.shm_data[px_idx] = (col_r << 16) | (col_g << 8) | col_b;
+                _sfte.shm_data[px_idx] = (SFTE_BG_OPACITY << 24) | (col_r << 16) | (col_g << 8) |
+                                         col_b;
             }
         }
     }
@@ -3060,7 +3066,7 @@ static void _sfte_wayland_create_buffer(void) {
     SFTE_ASSERT(_sfte.shm_data != MAP_FAILED, "failed to mmap shm data");
     struct wl_shm_pool *pool = wl_shm_create_pool(_sfte.shm, fd, _sfte.shm_size);
     _sfte.buffer = wl_shm_pool_create_buffer(pool, 0, _sfte.width, _sfte.height, stride,
-                                             WL_SHM_FORMAT_XRGB8888);
+                                             WL_SHM_FORMAT_ARGB8888);
     wl_shm_pool_destroy(pool);
     close(fd);
 }
@@ -3417,7 +3423,8 @@ static void _sfte_term_resize(int new_cols, int new_rows) {
                          .ws_xpixel = (uint8_t)_sfte.width,
                          .ws_ypixel = (uint8_t)_sfte.height};
     ioctl(_sfte.pty_fd, TIOCSWINSZ, &ws);
-    for (int i = 0; i < _sfte.width * _sfte.height; ++i) _sfte.shm_data[i] = SFTE_BG_COLOR;
+    uint32_t clear_col = (SFTE_BG_COLOR & 0x00FFFFFF) | (SFTE_BG_OPACITY << 24);
+    for (int i = 0; i < _sfte.width * _sfte.height; ++i) _sfte.shm_data[i] = clear_col;
 }
 
 static inline void _sfte_clear_cells(int start_idx, int cnt) {
