@@ -3822,7 +3822,7 @@ static void _sfte_loop(void) {
         if (poll(fds, _SFTE_ARRAY_LEN(fds), -1 /* infinite timeout */) == -1) break;
         if (fds[0].revents & (POLLIN | POLLERR | POLLHUP))
             if (wl_display_dispatch(_sfte.display) == -1) _sfte.running = 0;
-        if (fds[1].revents & POLLIN) {
+        if (fds[1].revents & (POLLIN | POLLERR | POLLHUP)) {
             uint8_t buf[SFTE_PTY_BUF_SIZE];
             ssize_t n = read(_sfte.pty_fd, buf, SFTE_PTY_BUF_SIZE);
             if (n > 0) {
