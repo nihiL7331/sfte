@@ -40,6 +40,8 @@
         distribution.
 */
 
+#include <stdint.h>
+
 // >>config
 #ifndef SFTE_LOG_LEVEL
 #define SFTE_LOG_LEVEL 3
@@ -81,10 +83,6 @@
 #define SFTE_DEFAULT_FONT_SIZE 12.0f
 #endif  // SFTE_DEFAULT_FONT_SIZE
 
-#ifndef SFTE_FONT_RESIZE_SPEED
-#define SFTE_FONT_RESIZE_SPEED 2.0f
-#endif  // SFTE_FONT_RESIZE_SPEED
-
 #ifndef SFTE_ANSI_PALETTE
 #define SFTE_ANSI_PALETTE                                                                          \
     {0x181818, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0xA89984,               \
@@ -119,6 +117,34 @@
 #define SFTE_CURSOR_BLINK_RATE 500
 #endif  // SFTE_CURSOR_BLINK_RATE
 
+#define SFTE_MOD_CTRL 0b001
+#define SFTE_MOD_ALT 0b010
+#define SFTE_MOD_SHIFT 0b100
+#define SFTE_MOD_NONE 0b000
+
+typedef union {
+    int i;
+    float f;
+    const void *v;
+} sfte_arg;
+
+typedef struct {
+    uint32_t mod_mask;
+    uint32_t /* xkb_keysym_t */ keysym;
+    void (*func)(const sfte_arg *);
+    const sfte_arg arg;
+} sfte_shortcut;
+
+#ifndef SFTE_SHORTCUTS
+#define SFTE_SHORTCUTS                                                                             \
+    {                                                                                              \
+        {SFTE_MOD_CTRL, XKB_KEY_equal, _sfte_font_resize, {.f = 2.0f}},                            \
+        {SFTE_MOD_CTRL, XKB_KEY_plus, _sfte_font_resize, {.f = 2.0f}},                             \
+        {SFTE_MOD_CTRL, XKB_KEY_minus, _sfte_font_resize, {.f = -2.0f}},                           \
+        {SFTE_MOD_CTRL, XKB_KEY_0, _sfte_font_reset, {.v = NULL}},                                 \
+    }
+#endif  // SFTE_SHORTCUTS
+
 // >>api
 int sfte_run(void);
 
@@ -128,8 +154,6 @@ int sfte_run(void);
 #define STBTT_STATIC
 #define STB_TRUETYPE_IMPLEMENTATION
 #ifdef STB_TRUETYPE_IMPLEMENTATION
-
-#include <stdint.h>
 
 typedef uint8_t stbtt_uint8;
 typedef int8_t stbtt_int8;
@@ -3025,7 +3049,8 @@ static void _sfte_font_load(void) {
 static void _sfte_wayland_render(void);
 static void _sfte_term_resize(int new_cols, int new_rows);
 
-static void _sfte_font_resize(float delta) {
+static void _sfte_font_resize(const sfte_arg *arg) {
+    float delta = arg->f;
     float new_size = _sfte.font.cur_size + delta;
     if (new_size < 4.0f || new_size > 96.0f) return;
     _sfte.font.cur_size = new_size;
@@ -3038,6 +3063,14 @@ static void _sfte_font_resize(float delta) {
         _sfte_term_resize(new_cols, new_rows);
     _sfte_wayland_render();
 }
+
+static void _sfte_font_reset(const sfte_arg *dummy) {
+    (void)dummy;
+    const sfte_arg arg = {.f = SFTE_DEFAULT_FONT_SIZE - _sfte.font.cur_size};
+    _sfte_font_resize(&arg);
+}
+
+static const sfte_shortcut _sfte_shortcuts[] = SFTE_SHORTCUTS;
 
 // >>render
 static void _sfte_render_cell(int col, int row, uint32_t rune, uint32_t fg, uint32_t bg) {
@@ -3188,6 +3221,21 @@ static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
                                              XKB_STATE_MODS_EFFECTIVE);
     bool alt = xkb_state_mod_name_is_active(_sfte.xkb_state, XKB_MOD_NAME_ALT,
                                             XKB_STATE_MODS_EFFECTIVE);
+    bool shift = xkb_state_mod_name_is_active(_sfte.xkb_state, XKB_MOD_NAME_SHIFT,
+                                              XKB_STATE_MODS_EFFECTIVE);
+
+    uint32_t active_mods = SFTE_MOD_NONE;
+    if (ctrl) active_mods |= SFTE_MOD_CTRL;
+    if (alt) active_mods |= SFTE_MOD_ALT;
+    if (shift) active_mods |= SFTE_MOD_SHIFT;
+
+    for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_shortcuts); ++i)
+        if ((xkb_keysym_t)_sfte_shortcuts[i].keysym == sym &&
+            _sfte_shortcuts[i].mod_mask == active_mods) {
+            _sfte_shortcuts[i].func(&_sfte_shortcuts[i].arg);
+            return;
+        }
+
     char buf[128];
     int size = 0;
 #define MAP_KEY(str)                                                                               \
@@ -3206,16 +3254,6 @@ static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
     case XKB_KEY_End: MAP_KEY("\033[F"); break;
     default:
         if (ctrl) {
-            if (sym == XKB_KEY_equal || sym == XKB_KEY_plus) {
-                _sfte_font_resize(SFTE_FONT_RESIZE_SPEED);
-                return;
-            } else if (sym == XKB_KEY_minus) {
-                _sfte_font_resize(-SFTE_FONT_RESIZE_SPEED);
-                return;
-            } else if (sym == XKB_KEY_0) {
-                _sfte_font_resize(SFTE_DEFAULT_FONT_SIZE - _sfte.font.cur_size);
-                return;
-            }
             if (sym >= XKB_KEY_a && sym <= XKB_KEY_z) {
                 buf[0] = sym - XKB_KEY_a + 1;
                 size = 1;
