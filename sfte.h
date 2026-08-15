@@ -2833,10 +2833,14 @@ typedef struct {
 
 typedef struct {
     sfte_cell *cells;
+    sfte_cell *alt_cells;
     int cols;
     int rows;
     int cursor_x;
     int cursor_y;
+    int saved_x;  // alt screen x
+    int saved_y;  // alt screen y
+    uint8_t hide_cursor;
     // pen state
     uint32_t cur_fg;
     uint32_t cur_bg;
@@ -2845,6 +2849,7 @@ typedef struct {
     int vt_state;
     int vt_params[16];  // stores nums from esc sequences
     int vt_param_idx;
+    uint8_t vt_dec_priv;  // tracks if seq starts with ?
 } sfte_term;
 
 typedef struct {
@@ -3051,7 +3056,7 @@ static void _sfte_wayland_render(void) {
             if (rune == 0) rune = ' ';
             uint32_t fg = _sfte.term.cells[idx].fg ? _sfte.term.cells[idx].fg : 0xFFFFFF;
             uint32_t bg = _sfte.term.cells[idx].bg ? _sfte.term.cells[idx].bg : SFTE_BG_COLOR;
-            if (c == _sfte.term.cursor_x && r == _sfte.term.cursor_y)
+            if (c == _sfte.term.cursor_x && r == _sfte.term.cursor_y && !_sfte.term.hide_cursor)
                 _sfte_render_cell(c, r, rune, bg, fg);  // inverse for cursor
             else
                 _sfte_render_cell(c, r, rune, fg, bg);
@@ -3300,6 +3305,7 @@ static void _sfte_wayland_unload(void) {
     if (_sfte.font.ttf_buf) free(_sfte.font.ttf_buf);
     if (_sfte.font.atlas_pxs) free(_sfte.font.atlas_pxs);
     if (_sfte.term.cells) free(_sfte.term.cells);
+    if (_sfte.term.alt_cells) free(_sfte.term.alt_cells);
     if (_sfte.buffer) wl_buffer_destroy(_sfte.buffer);
     if (_sfte.shm_data) munmap(_sfte.shm_data, _sfte.shm_size);
     if (_sfte.xdg_toplevel) xdg_toplevel_destroy(_sfte.xdg_toplevel);
@@ -3358,13 +3364,25 @@ static const uint32_t _sfte_ansi_palette[16] = {
 static void _sfte_term_resize(int new_cols, int new_rows) {
     sfte_cell *new_cells = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
     SFTE_ASSERT(new_cells, "failed to allocate resized terminal grid");
+    sfte_cell *new_alt_cells = NULL;
+    if (_sfte.term.alt_cells) {
+        new_alt_cells = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
+        SFTE_ASSERT(new_alt_cells, "failed to allocate resized alt grid");
+    }
     int min_cols = new_cols < _sfte.term.cols ? new_cols : _sfte.term.cols;
     int min_rows = new_rows < _sfte.term.rows ? new_rows : _sfte.term.rows;
     for (int r = 0; r < min_rows; ++r)
-        for (int c = 0; c < min_cols; ++c)
+        for (int c = 0; c < min_cols; ++c) {
             new_cells[r * new_cols + c] = _sfte.term.cells[r * _sfte.term.cols + c];
+            if (new_alt_cells)
+                new_alt_cells[r * new_cols + c] = _sfte.term.alt_cells[r * _sfte.term.cols + c];
+        }
     free(_sfte.term.cells);
     _sfte.term.cells = new_cells;
+    if (_sfte.term.alt_cells) {
+        free(_sfte.term.alt_cells);
+        _sfte.term.alt_cells = new_alt_cells;
+    }
     _sfte.term.cols = new_cols;
     _sfte.term.rows = new_rows;
     if (_sfte.term.cursor_x >= new_cols) _sfte.term.cursor_x = new_cols - 1;
@@ -3475,6 +3493,44 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         _sfte.term.cursor_x = (p[0] > 0 ? p[0] : 1) - 1;
         if (_sfte.term.cursor_x < 0) _sfte.term.cursor_x = 0;
         if (_sfte.term.cursor_x >= _sfte.term.cols) _sfte.term.cursor_x = _sfte.term.cols - 1;
+        break;
+    case 'h':  // set mode
+        if (!_sfte.term.vt_dec_priv) break;
+        if (p[0] == 25)
+            _sfte.term.hide_cursor = 0;  // ?25h / show cursor
+        else if (p[0] == 1049) {         // ?1049h / save cursor and switch to alt
+            if (!_sfte.term.alt_cells)
+                _sfte.term.alt_cells = (sfte_cell *)calloc(_sfte.term.cols * _sfte.term.rows,
+                                                           sizeof(sfte_cell));
+            _sfte.term.saved_x = _sfte.term.cursor_x;
+            _sfte.term.saved_y = _sfte.term.cursor_y;
+            sfte_cell *tmp = _sfte.term.cells;  // swap buffer ptrs
+            _sfte.term.cells = _sfte.term.alt_cells;
+            _sfte.term.alt_cells = tmp;
+            for (int i = 0; i < _sfte.term.cols * _sfte.term.rows; ++i) {
+                _sfte.term.cells[i].rune = ' ';
+                _sfte.term.cells[i].bg = SFTE_BG_COLOR;
+                _sfte.term.cells[i].fg = 0xFFFFFF;
+                _sfte.term.cells[i].attr = 0;
+            }
+            _sfte.term.cursor_x = 0;
+            _sfte.term.cursor_y = 0;
+        }
+        break;
+    case 'l':  // reset mode
+        if (!_sfte.term.vt_dec_priv) break;
+        if (p[0] == 25)
+            _sfte.term.hide_cursor = 1;  // ?25l / hide cursor
+        else if (p[0] == 1049) {         // ?1049l / switch to main and restore cursor
+            if (_sfte.term.alt_cells) {
+                sfte_cell *tmp = _sfte.term.cells;
+                _sfte.term.cells = _sfte.term.alt_cells;
+                _sfte.term.alt_cells = tmp;
+            }
+            _sfte.term.cursor_x = _sfte.term.saved_x;
+            _sfte.term.cursor_y = _sfte.term.saved_y;
+        }
+        break;
     }
 }
 
@@ -3516,6 +3572,7 @@ static void _sfte_parse_byte(uint8_t b) {
         if (b == '[') {
             _sfte.term.vt_state = VT_CSI_ENTRY;
             _sfte.term.vt_param_idx = 0;
+            _sfte.term.vt_dec_priv = 0;
             memset(_sfte.term.vt_params, 0, sizeof(_sfte.term.vt_params));
         } else if (b == ']')
             _sfte.term.vt_state = VT_OSC;
@@ -3527,7 +3584,10 @@ static void _sfte_parse_byte(uint8_t b) {
         break;
     case VT_CSI_ENTRY:
     case VT_CSI_PARAM:
-        if (b >= '0' && b <= '9') {
+        if (b == '?') {  // private marker
+            _sfte.term.vt_dec_priv = 1;
+            _sfte.term.vt_state = VT_CSI_PARAM;
+        } else if (b >= '0' && b <= '9') {
             _sfte.term.vt_state = VT_CSI_PARAM;
             _sfte.term.vt_params[_sfte.term.vt_param_idx] *= 10;
             _sfte.term.vt_params[_sfte.term.vt_param_idx] += (b - '0');
