@@ -3591,6 +3591,119 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         break;
     case 'T':  // scroll down
         _sfte_scroll(-(p[0] > 0 ? p[0] : 1));
+        break;
+    case 'd':  // line pos abs / VPA
+    {
+        // move to specific row, keep column same
+        int r = (p[0] > 0 ? p[0] : 1) - 1;
+        if (r < 0) r = 0;
+        if (r >= _sfte.term.rows) r = _sfte.term.rows - 1;
+        _sfte.term.cursor_y = r;
+        break;
+    }
+    case 'X':  // erase char / ECH
+    {
+        // replace n chars with spaces from cursor
+        int n = p[0] > 0 ? p[0] : 1;
+        int rem = _sfte.term.cols - _sfte.term.cursor_x;
+        if (n > rem) n = rem;
+        for (int i = 0; i < n; ++i) {
+            int idx = _sfte.term.cursor_y * _sfte.term.cols + _sfte.term.cursor_x + i;
+            _sfte.term.cells[idx].rune = ' ';
+            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
+            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
+            _sfte.term.cells[idx].attr = 0;
+        }
+        break;
+    }
+    case 'P':  // delete char / DCH
+    {
+        // deletes n chars, text to the right shifts left, eol blanked
+        int n = p[0] > 0 ? p[0] : 1;
+        int rem = _sfte.term.cols - _sfte.term.cursor_x;
+        if (n > rem) n = rem;
+        int move_cnt = rem - n;
+        int base_idx = _sfte.term.cursor_y * _sfte.term.cols;
+        if (move_cnt > 0)
+            memmove(&_sfte.term.cells[base_idx + _sfte.term.cursor_x],
+                    &_sfte.term.cells[base_idx + _sfte.term.cursor_x + n],
+                    move_cnt * sizeof(sfte_cell));
+        for (int i = 0; i < n; ++i) {
+            int idx = base_idx + _sfte.term.cols - n + i;
+            _sfte.term.cells[idx].rune = ' ';
+            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
+            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
+            _sfte.term.cells[idx].attr = 0;
+        }
+        break;
+    }
+    case '@':  // insert char / ICH
+    {
+        // inserts n spaces, text shifts right, text pushed off edge is lost
+        int n = p[0] > 0 ? p[0] : 1;
+        int rem = _sfte.term.cols - _sfte.term.cursor_x;
+        if (n > rem) n = rem;
+        int move_cnt = rem - n;
+        int base_idx = _sfte.term.cursor_y * _sfte.term.cols;
+        if (move_cnt > 0)
+            memmove(&_sfte.term.cells[base_idx + _sfte.term.cursor_x + n],
+                    &_sfte.term.cells[base_idx + _sfte.term.cursor_x],
+                    move_cnt * sizeof(sfte_cell));
+        for (int i = 0; i < n; ++i) {
+            int idx = base_idx + _sfte.term.cursor_x + i;
+            _sfte.term.cells[idx].rune = ' ';
+            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
+            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
+            _sfte.term.cells[idx].attr = 0;
+        }
+        break;
+    }
+    case 'L':  // insert line / IL
+    {
+        // inserts n blank lines at cursor, lines below get pushed
+        int n = p[0] > 0 ? p[0] : 1;
+        int top = _sfte.term.cursor_y;
+        int bot = _sfte.term.scroll_bottom;
+        if (top < _sfte.term.scroll_top || top > bot) break;  // oob
+        int height = bot - top + 1;
+        if (n > height) n = height;
+        int move_cnt = height - n;
+        int cols = _sfte.term.cols;
+        if (move_cnt > 0)
+            memmove(&_sfte.term.cells[(top + n) * cols], &_sfte.term.cells[top * cols],
+                    move_cnt * cols * sizeof(sfte_cell));
+        for (int i = 0; i < n * cols; ++i) {
+            int idx = top * cols + i;
+            _sfte.term.cells[idx].rune = ' ';
+            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
+            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
+            _sfte.term.cells[idx].attr = 0;
+        }
+        break;
+    }
+    case 'M':  // delete line / DL
+    {
+        // deletes n lines at cursor, lines below are pulled up
+        int n = p[0] > 0 ? p[0] : 1;
+        int top = _sfte.term.cursor_y;
+        int bot = _sfte.term.scroll_bottom;
+        if (top < _sfte.term.scroll_top || top > bot) break;  // oob
+        int height = bot - top + 1;
+        if (n > height) n = height;
+        int move_cnt = height - n;
+        int cols = _sfte.term.cols;
+        if (move_cnt > 0)
+            memmove(&_sfte.term.cells[top * cols], &_sfte.term.cells[(top + n) * cols],
+                    move_cnt * cols * sizeof(sfte_cell));
+        for (int i = 0; i < n; ++i) {
+            int idx = (bot - n + 1) * cols + i;
+            _sfte.term.cells[idx].rune = ' ';
+            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
+            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
+            _sfte.term.cells[idx].attr = 0;
+        }
+        break;
+    }
     }
 }
 
