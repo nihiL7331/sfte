@@ -1451,6 +1451,21 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         }
         break;
     }
+    case 'p':  // soft terminal reset
+    {
+#if SFTE_CURSOR_BLINK
+        _sfte.term.blink_toggle = 1;
+#endif  // SFTE_CURSOR_BLINK
+        _sfte.term.cursor_style = SFTE_CURSOR_STYLE;
+        _sfte.term.scroll_top = 0;
+        _sfte.term.scroll_bottom = _sfte.term.rows - 1;
+        _sfte.term.cur_fg = 0xFFFFFF;
+        _sfte.term.cur_bg = SFTE_BG_COLOR;
+        _sfte.term.cur_attr = 0;
+        _sfte.term.hide_cursor = 0;
+
+        break;
+    }
     case 's':                  // save cursor
         if (p[0] != 0) break;  // avoid kitty support command
         _sfte.term.saved_cx = _sfte.term.cursor_x;
@@ -1466,7 +1481,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         _sfte.term.cur_fg = _sfte.term.saved_fg;
         _sfte.term.cur_bg = _sfte.term.saved_bg;
         _sfte.term.cur_attr = _sfte.term.saved_attr;
-
+        break;
     default: _SFTE_WARN(UNHANDLED_CSI, cmd); break;
     }
 }
