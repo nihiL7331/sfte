@@ -92,70 +92,37 @@ int sfte_run(void);
 #define STBTT_STATIC
 #define STB_TRUETYPE_IMPLEMENTATION
 #ifdef STB_TRUETYPE_IMPLEMENTATION
-// #define your own (u)stbtt_int8/16/32 before including to override this
-#ifndef stbtt_uint8
-typedef unsigned char stbtt_uint8;
-typedef signed char stbtt_int8;
-typedef unsigned short stbtt_uint16;
-typedef signed short stbtt_int16;
-typedef unsigned int stbtt_uint32;
-typedef signed int stbtt_int32;
-#endif
+
+typedef uint8_t stbtt_uint8;
+typedef int8_t stbtt_int8;
+typedef uint16_t stbtt_uint16;
+typedef int16_t stbtt_int16;
+typedef uint32_t stbtt_uint32;
+typedef int32_t stbtt_int32;
 
 typedef char stbtt__check_size32[sizeof(stbtt_int32) == 4 ? 1 : -1];
 typedef char stbtt__check_size16[sizeof(stbtt_int16) == 2 ? 1 : -1];
 
-// e.g. #define your own STBTT_ifloor/STBTT_iceil() to avoid math.h
-#ifndef STBTT_ifloor
+#include <assert.h>
 #include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
 #define STBTT_ifloor(x) ((int)floor(x))
 #define STBTT_iceil(x) ((int)ceil(x))
-#endif
-
-#ifndef STBTT_sqrt
-#include <math.h>
 #define STBTT_sqrt(x) sqrt(x)
 #define STBTT_pow(x, y) pow(x, y)
-#endif
-
-#ifndef STBTT_fmod
-#include <math.h>
 #define STBTT_fmod(x, y) fmod(x, y)
-#endif
-
-#ifndef STBTT_cos
-#include <math.h>
 #define STBTT_cos(x) cos(x)
 #define STBTT_acos(x) acos(x)
-#endif
-
-#ifndef STBTT_fabs
-#include <math.h>
 #define STBTT_fabs(x) fabs(x)
-#endif
 
-// #define your own functions "STBTT_malloc" / "STBTT_free" to avoid malloc.h
-#ifndef STBTT_malloc
-#include <stdlib.h>
 #define STBTT_malloc(x, u) ((void)(u), malloc(x))
 #define STBTT_free(x, u) ((void)(u), free(x))
-#endif
-
-#ifndef STBTT_assert
-#include <assert.h>
 #define STBTT_assert(x) assert(x)
-#endif
-
-#ifndef STBTT_strlen
-#include <string.h>
 #define STBTT_strlen(x) strlen(x)
-#endif
-
-#ifndef STBTT_memcpy
-#include <string.h>
 #define STBTT_memcpy memcpy
 #define STBTT_memset memset
-#endif
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -168,15 +135,7 @@ typedef char stbtt__check_size16[sizeof(stbtt_int16) == 2 ? 1 : -1];
 #ifndef __STB_INCLUDE_STB_TRUETYPE_H__
 #define __STB_INCLUDE_STB_TRUETYPE_H__
 
-#ifdef STBTT_STATIC
 #define STBTT_DEF static
-#else
-#define STBTT_DEF extern
-#endif
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 // private structure
 typedef struct {
@@ -495,10 +454,6 @@ enum {  // languageID for STBTT_PLATFORM_ID_MAC
     STBTT_MAC_LANG_ITALIAN = 3,
     STBTT_MAC_LANG_CHINESE_TRAD = 19
 };
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif  // __STB_INCLUDE_STB_TRUETYPE_H__
 
@@ -2781,11 +2736,6 @@ struct stbrp_rect {
 // font name matching -- recommended not to use this
 //
 
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wcast-qual"
-#endif
-
 STBTT_DEF int stbtt_BakeFontBitmap(const unsigned char *data, int offset, float pixel_height,
                                    unsigned char *pixels, int pw, int ph, int first_char,
                                    int num_chars, stbtt_bakedchar *chardata) {
@@ -2796,10 +2746,6 @@ STBTT_DEF int stbtt_BakeFontBitmap(const unsigned char *data, int offset, float 
 STBTT_DEF int stbtt_InitFont(stbtt_fontinfo *info, const unsigned char *data, int offset) {
     return stbtt_InitFont_internal(info, (unsigned char *)data, offset);
 }
-
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
 
 #endif  // STB_TRUETYPE_IMPLEMENTATION
 
@@ -2887,10 +2833,19 @@ typedef struct {
 
 typedef struct {
     sfte_cell *cells;
+    sfte_cell *alt_cells;
     int cols;
     int rows;
     int cursor_x;
     int cursor_y;
+    int saved_x;  // alt screen x
+    int saved_y;  // alt screen y
+    uint8_t hide_cursor;
+    int scroll_top;
+    int scroll_bottom;
+    // osc
+    char osc_payload[128];
+    int osc_idx;
     // pen state
     uint32_t cur_fg;
     uint32_t cur_bg;
@@ -2899,6 +2854,7 @@ typedef struct {
     int vt_state;
     int vt_params[16];  // stores nums from esc sequences
     int vt_param_idx;
+    uint8_t vt_dec_priv;  // tracks if seq starts with ?
 } sfte_term;
 
 typedef struct {
@@ -2945,6 +2901,8 @@ static _sfte_state _sfte;
 
 // >>memory
 #define _SFTE_ARRAY_LEN(x) (sizeof(x) / sizeof((x)[0]))
+#define _SFTE_CLAMP(val, min, max) ((val) < (min) ? (min) : ((val) > (max) ? (max) : (val)))
+#define _SFTE_IDX(c, r) ((r) * _sfte.term.cols + (c))
 
 // >>logging
 #ifndef SFTE_ASSERT
@@ -3105,7 +3063,7 @@ static void _sfte_wayland_render(void) {
             if (rune == 0) rune = ' ';
             uint32_t fg = _sfte.term.cells[idx].fg ? _sfte.term.cells[idx].fg : 0xFFFFFF;
             uint32_t bg = _sfte.term.cells[idx].bg ? _sfte.term.cells[idx].bg : SFTE_BG_COLOR;
-            if (c == _sfte.term.cursor_x && r == _sfte.term.cursor_y)
+            if (c == _sfte.term.cursor_x && r == _sfte.term.cursor_y && !_sfte.term.hide_cursor)
                 _sfte_render_cell(c, r, rune, bg, fg);  // inverse for cursor
             else
                 _sfte_render_cell(c, r, rune, fg, bg);
@@ -3354,6 +3312,7 @@ static void _sfte_wayland_unload(void) {
     if (_sfte.font.ttf_buf) free(_sfte.font.ttf_buf);
     if (_sfte.font.atlas_pxs) free(_sfte.font.atlas_pxs);
     if (_sfte.term.cells) free(_sfte.term.cells);
+    if (_sfte.term.alt_cells) free(_sfte.term.alt_cells);
     if (_sfte.buffer) wl_buffer_destroy(_sfte.buffer);
     if (_sfte.shm_data) munmap(_sfte.shm_data, _sfte.shm_size);
     if (_sfte.xdg_toplevel) xdg_toplevel_destroy(_sfte.xdg_toplevel);
@@ -3378,6 +3337,8 @@ static void _sfte_state_load(void) {
     _sfte.logger.func = SFTE_LOGGER_FUNC;
     _sfte.term.cols = 80;
     _sfte.term.rows = 24;
+    _sfte.term.scroll_top = 0;
+    _sfte.term.scroll_bottom = _sfte.term.rows - 1;
     _sfte.term.cells = (sfte_cell *)malloc(_sfte.term.cols * _sfte.term.rows * sizeof(sfte_cell));
     SFTE_ASSERT(_sfte.term.cells, "failed to allocate term grid");
     memset(_sfte.term.cells, 0, _sfte.term.cols * _sfte.term.rows * sizeof(sfte_cell));
@@ -3410,17 +3371,31 @@ static const uint32_t _sfte_ansi_palette[16] = {
     0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C, 0xEBDBB2};
 
 static void _sfte_term_resize(int new_cols, int new_rows) {
-    sfte_cell *new_cells = calloc(new_cols * new_rows, sizeof(sfte_cell));
+    sfte_cell *new_cells = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
     SFTE_ASSERT(new_cells, "failed to allocate resized terminal grid");
+    sfte_cell *new_alt_cells = NULL;
+    if (_sfte.term.alt_cells) {
+        new_alt_cells = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
+        SFTE_ASSERT(new_alt_cells, "failed to allocate resized alt grid");
+    }
     int min_cols = new_cols < _sfte.term.cols ? new_cols : _sfte.term.cols;
     int min_rows = new_rows < _sfte.term.rows ? new_rows : _sfte.term.rows;
     for (int r = 0; r < min_rows; ++r)
-        for (int c = 0; c < min_cols; ++c)
+        for (int c = 0; c < min_cols; ++c) {
             new_cells[r * new_cols + c] = _sfte.term.cells[r * _sfte.term.cols + c];
+            if (new_alt_cells)
+                new_alt_cells[r * new_cols + c] = _sfte.term.alt_cells[r * _sfte.term.cols + c];
+        }
     free(_sfte.term.cells);
     _sfte.term.cells = new_cells;
+    if (_sfte.term.alt_cells) {
+        free(_sfte.term.alt_cells);
+        _sfte.term.alt_cells = new_alt_cells;
+    }
     _sfte.term.cols = new_cols;
     _sfte.term.rows = new_rows;
+    _sfte.term.scroll_top = 0;
+    _sfte.term.scroll_bottom = new_rows - 1;
     if (_sfte.term.cursor_x >= new_cols) _sfte.term.cursor_x = new_cols - 1;
     if (_sfte.term.cursor_y >= new_rows) _sfte.term.cursor_y = new_rows - 1;
     struct winsize ws = {.ws_row = (uint8_t)new_rows,
@@ -3429,6 +3404,65 @@ static void _sfte_term_resize(int new_cols, int new_rows) {
                          .ws_ypixel = (uint8_t)_sfte.height};
     ioctl(_sfte.pty_fd, TIOCSWINSZ, &ws);
     for (int i = 0; i < _sfte.width * _sfte.height; ++i) _sfte.shm_data[i] = SFTE_BG_COLOR;
+}
+
+static inline void _sfte_clear_cells(int start_idx, int cnt) {
+    for (int i = 0; i < cnt; ++i) {
+        _sfte.term.cells[start_idx + i].rune = ' ';
+        _sfte.term.cells[start_idx + i].fg = _sfte.term.cur_fg;
+        _sfte.term.cells[start_idx + i].bg = _sfte.term.cur_bg;
+        _sfte.term.cells[start_idx + i].attr = 0;
+    }
+}
+
+static void _sfte_scroll(int lines) {
+    int top = _sfte.term.scroll_top;
+    int bot = _sfte.term.scroll_bottom;
+    int height = bot - top + 1;
+    int cols = _sfte.term.cols;
+    if (lines > 0) {  // scroll up
+        if (lines > height) lines = height;
+        int move_cnt = height - lines;
+        if (move_cnt > 0)
+            memmove(&_sfte.term.cells[top * cols], &_sfte.term.cells[(top + lines) * cols],
+                    move_cnt * cols * sizeof(sfte_cell));
+        for (int i = 0; i < lines * cols; ++i) {  // clear lines at bot
+            int idx = (bot - lines + 1) * cols + i;
+            _sfte.term.cells[idx].rune = ' ';
+            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
+            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
+            _sfte.term.cells[idx].attr = 0;
+        }
+    } else if (lines < 0) {  // scroll down
+        lines = -lines;
+        if (lines > height) lines = height;
+        int move_cnt = height - lines;
+        if (move_cnt > 0)
+            memmove(&_sfte.term.cells[(top + lines) * cols], &_sfte.term.cells[top * cols],
+                    move_cnt * cols * sizeof(sfte_cell));
+        for (int i = 0; i < lines * cols; ++i) {
+            int idx = top * cols + i;
+            _sfte.term.cells[idx].rune = ' ';
+            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
+            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
+            _sfte.term.cells[idx].attr = 0;
+        }
+    }
+}
+
+static inline void _sfte_cursor_advance(void) {
+    _sfte.term.cursor_x++;
+    if (_sfte.term.cursor_x >= _sfte.term.cols) {
+        _sfte.term.cursor_x = 0;
+        if (_sfte.term.cursor_y == _sfte.term.scroll_bottom)
+            _sfte_scroll(1);
+        else if (_sfte.term.cursor_y < _sfte.term.rows - 1)
+            _sfte.term.cursor_y++;
+    }
+}
+
+static inline uint32_t _sfte_parse_truecolor(int *p, int i) {
+    return (p[i + 2] << 16) | (p[i + 3] << 8) | p[i + 4];
 }
 
 static void _sfte_dispatch_csi(uint8_t cmd) {
@@ -3459,10 +3493,10 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
             else if (p[i] == 49)  // default bg
                 _sfte.term.cur_bg = SFTE_BG_COLOR;
             else if (p[i] == 38 && i + 4 < cnt && p[i + 1] == 2) {  // true fg
-                _sfte.term.cur_fg = (p[i + 2] << 16) | (p[i + 3] << 8) | p[i + 4];
+                _sfte.term.cur_fg = _sfte_parse_truecolor(p, i);
                 i += 4;
             } else if (p[i] == 48 && i + 4 < cnt && p[i + 1] == 2) {  // true bg
-                _sfte.term.cur_bg = (p[i + 2] << 16) | (p[i + 3] << 8) | p[i + 4];
+                _sfte.term.cur_bg = _sfte_parse_truecolor(p, i);
                 i += 4;
             }
         }
@@ -3491,23 +3525,21 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         _sfte.term.cursor_x = 0;
         _sfte.term.cursor_y = 0;
         break;
-    case 'K':  // erase in line
-        if (p[0] != 0) break;
-        for (int x = _sfte.term.cursor_x; x < _sfte.term.cols; ++x) {
-            int idx = (_sfte.term.cursor_y * _sfte.term.cols) + x;
-            _sfte.term.cells[idx].rune = ' ';
-            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
-            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
-            _sfte.term.cells[idx].attr = 0;
-        }
+    case 'K':           // erase in line
+        if (p[0] == 0)  // 0K / clear to eol
+            _sfte_clear_cells(_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y),
+                              _sfte.term.cols - _sfte.term.cursor_x);
+        else if (p[0] == 2)  // 2K / clear entire line
+            _sfte_clear_cells(_SFTE_IDX(0, _sfte.term.cursor_y), _sfte.term.cols);
         break;
-    case 'n':  // device status report
+    case 'n': {  // device status report
         if (p[0] != 6) break;
         char buf[32];
         int len = snprintf(buf, sizeof(buf), "\033[%d;%dR", _sfte.term.cursor_y + 1,
                            _sfte.term.cursor_x + 1);
         write(_sfte.pty_fd, buf, len);
         break;
+    }
     case 'A':  // cursor up
         _sfte.term.cursor_y -= (p[0] > 0 ? p[0] : 1);
         if (_sfte.term.cursor_y < 0) _sfte.term.cursor_y = 0;
@@ -3528,6 +3560,173 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         _sfte.term.cursor_x = (p[0] > 0 ? p[0] : 1) - 1;
         if (_sfte.term.cursor_x < 0) _sfte.term.cursor_x = 0;
         if (_sfte.term.cursor_x >= _sfte.term.cols) _sfte.term.cursor_x = _sfte.term.cols - 1;
+        break;
+    case 'h':  // set mode
+        if (!_sfte.term.vt_dec_priv) break;
+        if (p[0] == 25)
+            _sfte.term.hide_cursor = 0;  // ?25h / show cursor
+        else if (p[0] == 1049) {         // ?1049h / save cursor and switch to alt
+            if (!_sfte.term.alt_cells)
+                _sfte.term.alt_cells = (sfte_cell *)calloc(_sfte.term.cols * _sfte.term.rows,
+                                                           sizeof(sfte_cell));
+            _sfte.term.saved_x = _sfte.term.cursor_x;
+            _sfte.term.saved_y = _sfte.term.cursor_y;
+            sfte_cell *tmp = _sfte.term.cells;  // swap buffer ptrs
+            _sfte.term.cells = _sfte.term.alt_cells;
+            _sfte.term.alt_cells = tmp;
+            for (int i = 0; i < _sfte.term.cols * _sfte.term.rows; ++i) {
+                _sfte.term.cells[i].rune = ' ';
+                _sfte.term.cells[i].bg = SFTE_BG_COLOR;
+                _sfte.term.cells[i].fg = 0xFFFFFF;
+                _sfte.term.cells[i].attr = 0;
+            }
+            _sfte.term.cursor_x = 0;
+            _sfte.term.cursor_y = 0;
+        }
+        break;
+    case 'l':  // reset mode
+        if (!_sfte.term.vt_dec_priv) break;
+        if (p[0] == 25)
+            _sfte.term.hide_cursor = 1;  // ?25l / hide cursor
+        else if (p[0] == 1049) {         // ?1049l / switch to main and restore cursor
+            if (_sfte.term.alt_cells) {
+                sfte_cell *tmp = _sfte.term.cells;
+                _sfte.term.cells = _sfte.term.alt_cells;
+                _sfte.term.alt_cells = tmp;
+            }
+            _sfte.term.cursor_x = _sfte.term.saved_x;
+            _sfte.term.cursor_y = _sfte.term.saved_y;
+        }
+        break;
+    case 'r':  // set scroll region
+    {
+        int top = (p[0] > 0 ? p[0] : 1) - 1;
+        int bot = (cnt > 1 && p[1] > 0 ? p[1] : _sfte.term.rows) - 1;
+        if (top < 0) top = 0;
+        if (bot >= _sfte.term.rows) bot = _sfte.term.rows - 1;
+        if (top < bot) {
+            _sfte.term.scroll_top = top;
+            _sfte.term.scroll_bottom = bot;
+        }
+        _sfte.term.cursor_x = 0;  // DECSTBM specifies cursor reset
+        _sfte.term.cursor_y = 0;
+        break;
+    }
+    case 'S':  // scroll up
+        _sfte_scroll(p[0] > 0 ? p[0] : 1);
+        break;
+    case 'T':  // scroll down
+        _sfte_scroll(-(p[0] > 0 ? p[0] : 1));
+        break;
+    case 'd':  // line pos abs / VPA
+    {
+        // move to specific row, keep column same
+        _sfte.term.cursor_y = _SFTE_CLAMP((p[0] > 0 ? p[0] : 1) - 1, 0, _sfte.term.rows - 1);
+        break;
+    }
+    case 'X':  // erase char / ECH
+    {
+        // replace n chars with spaces from cursor
+        int n = p[0] > 0 ? p[0] : 1;
+        int rem = _sfte.term.cols - _sfte.term.cursor_x;
+        if (n > rem) n = rem;
+        for (int i = 0; i < n; ++i) {
+            int idx = _sfte.term.cursor_y * _sfte.term.cols + _sfte.term.cursor_x + i;
+            _sfte.term.cells[idx].rune = ' ';
+            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
+            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
+            _sfte.term.cells[idx].attr = 0;
+        }
+        break;
+    }
+    case 'P':  // delete char / DCH
+    {
+        // deletes n chars, text to the right shifts left, eol blanked
+        int n = p[0] > 0 ? p[0] : 1;
+        int rem = _sfte.term.cols - _sfte.term.cursor_x;
+        if (n > rem) n = rem;
+        int move_cnt = rem - n;
+        int base_idx = _sfte.term.cursor_y * _sfte.term.cols;
+        if (move_cnt > 0)
+            memmove(&_sfte.term.cells[base_idx + _sfte.term.cursor_x],
+                    &_sfte.term.cells[base_idx + _sfte.term.cursor_x + n],
+                    move_cnt * sizeof(sfte_cell));
+        for (int i = 0; i < n; ++i) {
+            int idx = base_idx + _sfte.term.cols - n + i;
+            _sfte.term.cells[idx].rune = ' ';
+            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
+            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
+            _sfte.term.cells[idx].attr = 0;
+        }
+        break;
+    }
+    case '@':  // insert char / ICH
+    {
+        // inserts n spaces, text shifts right, text pushed off edge is lost
+        int n = p[0] > 0 ? p[0] : 1;
+        int rem = _sfte.term.cols - _sfte.term.cursor_x;
+        if (n > rem) n = rem;
+        int move_cnt = rem - n;
+        int base_idx = _sfte.term.cursor_y * _sfte.term.cols;
+        if (move_cnt > 0)
+            memmove(&_sfte.term.cells[base_idx + _sfte.term.cursor_x + n],
+                    &_sfte.term.cells[base_idx + _sfte.term.cursor_x],
+                    move_cnt * sizeof(sfte_cell));
+        for (int i = 0; i < n; ++i) {
+            int idx = base_idx + _sfte.term.cursor_x + i;
+            _sfte.term.cells[idx].rune = ' ';
+            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
+            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
+            _sfte.term.cells[idx].attr = 0;
+        }
+        break;
+    }
+    case 'L':  // insert line / IL
+    {
+        // inserts n blank lines at cursor, lines below get pushed
+        int n = p[0] > 0 ? p[0] : 1;
+        int top = _sfte.term.cursor_y;
+        int bot = _sfte.term.scroll_bottom;
+        if (top < _sfte.term.scroll_top || top > bot) break;  // oob
+        int height = bot - top + 1;
+        if (n > height) n = height;
+        int move_cnt = height - n;
+        int cols = _sfte.term.cols;
+        if (move_cnt > 0)
+            memmove(&_sfte.term.cells[(top + n) * cols], &_sfte.term.cells[top * cols],
+                    move_cnt * cols * sizeof(sfte_cell));
+        for (int i = 0; i < n * cols; ++i) {
+            int idx = top * cols + i;
+            _sfte.term.cells[idx].rune = ' ';
+            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
+            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
+            _sfte.term.cells[idx].attr = 0;
+        }
+        break;
+    }
+    case 'M':  // delete line / DL
+    {
+        // deletes n lines at cursor, lines below are pulled up
+        int n = p[0] > 0 ? p[0] : 1;
+        int top = _sfte.term.cursor_y;
+        int bot = _sfte.term.scroll_bottom;
+        if (top < _sfte.term.scroll_top || top > bot) break;  // oob
+        int height = bot - top + 1;
+        if (n > height) n = height;
+        int move_cnt = height - n;
+        int cols = _sfte.term.cols;
+        if (move_cnt > 0)
+            memmove(&_sfte.term.cells[top * cols], &_sfte.term.cells[(top + n) * cols],
+                    move_cnt * cols * sizeof(sfte_cell));
+        for (int i = 0; i < n; ++i) {
+            int idx = (bot - n + 1) * cols + i;
+            _sfte.term.cells[idx].rune = ' ';
+            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
+            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
+            _sfte.term.cells[idx].attr = 0;
+        }
+        break;
+    }
     }
 }
 
@@ -3536,7 +3735,8 @@ typedef enum {
     VT_ESCAPE,     // \033
     VT_CSI_ENTRY,  // \033[
     VT_CSI_PARAM,  // nums
-    VT_OSC         // \033]
+    VT_OSC,        // \033]
+    VT_CHARSET     // \033( \033)
 } sfte_vt_state;
 
 static void _sfte_parse_byte(uint8_t b) {
@@ -3545,42 +3745,60 @@ static void _sfte_parse_byte(uint8_t b) {
         if (b == '\033' || b == '\x1b')
             _sfte.term.vt_state = VT_ESCAPE;
         else if (b == '\n') {
-            _sfte.term.cursor_y++;
+            if (_sfte.term.cursor_y == _sfte.term.scroll_bottom)
+                _sfte_scroll(1);  // at bot margin, scroll text up
+            else if (_sfte.term.cursor_y < _sfte.term.rows - 1)
+                _sfte.term.cursor_y++;  // not at bot, move cursor down
             _sfte.term.cursor_x = 0;
         } else if (b == '\r')
             _sfte.term.cursor_x = 0;
         else if ((b == '\b' || b == '\x7f') && _sfte.term.cursor_x > 0)
             _sfte.term.cursor_x--;
         else if (b >= 0x20) {
-            if (_sfte.term.cursor_x >= _sfte.term.cols) {
-                _sfte.term.cursor_x = 0;
-                _sfte.term.cursor_y++;
-            }
-            if (_sfte.term.cursor_y >= _sfte.term.rows) _sfte.term.cursor_y = _sfte.term.rows - 1;
+            if (b >= 0x80 && b <= 0xBF)
+                break;  // FIX: utf-8 continuation bytes skipped until supported
             int idx = (_sfte.term.cursor_y * _sfte.term.cols) + _sfte.term.cursor_x;
             _sfte.term.cells[idx].rune = b;
             _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
             _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
             _sfte.term.cells[idx].attr = _sfte.term.cur_attr;
-            _sfte.term.cursor_x++;
+            _sfte_cursor_advance();
         }
         break;
     case VT_ESCAPE:
         if (b == '[') {
             _sfte.term.vt_state = VT_CSI_ENTRY;
             _sfte.term.vt_param_idx = 0;
+            _sfte.term.vt_dec_priv = 0;
             memset(_sfte.term.vt_params, 0, sizeof(_sfte.term.vt_params));
-        } else if (b == ']')
+        } else if (b == ']') {
             _sfte.term.vt_state = VT_OSC;
+            _sfte.term.osc_idx = 0;
+            memset(_sfte.term.osc_payload, 0, sizeof(_sfte.term.osc_payload));
+        } else if (b == '(' || b == ')')
+            _sfte.term.vt_state = VT_CHARSET;
         else
             _sfte.term.vt_state = VT_GROUND;
         break;
+    case VT_CHARSET:  // absorb charset specifier
+        _sfte.term.vt_state = VT_GROUND;
+        break;
     case VT_OSC:
-        if (b == '\x07' || b == '\x1b') _sfte.term.vt_state = VT_GROUND;
+        if (b == '\x07' || b == '\x1b') {
+            if (strncmp(_sfte.term.osc_payload, "11;?", 4) == 0) {
+                const char *reply = "\033]11;rgb:0000/0000/0000\x07";
+                write(_sfte.pty_fd, reply, strlen(reply));
+            }
+            _sfte.term.vt_state = VT_GROUND;
+        } else if (_sfte.term.osc_idx < (int)sizeof(_sfte.term.osc_payload) - 1)
+            _sfte.term.osc_payload[_sfte.term.osc_idx++] = b;
         break;
     case VT_CSI_ENTRY:
     case VT_CSI_PARAM:
-        if (b >= '0' && b <= '9') {
+        if (b == '?') {  // private marker
+            _sfte.term.vt_dec_priv = 1;
+            _sfte.term.vt_state = VT_CSI_PARAM;
+        } else if (b >= '0' && b <= '9') {
             _sfte.term.vt_state = VT_CSI_PARAM;
             _sfte.term.vt_params[_sfte.term.vt_param_idx] *= 10;
             _sfte.term.vt_params[_sfte.term.vt_param_idx] += (b - '0');
@@ -3604,7 +3822,7 @@ static void _sfte_loop(void) {
         if (poll(fds, _SFTE_ARRAY_LEN(fds), -1 /* infinite timeout */) == -1) break;
         if (fds[0].revents & (POLLIN | POLLERR | POLLHUP))
             if (wl_display_dispatch(_sfte.display) == -1) _sfte.running = 0;
-        if (fds[1].revents & POLLIN) {
+        if (fds[1].revents & (POLLIN | POLLERR | POLLHUP)) {
             uint8_t buf[SFTE_PTY_BUF_SIZE];
             ssize_t n = read(_sfte.pty_fd, buf, SFTE_PTY_BUF_SIZE);
             if (n > 0) {
