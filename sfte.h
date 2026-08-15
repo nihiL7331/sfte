@@ -89,6 +89,14 @@
      0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C, 0xEBDBB2}
 #endif  // SFTE_ANSI_PALETTE
 
+#ifndef SFTE_PAD_X
+#define SFTE_PAD_X 8
+#endif  // SFTE_PAD_X
+
+#ifndef SFTE_PAD_Y
+#define SFTE_PAD_Y 8
+#endif  // SFTE_PAD_Y
+
 // >>api
 int sfte_run(void);
 
@@ -2990,8 +2998,10 @@ static void _sfte_font_resize(float delta) {
     if (new_size < 4.0f || new_size > 96.0f) return;
     _sfte.font.cur_size = new_size;
     _sfte_font_bake();
-    int new_cols = _sfte.width / _sfte.font.cell_width;
-    int new_rows = _sfte.height / _sfte.font.cell_height;
+    int new_cols = (_sfte.width - (2 * SFTE_PAD_X)) / _sfte.font.cell_width;
+    int new_rows = (_sfte.height - (2 * SFTE_PAD_Y)) / _sfte.font.cell_height;
+    if (new_cols < 1) new_cols = 1;
+    if (new_rows < 1) new_rows = 1;
     if (new_cols != _sfte.term.cols || new_rows != _sfte.term.rows)
         _sfte_term_resize(new_cols, new_rows);
     _sfte_wayland_render();
@@ -2999,8 +3009,8 @@ static void _sfte_font_resize(float delta) {
 
 // >>render
 static void _sfte_render_cell(int col, int row, uint32_t rune, uint32_t fg, uint32_t bg) {
-    int cx = col * _sfte.font.cell_width;
-    int cy = row * _sfte.font.cell_height;
+    int cx = col * _sfte.font.cell_width + SFTE_PAD_X;
+    int cy = row * _sfte.font.cell_height + SFTE_PAD_Y;
     for (int y = 0; y < _sfte.font.cell_height; ++y) {
         for (int x = 0; x < _sfte.font.cell_width; ++x) {
             int px_idx = (cy + y) * _sfte.width + (cx + x);
