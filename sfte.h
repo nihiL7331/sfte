@@ -83,6 +83,12 @@
 #define SFTE_FONT_RESIZE_SPEED 2.0f
 #endif  // SFTE_FONT_RESIZE_SPEED
 
+#ifndef SFTE_ANSI_PALETTE
+#define SFTE_ANSI_PALETTE                                                                          \
+    {0x181818, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0xA89984,               \
+     0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C, 0xEBDBB2}
+#endif  // SFTE_ANSI_PALETTE
+
 // >>api
 int sfte_run(void);
 
@@ -3366,9 +3372,7 @@ static void _sfte_pty_spawn(void) {
 }
 
 // >>vt
-static const uint32_t _sfte_ansi_palette[16] = {
-    0x181818, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0xA89984,
-    0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C, 0xEBDBB2};
+static const uint32_t _sfte_ansi_palette[16] = SFTE_ANSI_PALETTE;
 
 static void _sfte_term_resize(int new_cols, int new_rows) {
     sfte_cell *new_cells = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
