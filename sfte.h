@@ -3471,8 +3471,7 @@ static void _sfte_scroll(int lines) {
     }
 }
 
-static inline void _sfte_cursor_advance(void) {
-    _sfte.term.cursor_x++;
+static inline void _sfte_check_wrap(void) {
     if (_sfte.term.cursor_x >= _sfte.term.cols) {
         _sfte.term.cursor_x = 0;
         if (_sfte.term.cursor_y == _sfte.term.scroll_bottom)
@@ -3778,12 +3777,13 @@ static void _sfte_parse_byte(uint8_t b) {
         else if (b >= 0x20) {
             if (b >= 0x80 && b <= 0xBF)
                 break;  // FIX: utf-8 continuation bytes skipped until supported
+            _sfte_check_wrap();
             int idx = (_sfte.term.cursor_y * _sfte.term.cols) + _sfte.term.cursor_x;
             _sfte.term.cells[idx].rune = b;
             _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
             _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
             _sfte.term.cells[idx].attr = _sfte.term.cur_attr;
-            _sfte_cursor_advance();
+            _sfte.term.cursor_x++;
         }
         break;
     case VT_ESCAPE:
