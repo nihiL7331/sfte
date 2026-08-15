@@ -39,8 +39,6 @@
         3. This notice may not be removed or altered from any source
         distribution.
 */
-#include <stdint.h>
-#include <stdio.h>
 
 // >>config
 #ifndef SFTE_LOG_LEVEL
@@ -67,7 +65,7 @@
 #define SFTE_PTY_BUF_SIZE 4096
 #endif  // SFTE_PTY_BUF_SIZE
 
-#ifndef SFTE_BG_COLOR
+#ifndef SFTE_BG_COLOR  // RGB
 #define SFTE_BG_COLOR 0x000000
 #endif  // SFTE_BG_COLOR
 
@@ -93,11 +91,11 @@
      0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C, 0xEBDBB2}
 #endif  // SFTE_ANSI_PALETTE
 
-#ifndef SFTE_PAD_X
+#ifndef SFTE_PAD_X  // in pxs
 #define SFTE_PAD_X 8
 #endif  // SFTE_PAD_X
 
-#ifndef SFTE_PAD_Y
+#ifndef SFTE_PAD_Y  // in pxs
 #define SFTE_PAD_Y 8
 #endif  // SFTE_PAD_Y
 
@@ -105,13 +103,21 @@
 #define SFTE_CURSOR_UNDERLINE 1
 #define SFTE_CURSOR_BAR 2
 
-#ifndef SFTE_CURSOR_STYLE
+#ifndef SFTE_CURSOR_STYLE  // BLOCK/UNDERLINE/BAR
 #define SFTE_CURSOR_STYLE SFTE_CURSOR_BLOCK
 #endif  // SFTE_CURSOR_STYLE
 
-#ifndef SFTE_CURSOR_COLOR
+#ifndef SFTE_CURSOR_COLOR  // RGB
 #define SFTE_CURSOR_COLOR 0xFFFFFF
 #endif  // SFTE_CURSOR_COLOR
+
+#ifndef SFTE_CURSOR_BLINK  // 0/1
+#define SFTE_CURSOR_BLINK 1
+#endif  // SFTE_CURSOR_BLINK
+
+#ifndef SFTE_CURSOR_BLINK_RATE  // in ms
+#define SFTE_CURSOR_BLINK_RATE 500
+#endif  // SFTE_CURSOR_BLINK_RATE
 
 // >>api
 int sfte_run(void);
@@ -122,6 +128,8 @@ int sfte_run(void);
 #define STBTT_STATIC
 #define STB_TRUETYPE_IMPLEMENTATION
 #ifdef STB_TRUETYPE_IMPLEMENTATION
+
+#include <stdint.h>
 
 typedef uint8_t stbtt_uint8;
 typedef int8_t stbtt_int8;
@@ -2826,7 +2834,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "xdg-shell.h"
 #include <fcntl.h>
 #include <poll.h>
-#include <pty.h>     // forkpty
+#include <pty.h>  // forkpty
+#include <stdio.h>
 #include <stdlib.h>  // getenv/setenv/malloc
 #include <string.h>  // memset
 #include <sys/ioctl.h>
@@ -2836,6 +2845,9 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <xkbcommon/xkbcommon-names.h>
 #include <xkbcommon/xkbcommon.h>
+#if SFTE_CURSOR_BLINK
+#include <time.h>
+#endif  // SFTE_CURSOR_BLINK
 
 // >>structs
 typedef struct sfte_logger {
@@ -2866,6 +2878,10 @@ typedef struct {
     sfte_cell *alt_cells;
     int cols;
     int rows;
+#if SFTE_CURSOR_BLINK
+    uint8_t blink_visible;
+    uint64_t next_blink_ms;
+#endif  // SFTE_CURSOR_BLINK
     int cursor_x;
     int cursor_y;
     int saved_x;  // alt screen x
@@ -3101,6 +3117,9 @@ static void _sfte_wayland_render(void) {
             uint32_t fg = _sfte.term.cells[idx].fg ? _sfte.term.cells[idx].fg : 0xFFFFFF;
             uint32_t bg = _sfte.term.cells[idx].bg ? _sfte.term.cells[idx].bg : SFTE_BG_COLOR;
             int is_cursor = (c == vis_cx && r == _sfte.term.cursor_y && !_sfte.term.hide_cursor);
+#if SFTE_CURSOR_BLINK
+            if (!_sfte.term.blink_visible) is_cursor = 0;
+#endif  // SFTE_CURSOR_BLINK
             if (is_cursor && SFTE_CURSOR_STYLE == SFTE_CURSOR_BLOCK)
                 _sfte_render_cell(c, r, rune, bg, fg);  // inverse for cursor
             else {
@@ -3389,6 +3408,14 @@ static void _sfte_wayland_unload(void) {
 }
 
 // >>state
+#if SFTE_CURSOR_BLINK
+static inline uint64_t _sfte_time_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+#endif  // SFTE_CURSOR_BLINK
+
 static void _sfte_state_load(void) {
     memset(&_sfte, 0, sizeof(_sfte));
     _sfte.width = SFTE_STARTUP_WIDTH;
@@ -3397,6 +3424,8 @@ static void _sfte_state_load(void) {
     _sfte.logger.func = SFTE_LOGGER_FUNC;
     _sfte.term.cols = 80;
     _sfte.term.rows = 24;
+    _sfte.term.blink_visible = 1;
+    _sfte.term.next_blink_ms = _sfte_time_ms() + SFTE_CURSOR_BLINK_RATE;
     _sfte.term.scroll_top = 0;
     _sfte.term.scroll_bottom = _sfte.term.rows - 1;
     _sfte.term.cells = (sfte_cell *)malloc(_sfte.term.cols * _sfte.term.rows * sizeof(sfte_cell));
@@ -3878,13 +3907,32 @@ static void _sfte_loop(void) {
         wl_display_flush(_sfte.display);
         struct pollfd fds[] = {{.fd = wl_fd, .events = POLLIN},
                                {.fd = _sfte.pty_fd, .events = POLLIN}};
-        if (poll(fds, _SFTE_ARRAY_LEN(fds), -1 /* infinite timeout */) == -1) break;
+        int timeout = -1;
+#if SFTE_CURSOR_BLINK
+        uint64_t now = _sfte_time_ms();
+        int time_to_next = (int)(_sfte.term.next_blink_ms - now);
+        if (time_to_next < 0) time_to_next = 0;
+        timeout = time_to_next;
+#endif  // SFTE_CURSOR_BLINK
+        if (poll(fds, _SFTE_ARRAY_LEN(fds), timeout /* default infinite timeout */) == -1) break;
+#if SFTE_CURSOR_BLINK
+        now = _sfte_time_ms();
+        if (now >= _sfte.term.next_blink_ms) {
+            _sfte.term.blink_visible = !_sfte.term.blink_visible;
+            _sfte.term.next_blink_ms = now + SFTE_CURSOR_BLINK_RATE;
+            _sfte_wayland_render();
+        }
+#endif  // SFTE_CURSOR_BLINK
         if (fds[0].revents & (POLLIN | POLLERR | POLLHUP))
             if (wl_display_dispatch(_sfte.display) == -1) _sfte.running = 0;
         if (fds[1].revents & (POLLIN | POLLERR | POLLHUP)) {
             uint8_t buf[SFTE_PTY_BUF_SIZE];
             ssize_t n = read(_sfte.pty_fd, buf, SFTE_PTY_BUF_SIZE);
             if (n > 0) {
+#if SFTE_CURSOR_BLINK
+                _sfte.term.blink_visible = 1;
+                _sfte.term.next_blink_ms = _sfte_time_ms() + SFTE_CURSOR_BLINK_RATE;
+#endif  // SFTE_CURSOR_BLINK
                 for (ssize_t i = 0; i < n; ++i) _sfte_parse_byte(buf[i]);
                 _sfte_wayland_render();
             } else
