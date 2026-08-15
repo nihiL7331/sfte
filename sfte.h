@@ -2841,6 +2841,8 @@ typedef struct {
     int saved_x;  // alt screen x
     int saved_y;  // alt screen y
     uint8_t hide_cursor;
+    int scroll_top;
+    int scroll_bottom;
     // pen state
     uint32_t cur_fg;
     uint32_t cur_bg;
@@ -3330,6 +3332,8 @@ static void _sfte_state_load(void) {
     _sfte.logger.func = SFTE_LOGGER_FUNC;
     _sfte.term.cols = 80;
     _sfte.term.rows = 24;
+    _sfte.term.scroll_top = 0;
+    _sfte.term.scroll_bottom = _sfte.term.rows - 1;
     _sfte.term.cells = (sfte_cell *)malloc(_sfte.term.cols * _sfte.term.rows * sizeof(sfte_cell));
     SFTE_ASSERT(_sfte.term.cells, "failed to allocate term grid");
     memset(_sfte.term.cells, 0, _sfte.term.cols * _sfte.term.rows * sizeof(sfte_cell));
@@ -3385,6 +3389,8 @@ static void _sfte_term_resize(int new_cols, int new_rows) {
     }
     _sfte.term.cols = new_cols;
     _sfte.term.rows = new_rows;
+    _sfte.term.scroll_top = 0;
+    _sfte.term.scroll_bottom = new_rows - 1;
     if (_sfte.term.cursor_x >= new_cols) _sfte.term.cursor_x = new_cols - 1;
     if (_sfte.term.cursor_y >= new_rows) _sfte.term.cursor_y = new_rows - 1;
     struct winsize ws = {.ws_row = (uint8_t)new_rows,
@@ -3393,6 +3399,41 @@ static void _sfte_term_resize(int new_cols, int new_rows) {
                          .ws_ypixel = (uint8_t)_sfte.height};
     ioctl(_sfte.pty_fd, TIOCSWINSZ, &ws);
     for (int i = 0; i < _sfte.width * _sfte.height; ++i) _sfte.shm_data[i] = SFTE_BG_COLOR;
+}
+
+static void _sfte_scroll(int lines) {
+    int top = _sfte.term.scroll_top;
+    int bot = _sfte.term.scroll_bottom;
+    int height = bot - top + 1;
+    int cols = _sfte.term.cols;
+    if (lines > 0) {  // scroll up
+        if (lines > height) lines = height;
+        int move_cnt = height - lines;
+        if (move_cnt > 0)
+            memmove(&_sfte.term.cells[top * cols], &_sfte.term.cells[(top + lines) * cols],
+                    move_cnt * cols * sizeof(sfte_cell));
+        for (int i = 0; i < lines * cols; ++i) {  // clear lines at bot
+            int idx = (bot - lines + 1) * cols + i;
+            _sfte.term.cells[idx].rune = ' ';
+            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
+            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
+            _sfte.term.cells[idx].attr = 0;
+        }
+    } else if (lines < 0) {  // scroll down
+        lines = -lines;
+        if (lines > height) lines = height;
+        int move_cnt = height - lines;
+        if (move_cnt > 0)
+            memmove(&_sfte.term.cells[(top + lines) * cols], &_sfte.term.cells[top * cols],
+                    move_cnt * cols * sizeof(sfte_cell));
+        for (int i = 0; i < lines * cols; ++i) {
+            int idx = top * cols + i;
+            _sfte.term.cells[idx].rune = ' ';
+            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
+            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
+            _sfte.term.cells[idx].attr = 0;
+        }
+    }
 }
 
 static void _sfte_dispatch_csi(uint8_t cmd) {
@@ -3531,6 +3572,25 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
             _sfte.term.cursor_y = _sfte.term.saved_y;
         }
         break;
+    case 'r':  // set scroll region
+    {
+        int top = (p[0] > 0 ? p[0] : 1) - 1;
+        int bot = (cnt > 1 && p[1] > 0 ? p[1] : _sfte.term.rows) - 1;
+        if (top < 0) top = 0;
+        if (bot >= _sfte.term.rows) bot = _sfte.term.rows - 1;
+        if (top < bot) {
+            _sfte.term.scroll_top = top;
+            _sfte.term.scroll_bottom = bot;
+        }
+        _sfte.term.cursor_x = 0;  // DECSTBM specifies cursor reset
+        _sfte.term.cursor_y = 0;
+        break;
+    }
+    case 'S':  // scroll up
+        _sfte_scroll(p[0] > 0 ? p[0] : 1);
+        break;
+    case 'T':  // scroll down
+        _sfte_scroll(-(p[0] > 0 ? p[0] : 1));
     }
 }
 
@@ -3548,7 +3608,10 @@ static void _sfte_parse_byte(uint8_t b) {
         if (b == '\033' || b == '\x1b')
             _sfte.term.vt_state = VT_ESCAPE;
         else if (b == '\n') {
-            _sfte.term.cursor_y++;
+            if (_sfte.term.cursor_y == _sfte.term.scroll_bottom)
+                _sfte_scroll(1);  // at bot margin, scroll text up
+            else if (_sfte.term.cursor_y < _sfte.term.rows - 1)
+                _sfte.term.cursor_y++;  // not at bot, move cursor down
             _sfte.term.cursor_x = 0;
         } else if (b == '\r')
             _sfte.term.cursor_x = 0;
@@ -3557,9 +3620,11 @@ static void _sfte_parse_byte(uint8_t b) {
         else if (b >= 0x20) {
             if (_sfte.term.cursor_x >= _sfte.term.cols) {
                 _sfte.term.cursor_x = 0;
-                _sfte.term.cursor_y++;
+                if (_sfte.term.cursor_y == _sfte.term.scroll_bottom)
+                    _sfte_scroll(1);
+                else if (_sfte.term.cursor_y < _sfte.term.rows - 1)
+                    _sfte.term.cursor_y++;
             }
-            if (_sfte.term.cursor_y >= _sfte.term.rows) _sfte.term.cursor_y = _sfte.term.rows - 1;
             int idx = (_sfte.term.cursor_y * _sfte.term.cols) + _sfte.term.cursor_x;
             _sfte.term.cells[idx].rune = b;
             _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
