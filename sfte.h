@@ -2843,6 +2843,9 @@ typedef struct {
     uint8_t hide_cursor;
     int scroll_top;
     int scroll_bottom;
+    // osc
+    char osc_payload[128];
+    int osc_idx;
     // pen state
     uint32_t cur_fg;
     uint32_t cur_bg;
@@ -3712,7 +3715,8 @@ typedef enum {
     VT_ESCAPE,     // \033
     VT_CSI_ENTRY,  // \033[
     VT_CSI_PARAM,  // nums
-    VT_OSC         // \033]
+    VT_OSC,        // \033]
+    VT_CHARSET     // \033( \033)
 } sfte_vt_state;
 
 static void _sfte_parse_byte(uint8_t b) {
@@ -3731,6 +3735,8 @@ static void _sfte_parse_byte(uint8_t b) {
         else if ((b == '\b' || b == '\x7f') && _sfte.term.cursor_x > 0)
             _sfte.term.cursor_x--;
         else if (b >= 0x20) {
+            if (b >= 0x80 && b <= 0xBF)
+                break;  // FIX: utf-8 continuation bytes skipped until supported
             if (_sfte.term.cursor_x >= _sfte.term.cols) {
                 _sfte.term.cursor_x = 0;
                 if (_sfte.term.cursor_y == _sfte.term.scroll_bottom)
@@ -3752,13 +3758,27 @@ static void _sfte_parse_byte(uint8_t b) {
             _sfte.term.vt_param_idx = 0;
             _sfte.term.vt_dec_priv = 0;
             memset(_sfte.term.vt_params, 0, sizeof(_sfte.term.vt_params));
-        } else if (b == ']')
+        } else if (b == ']') {
             _sfte.term.vt_state = VT_OSC;
+            _sfte.term.osc_idx = 0;
+            memset(_sfte.term.osc_payload, 0, sizeof(_sfte.term.osc_payload));
+        } else if (b == '(' || b == ')')
+            _sfte.term.vt_state = VT_CHARSET;
         else
             _sfte.term.vt_state = VT_GROUND;
         break;
+    case VT_CHARSET:  // absorb charset specifier
+        _sfte.term.vt_state = VT_GROUND;
+        break;
     case VT_OSC:
-        if (b == '\x07' || b == '\x1b') _sfte.term.vt_state = VT_GROUND;
+        if (b == '\x07' || b == '\x1b') {
+            if (strncmp(_sfte.term.osc_payload, "11;?", 4) == 0) {
+                const char *reply = "\033]11;rgb:0000/0000/0000\x07";
+                write(_sfte.pty_fd, reply, strlen(reply));
+            }
+            _sfte.term.vt_state = VT_GROUND;
+        } else if (_sfte.term.osc_idx < (int)sizeof(_sfte.term.osc_payload) - 1)
+            _sfte.term.osc_payload[_sfte.term.osc_idx++] = b;
         break;
     case VT_CSI_ENTRY:
     case VT_CSI_PARAM:
