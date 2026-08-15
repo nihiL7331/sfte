@@ -216,6 +216,12 @@ typedef struct {
     int rows;
     char title[256];
     char saved_title[256];
+    // ansi save state
+    int saved_cx;
+    int saved_cy;
+    uint32_t saved_fg;
+    uint32_t saved_bg;
+    uint32_t saved_attr;
     // cursor style
 #if SFTE_CURSOR_BLINK
     uint8_t blink_toggle;   // toggle used by DECSCUSR
@@ -1445,6 +1451,22 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         }
         break;
     }
+    case 's':                  // save cursor
+        if (p[0] != 0) break;  // avoid kitty support command
+        _sfte.term.saved_cx = _sfte.term.cursor_x;
+        _sfte.term.saved_cy = _sfte.term.cursor_y;
+        _sfte.term.saved_fg = _sfte.term.cur_fg;
+        _sfte.term.saved_bg = _sfte.term.cur_bg;
+        _sfte.term.saved_attr = _sfte.term.cur_attr;
+        break;
+    case 'u':
+        if (p[0] != 0) break;  // avoid kitty support command
+        _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.saved_cx, 0, _sfte.term.cols - 1);
+        _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.saved_cy, 0, _sfte.term.rows - 1);
+        _sfte.term.cur_fg = _sfte.term.saved_fg;
+        _sfte.term.cur_bg = _sfte.term.saved_bg;
+        _sfte.term.cur_attr = _sfte.term.saved_attr;
+
     default: _SFTE_WARN(UNHANDLED_CSI, cmd); break;
     }
 }
