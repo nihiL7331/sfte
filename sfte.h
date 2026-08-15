@@ -101,6 +101,18 @@
 #define SFTE_PAD_Y 8
 #endif  // SFTE_PAD_Y
 
+#define SFTE_CURSOR_BLOCK 0
+#define SFTE_CURSOR_UNDERLINE 1
+#define SFTE_CURSOR_BAR 2
+
+#ifndef SFTE_CURSOR_STYLE
+#define SFTE_CURSOR_STYLE SFTE_CURSOR_BLOCK
+#endif  // SFTE_CURSOR_STYLE
+
+#ifndef SFTE_CURSOR_COLOR
+#define SFTE_CURSOR_COLOR 0xFFFFFF
+#endif  // SFTE_CURSOR_COLOR
+
 // >>api
 int sfte_run(void);
 
@@ -3080,6 +3092,7 @@ static void _sfte_wayland_render(void) {
     if (new_rows < 1) new_rows = 1;
     if (new_cols != _sfte.term.cols || new_rows != _sfte.term.rows)
         _sfte_term_resize(new_cols, new_rows);
+    int vis_cx = _sfte.term.cursor_x >= _sfte.term.cols ? _sfte.term.cols - 1 : _sfte.term.cursor_x;
     for (int r = 0; r < _sfte.term.rows; ++r) {
         for (int c = 0; c < _sfte.term.cols; ++c) {
             int idx = r * _sfte.term.cols + c;
@@ -3087,10 +3100,33 @@ static void _sfte_wayland_render(void) {
             if (rune == 0) rune = ' ';
             uint32_t fg = _sfte.term.cells[idx].fg ? _sfte.term.cells[idx].fg : 0xFFFFFF;
             uint32_t bg = _sfte.term.cells[idx].bg ? _sfte.term.cells[idx].bg : SFTE_BG_COLOR;
-            if (c == _sfte.term.cursor_x && r == _sfte.term.cursor_y && !_sfte.term.hide_cursor)
+            int is_cursor = (c == vis_cx && r == _sfte.term.cursor_y && !_sfte.term.hide_cursor);
+            if (is_cursor && SFTE_CURSOR_STYLE == SFTE_CURSOR_BLOCK)
                 _sfte_render_cell(c, r, rune, bg, fg);  // inverse for cursor
-            else
+            else {
                 _sfte_render_cell(c, r, rune, fg, bg);
+                if (is_cursor) {  // bar/underline
+                    int cx = c * _sfte.font.cell_width + SFTE_PAD_X;
+                    int cy = r * _sfte.font.cell_height + SFTE_PAD_Y;
+                    uint32_t cur_col = (SFTE_CURSOR_COLOR & 0x00FFFFFF) | (0xFF << 24);
+                    if (SFTE_CURSOR_STYLE == SFTE_CURSOR_UNDERLINE) {
+                        int thickness = _sfte.font.cell_height / 10;
+                        if (thickness < 1) thickness = 1;
+                        for (int y = cy + _sfte.font.cell_height - thickness;
+                             y < cy + _sfte.font.cell_height; ++y)
+                            for (int x = cx; x < cx + _sfte.font.cell_width; ++x)
+                                if (x < _sfte.width && y < _sfte.height)
+                                    _sfte.shm_data[y * _sfte.width + x] = cur_col;
+                    } else if (SFTE_CURSOR_STYLE == SFTE_CURSOR_BAR) {
+                        int thickness = _sfte.font.cell_width / 10;
+                        if (thickness < 2) thickness = 2;
+                        for (int y = cy; y < cy + _sfte.font.cell_height; ++y)
+                            for (int x = cx; x < cx + thickness; ++x)
+                                if (x < _sfte.width && y < _sfte.height)
+                                    _sfte.shm_data[y * _sfte.width + x] = cur_col;
+                    }
+                }
+            }
         }
     }
     wl_surface_attach(_sfte.surface, _sfte.buffer, 0, 0);
