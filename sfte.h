@@ -168,6 +168,7 @@ int sfte_run(void);
 #include <string.h>  // memset
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/timerfd.h>
 #include <unistd.h>  // exec/fork/env
 #include <wayland-client.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
@@ -289,6 +290,11 @@ typedef struct {
     int width;
     int height;
     uint8_t running;
+
+    int repeat_timer_fd;
+    int32_t repeat_rate;
+    int32_t repeat_delay;
+    uint32_t repeating_key;
 
     sfte_logger logger;
     sfte_term term;
@@ -700,6 +706,13 @@ static void _sfte_wayland_keyboard_leave(void *data, struct wl_keyboard *keyboar
 static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard, uint32_t serial,
                                        uint32_t time, uint32_t key, uint32_t state) {
     (void)data, (void)keyboard, (void)serial, (void)time;
+    if (state == WL_KEYBOARD_KEY_STATE_RELEASED && key == _sfte.repeating_key) {
+        struct itimerspec its = {0};
+        timerfd_settime(_sfte.repeat_timer_fd, 0, &its, NULL);
+        _sfte.repeating_key = 0;
+        return;
+    }
+
     if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !_sfte.xkb_state) return;
 
     xkb_keycode_t keycode = key + 8;  // WARN: evdev codes are offset by 8 from xkb keycodes
@@ -769,6 +782,20 @@ static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
     }
 
     if (size > 0) write(_sfte.pty_fd, buf, size);
+
+    if (_sfte.repeat_rate > 0 && _sfte.repeating_key != key) {
+        struct itimerspec its;
+        its.it_value.tv_sec = _sfte.repeat_delay / 1000;
+        its.it_value.tv_nsec = (_sfte.repeat_delay % 1000) * 1000000;
+        its.it_interval.tv_sec = 0;
+        if (_sfte.repeat_rate > 0)
+            its.it_interval.tv_nsec = 1000000000 / _sfte.repeat_rate;
+        else
+            its.it_interval.tv_nsec = 0;
+
+        timerfd_settime(_sfte.repeat_timer_fd, 0, &its, NULL);
+        _sfte.repeating_key = key;
+    }
 }
 
 static void _sfte_wayland_keyboard_modifiers(void *data, struct wl_keyboard *keyboard,
@@ -782,7 +809,9 @@ static void _sfte_wayland_keyboard_modifiers(void *data, struct wl_keyboard *key
 
 static void _sfte_wayland_keyboard_repeat_info(void *data, struct wl_keyboard *keyboard,
                                                int32_t rate, int32_t delay) {
-    (void)data, (void)keyboard, (void)rate, (void)delay;
+    (void)data, (void)keyboard;
+    _sfte.repeat_rate = rate;
+    _sfte.repeat_delay = delay;
 }
 
 static const struct wl_keyboard_listener _sfte_wayland_keyboard_listener = {
@@ -1477,12 +1506,15 @@ static void _sfte_parse_byte(uint8_t b) {
 
 // >>loop
 static void _sfte_loop(void) {
+    _sfte.repeat_timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
     int wl_fd = wl_display_get_fd(_sfte.display);
+
     while (_sfte.running) {
         wl_display_dispatch_pending(_sfte.display);
         wl_display_flush(_sfte.display);
         struct pollfd fds[] = {{.fd = wl_fd, .events = POLLIN},
-                               {.fd = _sfte.pty_fd, .events = POLLIN}};
+                               {.fd = _sfte.pty_fd, .events = POLLIN},
+                               {.fd = _sfte.repeat_timer_fd, .events = POLLIN}};
         int timeout = -1;
 
 #if SFTE_CURSOR_BLINK
@@ -1520,6 +1552,15 @@ static void _sfte_loop(void) {
                 _sfte_wayland_render();
             } else
                 _sfte.running = 0;
+        }
+        if (fds[2].revents & POLLIN) {
+            uint64_t expirations;
+            if (read(_sfte.repeat_timer_fd, &expirations, sizeof(expirations)) == 0 ||
+                _sfte.repeating_key == 0)
+                continue;
+            // simulate a key press to get autorepeat
+            _sfte_wayland_keyboard_key(NULL, _sfte.keyboard, 0, 0, _sfte.repeating_key,
+                                       WL_KEYBOARD_KEY_STATE_PRESSED);
         }
     }
 }
