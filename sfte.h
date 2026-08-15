@@ -214,6 +214,8 @@ typedef struct {
     sfte_cell *alt_cells;
     int cols;
     int rows;
+    char title[256];
+    char saved_title[256];
     // cursor style
 #if SFTE_CURSOR_BLINK
     uint8_t blink_toggle;   // toggle used by DECSCUSR
@@ -1424,6 +1426,22 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         case 4: _sfte.term.cursor_style = SFTE_CURSOR_UNDERLINE; break;
         case 5:
         case 6: _sfte.term.cursor_style = SFTE_CURSOR_BAR; break;
+        }
+        break;
+    }
+    case 't':  // window title swap
+    {
+        int op = p[0];
+        if (op == 22) {                  // push title to stack
+            if (p[1] == 0 || p[1] == 2)  // p[1] == 0 (icon+title), 1 (icon), 2 (title)
+                snprintf(_sfte.term.saved_title, sizeof(_sfte.term.saved_title), "%s",
+                         _sfte.term.title);
+        } else if (op == 23) {  // pop title from stack
+            if (p[1] == 0 || p[1] == 2) {
+                snprintf(_sfte.term.title, sizeof(_sfte.term.title), "%s", _sfte.term.saved_title);
+                // update window border text
+                xdg_toplevel_set_title(_sfte.xdg_toplevel, _sfte.term.title);
+            }
         }
         break;
     }
