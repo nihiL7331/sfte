@@ -789,6 +789,7 @@ enum { // languageID for STBTT_PLATFORM_ID_MAC
 #include <fcntl.h>
 #include <poll.h>
 #include <pty.h>  // forkpty
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>  // getenv/setenv/malloc
 #include <string.h>  // memset
@@ -924,7 +925,14 @@ static void _sfte_logger_default(const char *tag, uint32_t log_level, const char
 
 #define _SFTE_LOG_ITEMS                                                                            \
     _SFTE_LOGITEM_XMACRO(OK, "ok")                                                                 \
-    _SFTE_LOGITEM_XMACRO(FONT_LOADED, "font loaded and baked to atlas")
+    _SFTE_LOGITEM_XMACRO(FONT_LOADED, "font loaded and baked to atlas")                            \
+    _SFTE_LOGITEM_XMACRO(PTY_SPAWN, "master/slave pair successfully spawned")                      \
+    _SFTE_LOGITEM_XMACRO(UNHANDLED_CSI, "unhandled CSI command: '%c'")                             \
+    _SFTE_LOGITEM_XMACRO(UNHANDLED_OSC, "unhandled OSC payload: '%s'")                             \
+    _SFTE_LOGITEM_XMACRO(TERM_RESIZE, "resized grid to '%dx%d'")                                   \
+    _SFTE_LOGITEM_XMACRO(WAYLAND_REGISTRY_BOUND, "wayland globals bound")                          \
+    _SFTE_LOGITEM_XMACRO(KEYMAP_LOADED, "xkb keymap loaded from compositor")
+
 #define _SFTE_LOGITEM_XMACRO(item, msg) item,
 typedef enum { _SFTE_LOG_ITEMS } _sfte_log_item_t;
 #undef _SFTE_LOGITEM_XMACRO
@@ -932,20 +940,28 @@ typedef enum { _SFTE_LOG_ITEMS } _sfte_log_item_t;
 static const char *_sfte_log_messages[] = {_SFTE_LOG_ITEMS};
 #undef _SFTE_LOGITEM_XMACRO
 
-static void _sfte_log(_sfte_log_item_t log_item, uint32_t log_level, uint32_t line_nr) {
+static void _sfte_log(_sfte_log_item_t log_item, uint32_t log_level, uint32_t line_nr, ...) {
     if (log_level > SFTE_LOG_LEVEL) return;
+
+    char buf[512];
+    va_list args;
+    va_start(args, line_nr);
+    vsnprintf(buf, sizeof(buf), _sfte_log_messages[log_item], args);
+    va_end(args);
+
     void (*log_func)(const char *, uint32_t, const char *,
                      uint32_t) = _sfte.logger.func ? _sfte.logger.func : _sfte_logger_default;
-    log_func("sfte", log_level, _sfte_log_messages[log_item], line_nr);
+
+    log_func("sfte", log_level, buf, line_nr);
 
     // for log level PANIC it would be 'undefined behaviour' to continue
     if (log_level == 0) abort();
 }
 
-#define _SFTE_PANIC(code) _sfte_log(code, 0, __LINE__)
-#define _SFTE_ERROR(code) _sfte_log(code, 1, __LINE__)
-#define _SFTE_WARN(code) _sfte_log(code, 2, __LINE__)
-#define _SFTE_INFO(code) _sfte_log(code, 3, __LINE__)
+#define _SFTE_PANIC(code, ...) _sfte_log(code, 0, __LINE__, ##__VA_ARGS__)
+#define _SFTE_ERROR(code, ...) _sfte_log(code, 1, __LINE__, ##__VA_ARGS__)
+#define _SFTE_WARN(code, ...) _sfte_log(code, 2, __LINE__, ##__VA_ARGS__)
+#define _SFTE_INFO(code, ...) _sfte_log(code, 3, __LINE__, ##__VA_ARGS__)
 
 // >>font
 static void _sfte_font_bake(void) {
@@ -1127,6 +1143,8 @@ static void _sfte_wayland_keyboard_keymap(void *data, struct wl_keyboard *keyboa
     _sfte.xkb_keymap = xkb_keymap_new_from_string(
         _sfte.xkb_context, map_str, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
     _sfte.xkb_state = xkb_state_new(_sfte.xkb_keymap);
+
+    _SFTE_INFO(KEYMAP_LOADED);
     munmap(map_str, size);
     close(fd);  // close the fd to avoid leak
 }
@@ -1353,6 +1371,7 @@ static void _sfte_wayland_load(void) {
     xdg_toplevel_set_app_id(_sfte.xdg_toplevel, "sfte");
     wl_surface_commit(_sfte.surface);
     wl_display_roundtrip(_sfte.display);
+    _SFTE_INFO(WAYLAND_REGISTRY_BOUND);
 }
 
 static void _sfte_wayland_unload(void) {
@@ -1419,7 +1438,8 @@ static void _sfte_pty_spawn(void) {
         execlp(shell, shell, NULL);  // replace current pimg with shell
         abort();                     // if execlp returns, it failed to exec the shell
     }
-    _SFTE_INFO(OK);
+
+    _SFTE_INFO(PTY_SPAWN);
 }
 
 // >>vt
@@ -1460,6 +1480,8 @@ static void _sfte_term_resize(int new_cols, int new_rows) {
     ioctl(_sfte.pty_fd, TIOCSWINSZ, &ws);
     uint32_t clear_col = (SFTE_BG_COLOR & 0x00FFFFFF) | (SFTE_BG_OPACITY << 24);
     for (int i = 0; i < _sfte.width * _sfte.height; ++i) _sfte.shm_data[i] = clear_col;
+
+    _SFTE_INFO(TERM_RESIZE, new_cols, new_rows);
 }
 
 static inline void _sfte_clear_cells(int start_idx, int cnt) {
@@ -1782,6 +1804,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         }
         break;
     }
+    default: _SFTE_WARN(UNHANDLED_CSI, cmd); break;
     }
 }
 
@@ -1844,7 +1867,9 @@ static void _sfte_parse_byte(uint8_t b) {
             if (strncmp(_sfte.term.osc_payload, "11;?", 4) == 0) {
                 const char *reply = "\033]11;rgb:0000/0000/0000\x07";
                 write(_sfte.pty_fd, reply, strlen(reply));
-            }
+            } else
+                _SFTE_WARN(UNHANDLED_OSC, _sfte.term.osc_payload);
+
             _sfte.term.vt_state = VT_GROUND;
         } else if (_sfte.term.osc_idx < (int)sizeof(_sfte.term.osc_payload) - 1)
             _sfte.term.osc_payload[_sfte.term.osc_idx++] = b;
