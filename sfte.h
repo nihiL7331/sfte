@@ -3074,8 +3074,10 @@ static void _sfte_wayland_create_buffer(void) {
 static void _sfte_term_resize(int new_cols, int new_rows);
 
 static void _sfte_wayland_render(void) {
-    int new_cols = _sfte.width / _sfte.font.cell_width;
-    int new_rows = _sfte.height / _sfte.font.cell_height;
+    int new_cols = (_sfte.width - (2 * SFTE_PAD_X)) / _sfte.font.cell_width;
+    int new_rows = (_sfte.height - (2 * SFTE_PAD_Y)) / _sfte.font.cell_height;
+    if (new_cols < 1) new_cols = 1;
+    if (new_rows < 1) new_rows = 1;
     if (new_cols != _sfte.term.cols || new_rows != _sfte.term.rows)
         _sfte_term_resize(new_cols, new_rows);
     for (int r = 0; r < _sfte.term.rows; ++r) {
