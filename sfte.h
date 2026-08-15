@@ -1393,6 +1393,13 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         _sfte_clear_cells(start_idx, n);
         break;
     }
+    case 'c':  // device attributes
+    {
+        if (p[0] != 0) break;
+        const char *da = "\033[?6c";
+        write(_sfte.pty_fd, da, strlen(da));
+        break;
+    }
     case 'q':  // dynamic cursor style
     {
         int style = p[0] ? p[0] : 0;
