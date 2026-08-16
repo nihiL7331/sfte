@@ -1566,7 +1566,8 @@ typedef enum {
     VT_CSI_ENTRY,  // \033[
     VT_CSI_PARAM,  // nums
     VT_OSC,        // \033]
-    VT_CHARSET     // \033( \033)
+    VT_CHARSET,    // \033( \033)
+    VT_HASH        // #
 } sfte_vt_state;
 
 static void _sfte_parse_byte(uint8_t b) {
@@ -1652,8 +1653,24 @@ static void _sfte_parse_byte(uint8_t b) {
             _sfte.term.cur_bg = _sfte.term.ansi_saved_bg;
             _sfte.term.cur_attr = _sfte.term.ansi_saved_attr;
             _sfte.term.vt_state = VT_GROUND;
-        } else
+        } else if (b == '#')
+            _sfte.term.vt_state = VT_HASH;
+        else
             _sfte.term.vt_state = VT_GROUND;
+        break;
+    case VT_HASH:
+        if (b == '8') {  // ESC # 8 / DECALN
+            for (int i = 0; i < _sfte.term.cols * _sfte.term.rows; ++i) {
+                _sfte.term.cells[i].rune = 'E';
+                _sfte.term.cells[i].fg = 0xFFFFFF;
+                _sfte.term.cells[i].bg = SFTE_BG_COLOR;
+                _sfte.term.cells[i].attr = 0;
+                _sfte.term.cells[i].dirty = 1;
+            }
+            _sfte.term.cursor_x = 0;
+            _sfte.term.cursor_y = 0;
+        }
+        _sfte.term.vt_state = VT_GROUND;
         break;
     case VT_CHARSET:  // absorb charset specifier
         _sfte.term.vt_state = VT_GROUND;
