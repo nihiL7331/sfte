@@ -1623,7 +1623,21 @@ static void _sfte_parse_byte(uint8_t b) {
             memset(_sfte.term.osc_payload, 0, sizeof(_sfte.term.osc_payload));
         } else if (b == '(' || b == ')')
             _sfte.term.vt_state = VT_CHARSET;
-        else
+        else if (b == '7') {  // save cursor
+            _sfte.term.ansi_saved_x = _sfte.term.cursor_x;
+            _sfte.term.ansi_saved_y = _sfte.term.cursor_y;
+            _sfte.term.ansi_saved_fg = _sfte.term.cur_fg;
+            _sfte.term.ansi_saved_bg = _sfte.term.cur_bg;
+            _sfte.term.ansi_saved_attr = _sfte.term.cur_attr;
+            _sfte.term.vt_state = VT_GROUND;
+        } else if (b == '8') {  // restore cursor
+            _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.ansi_saved_x, 0, _sfte.term.cols - 1);
+            _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.ansi_saved_y, 0, _sfte.term.rows - 1);
+            _sfte.term.cur_fg = _sfte.term.ansi_saved_fg;
+            _sfte.term.cur_bg = _sfte.term.ansi_saved_bg;
+            _sfte.term.cur_attr = _sfte.term.ansi_saved_attr;
+            _sfte.term.vt_state = VT_GROUND;
+        } else
             _sfte.term.vt_state = VT_GROUND;
         break;
     case VT_CHARSET:  // absorb charset specifier
