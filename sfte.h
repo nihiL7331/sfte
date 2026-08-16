@@ -220,15 +220,15 @@ typedef struct {
     // ansi save state
     int ansi_saved_x;
     int ansi_saved_y;
-    uint32_t saved_fg;
-    uint32_t saved_bg;
-    uint32_t saved_attr;
+    uint32_t ansi_saved_fg;
+    uint32_t ansi_saved_bg;
+    uint32_t ansi_saved_attr;
     // dirty state
     int dirty_saved_x;
     int dirty_saved_y;
     // cursor style
 #if SFTE_CURSOR_BLINK
-    uint8_t blink_toggle;   // toggle used by DECSCUSR
+    uint8_t blink_enabled;  // toggle used by DECSCUSR
     uint8_t blink_visible;  // defining whether cursor is CURRENTLY visible
     uint64_t next_blink_ms;
 #endif  // SFTE_CURSOR_BLINK
@@ -266,7 +266,7 @@ typedef struct {
     int atlas_width;
     int atlas_height;
 
-    stbtt_fontinfo info;
+    stbtt_fontinfo stb_info;
     float scale;
 
     // hash map
@@ -404,12 +404,12 @@ static sfte_glyph *_sfte_font_get_glyph(uint32_t rune) {
         g->rune = rune;
 
         int advance_width, left_side_bearing;
-        stbtt_GetCodepointHMetrics(&_sfte.font.info, rune, &advance_width, &left_side_bearing);
+        stbtt_GetCodepointHMetrics(&_sfte.font.stb_info, rune, &advance_width, &left_side_bearing);
         g->xadvance = (int)(advance_width * _sfte.font.scale + 0.5f);
 
         int x0, y0, x1, y1;
-        stbtt_GetCodepointBitmapBox(&_sfte.font.info, rune, _sfte.font.scale, _sfte.font.scale, &x0,
-                                    &y0, &x1, &y1);
+        stbtt_GetCodepointBitmapBox(&_sfte.font.stb_info, rune, _sfte.font.scale, _sfte.font.scale,
+                                    &x0, &y0, &x1, &y1);
 
         int glyph_width = x1 - x0;
         int glyph_height = y1 - y0;
@@ -432,7 +432,7 @@ static sfte_glyph *_sfte_font_get_glyph(uint32_t rune) {
 
         if (glyph_width > 0 && glyph_height > 0) {
             int byte_off = g->y0 * _sfte.font.atlas_width + g->x0;
-            stbtt_MakeCodepointBitmap(&_sfte.font.info, &_sfte.font.atlas_pxs[byte_off],
+            stbtt_MakeCodepointBitmap(&_sfte.font.stb_info, &_sfte.font.atlas_pxs[byte_off],
                                       glyph_width, glyph_height, _sfte.font.atlas_width,
                                       _sfte.font.scale, _sfte.font.scale, rune);
         }
@@ -453,7 +453,7 @@ static void _sfte_font_reset_cache(void) {
     _sfte.font.atlas_y = 0;
     _sfte.font.atlas_bottom = 0;
 
-    _sfte.font.scale = stbtt_ScaleForPixelHeight(&_sfte.font.info, _sfte.font.cur_size);
+    _sfte.font.scale = stbtt_ScaleForPixelHeight(&_sfte.font.stb_info, _sfte.font.cur_size);
 
     // monospace grid using standard 'M' glyph
     sfte_glyph *m = _sfte_font_get_glyph('M');
@@ -483,7 +483,7 @@ static void _sfte_font_load(void) {
     _sfte.font.glyph_cap = 4096;
     _sfte.font.glyphs = (sfte_glyph *)calloc(_sfte.font.glyph_cap, sizeof(sfte_glyph));
     SFTE_ASSERT(_sfte.font.glyphs, "failed to allocate glyphs storage");
-    stbtt_InitFont(&_sfte.font.info, _sfte.font.ttf_buf, 0);
+    stbtt_InitFont(&_sfte.font.stb_info, _sfte.font.ttf_buf, 0);
     _sfte_font_reset_cache();
 
     _SFTE_INFO(FONT_LOADED);
@@ -1043,7 +1043,7 @@ static void _sfte_state_load(void) {
     _sfte.term.cols = 80;
     _sfte.term.rows = 24;
 #if SFTE_CURSOR_BLINK
-    _sfte.term.blink_toggle = 1;
+    _sfte.term.blink_enabled = 1;
     _sfte.term.blink_visible = 1;
     _sfte.term.next_blink_ms = _sfte_time_ms() + SFTE_CURSOR_BLINK_RATE;
 #endif  // SFTE_CURSOR_BLINK
@@ -1463,10 +1463,10 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         case 0:
         case 1:
         case 3:
-        case 5: _sfte.term.blink_toggle = 1; break;
+        case 5: _sfte.term.blink_enabled = 1; break;
         case 2:
         case 4:
-        case 6: _sfte.term.blink_toggle = 0; break;
+        case 6: _sfte.term.blink_enabled = 0; break;
         }
 #endif  // SFTE_CURSOR_BLINK
 
@@ -1503,7 +1503,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
     case 'p':  // soft terminal reset
     {
 #if SFTE_CURSOR_BLINK
-        _sfte.term.blink_toggle = 1;
+        _sfte.term.blink_enabled = 1;
 #endif  // SFTE_CURSOR_BLINK
         _sfte.term.cursor_style = SFTE_CURSOR_STYLE;
         _sfte.term.scroll_top = 0;
@@ -1521,17 +1521,17 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         if (p[0] != 0) break;  // avoid kitty support command
         _sfte.term.ansi_saved_x = _sfte.term.cursor_x;
         _sfte.term.ansi_saved_y = _sfte.term.cursor_y;
-        _sfte.term.saved_fg = _sfte.term.cur_fg;
-        _sfte.term.saved_bg = _sfte.term.cur_bg;
-        _sfte.term.saved_attr = _sfte.term.cur_attr;
+        _sfte.term.ansi_saved_fg = _sfte.term.cur_fg;
+        _sfte.term.ansi_saved_bg = _sfte.term.cur_bg;
+        _sfte.term.ansi_saved_attr = _sfte.term.cur_attr;
         break;
     case 'u':
         if (p[0] != 0) break;  // avoid kitty support command
         _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.ansi_saved_x, 0, _sfte.term.cols - 1);
         _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.ansi_saved_y, 0, _sfte.term.rows - 1);
-        _sfte.term.cur_fg = _sfte.term.saved_fg;
-        _sfte.term.cur_bg = _sfte.term.saved_bg;
-        _sfte.term.cur_attr = _sfte.term.saved_attr;
+        _sfte.term.cur_fg = _sfte.term.ansi_saved_fg;
+        _sfte.term.cur_bg = _sfte.term.ansi_saved_bg;
+        _sfte.term.cur_attr = _sfte.term.ansi_saved_attr;
         break;
     default: _SFTE_WARN(UNHANDLED_CSI, cmd); break;
     }
@@ -1668,7 +1668,7 @@ static void _sfte_loop(void) {
 
 #if SFTE_CURSOR_BLINK
         uint64_t now = _sfte_time_ms();
-        if (_sfte.term.blink_toggle) {
+        if (_sfte.term.blink_enabled) {
             int time_to_next = (int)(_sfte.term.next_blink_ms - now);
             if (time_to_next < 0) time_to_next = 0;
             timeout = time_to_next;
@@ -1678,7 +1678,7 @@ static void _sfte_loop(void) {
         if (poll(fds, _SFTE_ARRAY_LEN(fds), timeout /* default infinite timeout */) == -1) break;
 
 #if SFTE_CURSOR_BLINK
-        if (_sfte.term.blink_toggle) {
+        if (_sfte.term.blink_enabled) {
             now = _sfte_time_ms();
             if (now >= _sfte.term.next_blink_ms) {
                 _sfte.term.blink_visible = !_sfte.term.blink_visible;
