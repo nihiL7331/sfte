@@ -237,9 +237,7 @@ typedef struct {
     uint8_t hide_cursor;
     uint8_t cursor_style;  // block/underline/bar (lsb)
     // alt screen state
-    int alt_saved_x;  // alt screen x
-    int alt_saved_y;  // alt screen y
-    int alt_active;   // tracks if in alt buffer
+    int alt_active;  // tracks if in alt buffer
 
     int scroll_top;
     int scroll_bottom;
@@ -1288,30 +1286,37 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         if (p[0] == 25) {
             _sfte.term.hide_cursor = 0;  // ?25h / show cursor
             _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
-        } else if (p[0] == 1049) {  // ?1049h / save cursor and switch to alt
-            if (_sfte.term.alt_active) break;
-            _sfte.term.alt_active = 1;
-
-            if (!_sfte.term.alt_cells)
-                _sfte.term.alt_cells = (sfte_cell *)calloc(_sfte.term.cols * _sfte.term.rows,
-                                                           sizeof(sfte_cell));
-
-            _sfte.term.alt_saved_x = _sfte.term.cursor_x;
-            _sfte.term.alt_saved_y = _sfte.term.cursor_y;
-            sfte_cell *tmp = _sfte.term.cells;  // swap buffer ptrs
-            _sfte.term.cells = _sfte.term.alt_cells;
-            _sfte.term.alt_cells = tmp;
-
-            for (int i = 0; i < _sfte.term.cols * _sfte.term.rows; ++i) {
-                _sfte.term.cells[i].rune = ' ';
-                _sfte.term.cells[i].bg = SFTE_BG_COLOR;
-                _sfte.term.cells[i].fg = 0xFFFFFF;
-                _sfte.term.cells[i].attr = 0;
-                _sfte.term.cells[i].dirty = 1;
+        } else if (p[0] == 1047 || p[0] == 1048 || p[0] == 1049) {
+            // 1048 / 1049 save cursor
+            if (p[0] == 1048 || p[0] == 1049) {
+                _sfte.term.ansi_saved_x = _sfte.term.cursor_x;
+                _sfte.term.ansi_saved_y = _sfte.term.cursor_y;
+                _sfte.term.ansi_saved_fg = _sfte.term.cur_fg;
+                _sfte.term.ansi_saved_bg = _sfte.term.cur_bg;
+                _sfte.term.ansi_saved_attr = _sfte.term.cur_attr;
             }
 
-            _sfte.term.cursor_x = 0;
-            _sfte.term.cursor_y = 0;
+            // 1047 / 1049 switch to alt screen
+            if ((p[0] == 1047 || p[0] == 1049) && !_sfte.term.alt_active) {
+                _sfte.term.alt_active = 1;
+
+                if (!_sfte.term.alt_cells)
+                    _sfte.term.alt_cells = (sfte_cell *)calloc(_sfte.term.cols * _sfte.term.rows,
+                                                               sizeof(sfte_cell));
+
+                sfte_cell *tmp = _sfte.term.cells;  // swap buffer ptrs
+                _sfte.term.cells = _sfte.term.alt_cells;
+                _sfte.term.alt_cells = tmp;
+            }
+
+            // 1049 clear screen
+            if (p[0] == 1049) {
+                _sfte_clear_cells(0, _sfte.term.cols * _sfte.term.rows);
+                _sfte.term.cursor_x = 0;
+                _sfte.term.cursor_y = 0;
+            } else if (p[0] == 1047) {
+                _sfte_dirty_range(0, _sfte.term.cols * _sfte.term.rows);
+            }
         }
         break;
     case 'l':  // reset mode
@@ -1319,18 +1324,28 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         if (p[0] == 25) {
             _sfte.term.hide_cursor = 1;  // ?25l / hide cursor
             _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
-        } else if (p[0] == 1049) {  // ?1049l / switch to main and restore cursor
-            if (!_sfte.term.alt_active) break;
-            _sfte.term.alt_active = 0;
-
-            if (_sfte.term.alt_cells) {
-                sfte_cell *tmp = _sfte.term.cells;
-                _sfte.term.cells = _sfte.term.alt_cells;
-                _sfte.term.alt_cells = tmp;
-                _sfte_dirty_range(0, _sfte.term.cols * _sfte.term.rows);
+        } else if (p[0] == 1047 || p[0] == 1048 || p[0] == 1049) {
+            // 1047 / 1049 switch to main screen
+            if ((p[0] == 1047 || p[0] == 1049) && _sfte.term.alt_active) {
+                _sfte.term.alt_active = 0;
+                if (_sfte.term.alt_cells) {
+                    sfte_cell *tmp = _sfte.term.cells;
+                    _sfte.term.cells = _sfte.term.alt_cells;
+                    _sfte.term.alt_cells = tmp;
+                    _sfte_dirty_range(0, _sfte.term.cols * _sfte.term.rows);
+                }
             }
-            _sfte.term.cursor_x = _sfte.term.alt_saved_x;
-            _sfte.term.cursor_y = _sfte.term.alt_saved_y;
+
+            // 1048 / 1049 restore cursor
+            if (p[0] == 1048 || p[0] == 1049) {
+                _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.ansi_saved_x, 0, _sfte.term.cols - 1);
+                _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.ansi_saved_y, 0, _sfte.term.rows - 1);
+                _sfte.term.cur_fg = _sfte.term.ansi_saved_fg;
+                _sfte.term.cur_bg = _sfte.term.ansi_saved_bg;
+                _sfte.term.cur_attr = _sfte.term.ansi_saved_attr;
+
+                _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
+            }
         }
         break;
     case 'r':  // set scroll region
