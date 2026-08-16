@@ -44,7 +44,7 @@
 
 // >>config
 #ifndef SFTE_LOG_LEVEL
-#define SFTE_LOG_LEVEL 3
+#define SFTE_LOG_LEVEL 0
 #endif  // SFTE_LOG_LEVEL
 
 #ifndef SFTE_STARTUP_WIDTH
