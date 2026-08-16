@@ -1250,6 +1250,8 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         if (p[0] == 0)  // 0K / clear to eol
             _sfte_clear_cells(_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y),
                               _sfte.term.cols - _sfte.term.cursor_x);
+        if (p[0] == 1)  // clear to start of line
+            _sfte_clear_cells(_SFTE_IDX(0, _sfte.term.cursor_y), _sfte.term.cursor_x + 1);
         else if (p[0] == 2)  // 2K / clear entire line
             _sfte_clear_cells(_SFTE_IDX(0, _sfte.term.cursor_y), _sfte.term.cols);
         break;
