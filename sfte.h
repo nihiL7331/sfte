@@ -236,9 +236,11 @@ typedef struct {
     int cursor_y;
     uint8_t hide_cursor;
     uint8_t cursor_style;  // block/underline/bar (lsb)
-
+    // alt screen state
     int alt_saved_x;  // alt screen x
     int alt_saved_y;  // alt screen y
+    int alt_active;   // tracks if in alt buffer
+
     int scroll_top;
     int scroll_bottom;
     // osc
@@ -1287,6 +1289,9 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
             _sfte.term.hide_cursor = 0;  // ?25h / show cursor
             _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
         } else if (p[0] == 1049) {  // ?1049h / save cursor and switch to alt
+            if (_sfte.term.alt_active) break;
+            _sfte.term.alt_active = 1;
+
             if (!_sfte.term.alt_cells)
                 _sfte.term.alt_cells = (sfte_cell *)calloc(_sfte.term.cols * _sfte.term.rows,
                                                            sizeof(sfte_cell));
@@ -1315,6 +1320,9 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
             _sfte.term.hide_cursor = 1;  // ?25l / hide cursor
             _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
         } else if (p[0] == 1049) {  // ?1049l / switch to main and restore cursor
+            if (!_sfte.term.alt_active) break;
+            _sfte.term.alt_active = 0;
+
             if (_sfte.term.alt_cells) {
                 sfte_cell *tmp = _sfte.term.cells;
                 _sfte.term.cells = _sfte.term.alt_cells;
