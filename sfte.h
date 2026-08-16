@@ -1241,10 +1241,17 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         break;
     }
     case 'J':  // clear screen
-        if (p[0] != 2) break;
-        _sfte_clear_cells(0, _sfte.term.rows * _sfte.term.cols);
-        _sfte.term.cursor_x = 0;
-        _sfte.term.cursor_y = 0;
+        int p0 = p[0];
+        if (p[0] == 0) {  // 0J / cursor to end of screen
+            int start_idx = _SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y);
+            _sfte_clear_cells(start_idx, (_sfte.term.rows * _sfte.term.cols) - start_idx);
+        } else if (p[0] == 1)  // 1J / start of screen to cursor
+            _sfte_clear_cells(0, _SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y) + 1);
+        else if (p[0] == 2) {  // 2J / entire screen
+            _sfte_clear_cells(0, _sfte.term.rows * _sfte.term.cols);
+            _sfte.term.cursor_x = 0;
+            _sfte.term.cursor_y = 0;
+        }
         break;
     case 'K':           // erase in line
         if (p[0] == 0)  // 0K / clear to eol
