@@ -1,4 +1,3 @@
-#define SFTE_DEBUG
 #define SFTE_IMPL
 #include "sfte.h"
 
