@@ -1580,11 +1580,12 @@ static void _sfte_parse_byte(uint8_t b) {
                 _sfte_scroll(1);  // at bot margin, scroll text up
             else if (_sfte.term.cursor_y < _sfte.term.rows - 1)
                 _sfte.term.cursor_y++;  // not at bot, move cursor down
-
-            _sfte.term.cursor_x = 0;
         } else if (b == '\r')
             _sfte.term.cursor_x = 0;
-        else if ((b == '\b' || b == '\x7f') && _sfte.term.cursor_x > 0)
+        else if (b == '\t') {
+            _sfte.term.cursor_x = (_sfte.term.cursor_x / 8 + 1) * 8;
+            _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.cursor_x, 0, _sfte.term.cols - 1);
+        } else if ((b == '\b' || b == '\x7f') && _sfte.term.cursor_x > 0)
             _sfte.term.cursor_x--;
         else if (b >= 0x20) {
             if (_sfte.term.utf8_bytes_left > 0) {
