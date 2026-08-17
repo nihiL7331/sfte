@@ -209,6 +209,8 @@ typedef struct {
     int rows;
     char title[256];
     char saved_title[256];
+    uint8_t auto_wrap;
+    uint8_t origin_mode;
     // ansi save state
     int ansi_saved_x;
     int ansi_saved_y;
@@ -1038,6 +1040,8 @@ static void _sfte_state_load(void) {
     _sfte.logger.func = SFTE_LOGGER_FUNC;
     _sfte.term.cols = 80;
     _sfte.term.rows = 24;
+    _sfte.term.auto_wrap = 1;
+    _sfte.term.origin_mode = 0;
 #if SFTE_CURSOR_BLINK
     _sfte.term.blink_enabled = 1;
     _sfte.term.blink_visible = 1;
@@ -1174,11 +1178,14 @@ static void _sfte_scroll(int lines) {
 
 static inline void _sfte_check_wrap(void) {
     if (_sfte.term.cursor_x >= _sfte.term.cols) {
-        _sfte.term.cursor_x = 0;
-        if (_sfte.term.cursor_y == _sfte.term.scroll_bottom)
-            _sfte_scroll(1);
-        else if (_sfte.term.cursor_y < _sfte.term.rows - 1)
-            _sfte.term.cursor_y++;
+        if (_sfte.term.auto_wrap) {
+            _sfte.term.cursor_x = 0;
+            if (_sfte.term.cursor_y == _sfte.term.scroll_bottom)
+                _sfte_scroll(1);
+            else if (_sfte.term.cursor_y < _sfte.term.rows - 1)
+                _sfte.term.cursor_y++;
+        } else
+            _sfte.term.cursor_x = _sfte.term.cols - 1;
     }
 }
 
@@ -1227,9 +1234,14 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
     case 'f': {
         // NOTE: vt coords are 1-idxd
         int r = (p[0] > 0 ? p[0] : 1) - 1;
-        r = _SFTE_CLAMP(r, 0, _sfte.term.rows - 1);
         int c = (cnt > 1 && p[1] > 0 ? p[1] : 1) - 1;
         c = _SFTE_CLAMP(c, 0, _sfte.term.cols - 1);
+
+        if (_sfte.term.origin_mode) {  // relative bounds
+            r += _sfte.term.scroll_top;
+            r = _SFTE_CLAMP(r, _sfte.term.scroll_top, _sfte.term.scroll_bottom);
+        } else
+            r = _SFTE_CLAMP(r, 0, _sfte.term.rows - 1);
 
         _sfte.term.cursor_y = r;
         _sfte.term.cursor_x = c;
@@ -1306,6 +1318,12 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         if (p[0] == 25) {
             _sfte.term.hide_cursor = 0;  // ?25h / show cursor
             _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
+        } else if (p[0] == 7)
+            _sfte.term.auto_wrap = 1;
+        else if (p[0] == 6) {
+            _sfte.term.origin_mode = 1;
+            _sfte.term.cursor_x = 0;
+            _sfte.term.cursor_y = _sfte.term.scroll_top;
         } else if (p[0] == 1047 || p[0] == 1048 || p[0] == 1049) {
             // 1048 / 1049 save cursor
             if (p[0] == 1048 || p[0] == 1049) {
@@ -1346,6 +1364,12 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         if (p[0] == 25) {
             _sfte.term.hide_cursor = 1;  // ?25l / hide cursor
             _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
+        } else if (p[0] == 7)
+            _sfte.term.auto_wrap = 0;
+        else if (p[0] == 6) {
+            _sfte.term.origin_mode = 0;
+            _sfte.term.cursor_x = 0;
+            _sfte.term.cursor_y = 0;
         } else if (p[0] == 1047 || p[0] == 1048 || p[0] == 1049) {
             // 1047 / 1049 switch to main screen
             if ((p[0] == 1047 || p[0] == 1049) && _sfte.term.alt_active) {
@@ -1385,7 +1409,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         }
 
         _sfte.term.cursor_x = 0;
-        _sfte.term.cursor_y = 0;
+        _sfte.term.cursor_y = _sfte.term.origin_mode ? _sfte.term.scroll_top : 0;
         break;
     }
     case 'S':  // scroll up
@@ -1401,7 +1425,13 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
     case 'd':  // line pos abs / VPA
     {
         // move to specific row, keep column same
-        _sfte.term.cursor_y = _SFTE_CLAMP((p[0] > 0 ? p[0] : 1) - 1, 0, _sfte.term.rows - 1);
+        int r = (p[0] > 0 ? p[0] : 1) - 1;
+        if (_sfte.term.origin_mode) {
+            r += _sfte.term.scroll_top;
+            r = _SFTE_CLAMP(r, _sfte.term.scroll_top, _sfte.term.scroll_bottom);
+        } else
+            r = _SFTE_CLAMP(r, 0, _sfte.term.rows - 1);
+        _sfte.term.cursor_y = r;
         break;
     }
     case 'X':  // erase char / ECH
