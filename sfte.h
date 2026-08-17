@@ -47,14 +47,6 @@
 #define SFTE_LOG_LEVEL 0
 #endif  // SFTE_LOG_LEVEL
 
-#ifndef SFTE_STARTUP_WIDTH
-#define SFTE_STARTUP_WIDTH 800
-#endif  // SFTE_STARTUP_WIDTH
-
-#ifndef SFTE_STARTUP_HEIGHT
-#define SFTE_STARTUP_HEIGHT 600
-#endif  // SFTE_STARTUP_HEIGHT
-
 #ifndef SFTE_LOGGER_FUNC
 #define SFTE_LOGGER_FUNC _sfte_logger_default
 #endif  // SFTE_LOGGER_FUNC
@@ -485,6 +477,9 @@ static void _sfte_font_load(void) {
     SFTE_ASSERT(_sfte.font.glyphs, "failed to allocate glyphs storage");
     stbtt_InitFont(&_sfte.font.stb_info, _sfte.font.ttf_buf, 0);
     _sfte_font_reset_cache();
+
+    _sfte.width = _sfte.term.cols * _sfte.font.cell_width + (2 * SFTE_PAD_X);
+    _sfte.height = _sfte.term.rows * _sfte.font.cell_height + (2 * SFTE_PAD_Y);
 
     _SFTE_INFO(FONT_LOADED);
 }
@@ -1039,8 +1034,6 @@ static inline uint64_t _sfte_time_ms(void) {
 static void _sfte_state_load(void) {
     memset(&_sfte, 0, sizeof(_sfte));
 
-    _sfte.width = SFTE_STARTUP_WIDTH;
-    _sfte.height = SFTE_STARTUP_HEIGHT;
     _sfte.running = 1;
     _sfte.logger.func = SFTE_LOGGER_FUNC;
     _sfte.term.cols = 80;
