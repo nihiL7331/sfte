@@ -1241,6 +1241,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         break;
     }
     case 'J':  // clear screen
+    {
         int p0 = p[0];
         if (p[0] == 0) {  // 0J / cursor to end of screen
             int start_idx = _SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y);
@@ -1253,7 +1254,9 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
             _sfte.term.cursor_y = 0;
         }
         break;
-    case 'K':           // erase in line
+    }
+    case 'K':  // erase in line
+    {
         if (p[0] == 0)  // 0K / clear to eol
             _sfte_clear_cells(_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y),
                               _sfte.term.cols - _sfte.term.cursor_x);
@@ -1262,6 +1265,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         else if (p[0] == 2)  // 2K / clear entire line
             _sfte_clear_cells(_SFTE_IDX(0, _sfte.term.cursor_y), _sfte.term.cols);
         break;
+    }
     case 'n': {  // device status report
         if (p[0] != 6) break;
         char buf[32];
@@ -1271,26 +1275,37 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         break;
     }
     case 'A':  // cursor up
+    {
         _sfte.term.cursor_y -= (p[0] > 0 ? p[0] : 1);
         _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.cursor_y, 0, _sfte.term.rows - 1);
         break;
+    }
     case 'B':  // cursor down
+    {
         _sfte.term.cursor_y += (p[0] > 0 ? p[0] : 1);
         _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.cursor_y, 0, _sfte.term.rows - 1);
         break;
+    }
     case 'C':  // cursor forward
+    {
         _sfte.term.cursor_x += (p[0] > 0 ? p[0] : 1);
         _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.cursor_x, 0, _sfte.term.cols - 1);
         break;
+    }
     case 'D':  // cursor backward
+    {
         _sfte.term.cursor_x -= (p[0] > 0 ? p[0] : 1);
         _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.cursor_x, 0, _sfte.term.cols - 1);
         break;
+    }
     case 'G':  // cursor horizontal abs
+    {
         _sfte.term.cursor_x = (p[0] > 0 ? p[0] : 1) - 1;
         _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.cursor_x, 0, _sfte.term.cols - 1);
         break;
+    }
     case 'h':  // set mode
+    {
         if (!_sfte.term.vt_dec_priv) break;
         if (p[0] == 25) {
             _sfte.term.hide_cursor = 0;  // ?25h / show cursor
@@ -1328,7 +1343,9 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
             }
         }
         break;
+    }
     case 'l':  // reset mode
+    {
         if (!_sfte.term.vt_dec_priv) break;
         if (p[0] == 25) {
             _sfte.term.hide_cursor = 1;  // ?25l / hide cursor
@@ -1357,6 +1374,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
             }
         }
         break;
+    }
     case 'r':  // set scroll region
     {
         int top = (p[0] > 0 ? p[0] : 1) - 1;
@@ -1375,11 +1393,15 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         break;
     }
     case 'S':  // scroll up
+    {
         _sfte_scroll(p[0] > 0 ? p[0] : 1);
         break;
+    }
     case 'T':  // scroll down
+    {
         _sfte_scroll(-(p[0] > 0 ? p[0] : 1));
         break;
+    }
     case 'd':  // line pos abs / VPA
     {
         // move to specific row, keep column same
@@ -1549,7 +1571,8 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
 
         break;
     }
-    case 's':                  // save cursor
+    case 's':  // save cursor
+    {
         if (p[0] != 0) break;  // avoid kitty support command
         _sfte.term.ansi_saved_x = _sfte.term.cursor_x;
         _sfte.term.ansi_saved_y = _sfte.term.cursor_y;
@@ -1557,7 +1580,8 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         _sfte.term.ansi_saved_bg = _sfte.term.cur_bg;
         _sfte.term.ansi_saved_attr = _sfte.term.cur_attr;
         break;
-    case 'u':
+    }
+    case 'u': {
         if (p[0] != 0) break;  // avoid kitty support command
         _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.ansi_saved_x, 0, _sfte.term.cols - 1);
         _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.ansi_saved_y, 0, _sfte.term.rows - 1);
@@ -1565,6 +1589,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         _sfte.term.cur_bg = _sfte.term.ansi_saved_bg;
         _sfte.term.cur_attr = _sfte.term.ansi_saved_attr;
         break;
+    }
     default: _SFTE_WARN(UNHANDLED_CSI, cmd); break;
     }
 }
