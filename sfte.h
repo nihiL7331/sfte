@@ -632,7 +632,11 @@ static void _sfte_wayland_render(void) {
     for (int r = 0; r < _sfte.term.rows; ++r) {
         for (int c = 0; c < _sfte.term.cols; ++c) {
             int idx = _SFTE_IDX(c, r);
-            if (!_sfte.term.cells[idx].dirty) continue;
+
+            int is_dirty = _sfte.term.cells[idx].dirty;
+            if (!is_dirty && c < _sfte.term.cols - 1 && _sfte.term.cells[idx + 1].dirty)
+                is_dirty = 1;
+            if (!is_dirty) continue;
 
             uint32_t fg = _sfte.term.cells[idx].fg ? _sfte.term.cells[idx].fg : 0xFFFFFF;
             uint32_t bg = _sfte.term.cells[idx].bg ? _sfte.term.cells[idx].bg : SFTE_BG_COLOR;
@@ -654,9 +658,8 @@ static void _sfte_wayland_render(void) {
         for (int c = 0; c < _sfte.term.cols; ++c) {
             int idx = _SFTE_IDX(c, r);
 
-            // fg is different from bg, because certain nerd font symbols can have width
-            // greater than one cell. that's why if cell to our right is dirty, its bg got
-            // repainted, so we redraw our foreground.
+            // certain nerd font symbols can have width greater than one cell. that's why if cell to
+            // our right is dirty, its bg got repainted, so we redraw our foreground.
             int is_dirty = _sfte.term.cells[idx].dirty;
             if (!is_dirty && c < _sfte.term.cols - 1 && _sfte.term.cells[idx + 1].dirty)
                 is_dirty = 1;
