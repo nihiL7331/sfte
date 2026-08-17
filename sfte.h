@@ -1197,6 +1197,8 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
     int *p = _sfte.term.vt_params;
     int cnt = _sfte.term.vt_param_idx + 1;
 
+    if (_sfte.term.cursor_x >= _sfte.term.cols) _sfte.term.cursor_x = _sfte.term.cols - 1;
+
     switch (cmd) {
     case 'm':
         if (cnt == 1 && p[0] == 0) {
@@ -1633,9 +1635,11 @@ typedef enum {
 static void _sfte_parse_byte(uint8_t b) {
     switch (_sfte.term.vt_state) {
     case VT_GROUND:
-        if (b == '\033' || b == '\x1b')
+        if (b == '\033' || b == '\x1b') {
+            if (_sfte.term.cursor_x >= _sfte.term.cols) _sfte.term.cursor_x = _sfte.term.cols - 1;
             _sfte.term.vt_state = VT_ESCAPE;
-        else if (b == '\n') {
+        } else if (b == '\n') {
+            if (_sfte.term.cursor_x >= _sfte.term.cols) _sfte.term.cursor_x = _sfte.term.cols - 1;
             if (_sfte.term.cursor_y == _sfte.term.scroll_bottom)
                 _sfte_scroll(1);  // at bot margin, scroll text up
             else if (_sfte.term.cursor_y < _sfte.term.rows - 1)
@@ -1643,6 +1647,7 @@ static void _sfte_parse_byte(uint8_t b) {
         } else if (b == '\r')
             _sfte.term.cursor_x = 0;
         else if (b == '\t') {
+            if (_sfte.term.cursor_x >= _sfte.term.cols) _sfte.term.cursor_x = _sfte.term.cols - 1;
             _sfte.term.cursor_x = (_sfte.term.cursor_x / 8 + 1) * 8;
             _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.cursor_x, 0, _sfte.term.cols - 1);
         } else if ((b == '\b' || b == '\x7f') && _sfte.term.cursor_x > 0)
@@ -1716,7 +1721,26 @@ static void _sfte_parse_byte(uint8_t b) {
             _sfte.term.vt_state = VT_GROUND;
         } else if (b == '#')
             _sfte.term.vt_state = VT_HASH;
-        else
+        else if (b == 'D') {  // index move down
+            if (_sfte.term.cursor_y == _sfte.term.scroll_bottom)
+                _sfte_scroll(1);
+            else if (_sfte.term.cursor_y < _sfte.term.rows - 1)
+                _sfte.term.cursor_y++;
+            _sfte.term.vt_state = VT_GROUND;
+        } else if (b == 'M') {  // reverse index move up
+            if (_sfte.term.cursor_y == _sfte.term.scroll_top)
+                _sfte_scroll(-1);
+            else if (_sfte.term.cursor_y > 0)
+                _sfte.term.cursor_y--;
+            _sfte.term.vt_state = VT_GROUND;
+        } else if (b == 'E') {  // next line
+            if (_sfte.term.cursor_y == _sfte.term.scroll_bottom)
+                _sfte_scroll(1);
+            else if (_sfte.term.cursor_y < _sfte.term.rows - 1)
+                _sfte.term.cursor_y++;
+            _sfte.term.cursor_x = 0;
+            _sfte.term.vt_state = VT_GROUND;
+        } else
             _sfte.term.vt_state = VT_GROUND;
         break;
     case VT_HASH:
