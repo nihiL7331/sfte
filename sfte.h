@@ -1391,10 +1391,10 @@ static void _sfte_state_load(void) {
 static void _sfte_pty_spawn(void) {
     // NOTE: ws_col/ws_row will not be hardcoded when font rendering will be present
     struct winsize ws = {
-        .ws_row = (uint8_t)_sfte.term.rows,
-        .ws_col = (uint8_t)_sfte.term.cols,
-        .ws_xpixel = (uint8_t)_sfte.width,
-        .ws_ypixel = (uint8_t)_sfte.height,
+        .ws_row = (unsigned short)_sfte.term.rows,
+        .ws_col = (unsigned short)_sfte.term.cols,
+        .ws_xpixel = (unsigned short)_sfte.width,
+        .ws_ypixel = (unsigned short)_sfte.height,
     };
 
     _sfte.pty_pid = forkpty(&_sfte.pty_fd, NULL, NULL, &ws);
@@ -1461,10 +1461,10 @@ static void _sfte_term_resize(int new_cols, int new_rows) {
 
     _sfte_dirty_range(0, new_cols * new_rows);
 
-    struct winsize ws = {.ws_row = (uint8_t)new_rows,
-                         .ws_col = (uint8_t)new_cols,
-                         .ws_xpixel = (uint8_t)_sfte.width,
-                         .ws_ypixel = (uint8_t)_sfte.height};
+    struct winsize ws = {.ws_row = (unsigned short)new_rows,
+                         .ws_col = (unsigned short)new_cols,
+                         .ws_xpixel = (unsigned short)_sfte.width,
+                         .ws_ypixel = (unsigned short)_sfte.height};
 
     ioctl(_sfte.pty_fd, TIOCSWINSZ, &ws);
 
