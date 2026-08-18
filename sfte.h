@@ -197,6 +197,10 @@ typedef struct {
 
 typedef struct {
     uint32_t rune;
+#ifdef SFTE_FONT_BOLD_PATH
+    uint8_t is_bold;
+#endif  // SFTE_FONT_BOLD_PATH
+
     int x0, y0, x1, y1;  // atlas tex coords
     int xoff, yoff;      // render offsets
     int xadvance;
@@ -255,6 +259,10 @@ typedef struct {
 
 typedef struct {
     uint8_t *ttf_buf;
+#ifdef SFTE_FONT_BOLD_PATH
+    uint8_t *ttf_bold_buf;
+#endif  // SFTE_FONT_BOLD_PATH
+
     float cur_size;  // starts at SFTE_DEFAULT_FONT_SIZE
 
     uint8_t *atlas_pxs;
@@ -262,6 +270,9 @@ typedef struct {
     int atlas_height;
 
     stbtt_fontinfo stb_info;
+#ifdef SFTE_FONT_BOLD_PATH
+    stbtt_fontinfo stb_bold_info;
+#endif  // SFTE_FONT_BOLD_PATH
     float scale;
 
     // hash map
@@ -382,29 +393,51 @@ static void _sfte_log(_sfte_log_item_t log_item, uint32_t log_level, uint32_t li
 #define _SFTE_INFO(code, ...) _sfte_log(code, 3, __LINE__, ##__VA_ARGS__)
 
 // >>font
-static sfte_glyph *_sfte_font_get_glyph(uint32_t rune) {
+static sfte_glyph *_sfte_font_get_glyph(uint32_t rune
+#ifdef SFTE_FONT_BOLD_PATH
+                                        ,
+                                        uint8_t is_bold
+#endif  // SFTE_FONT_BOLD_PATH
+) {
     if (rune == 0) rune = ' ';
-    uint32_t h = rune % _sfte.font.glyph_cap;
+
+    uint32_t h = rune;
+// offset hash if bold is requested to avoid collisions
+#ifdef SFTE_FONT_BOLD_PATH
+    h += 0x9E3779B1;
+#endif  // SFTE_FONT_BOLD_PATH
+    h %= _sfte.font.glyph_cap;
 
     // hash map logic
     for (int i = 0; i < _sfte.font.glyph_cap; ++i) {
         int idx = (h + i) % _sfte.font.glyph_cap;
 
+#ifdef SFTE_FONT_BOLD_PATH
+        if (_sfte.font.glyphs[idx].rune == rune && _sfte.font.glyphs[idx].is_bold == is_bold)
+            return &_sfte.font.glyphs[idx];
+#else
         if (_sfte.font.glyphs[idx].rune == rune) return &_sfte.font.glyphs[idx];  // cache hit
+#endif  // SFTE_FONT_BOLD_PATH
 
         if (_sfte.font.glyphs[idx].rune != 0) continue;  // cache miss, taken, continue
+
+        stbtt_fontinfo *info = &_sfte.font.stb_info;
 
         // cache miss, free, take space
         sfte_glyph *g = &_sfte.font.glyphs[idx];
         g->rune = rune;
+#ifdef SFTE_FONT_BOLD_PATH
+        g->is_bold = is_bold;
+        if (is_bold) info = &_sfte.font.stb_bold_info;
+#endif  // SFTE_FONT_BOLD_PATH
 
         int advance_width, left_side_bearing;
-        stbtt_GetCodepointHMetrics(&_sfte.font.stb_info, rune, &advance_width, &left_side_bearing);
+        stbtt_GetCodepointHMetrics(info, rune, &advance_width, &left_side_bearing);
         g->xadvance = (int)(advance_width * _sfte.font.scale + 0.5f);
 
         int x0, y0, x1, y1;
-        stbtt_GetCodepointBitmapBox(&_sfte.font.stb_info, rune, _sfte.font.scale, _sfte.font.scale,
-                                    &x0, &y0, &x1, &y1);
+        stbtt_GetCodepointBitmapBox(info, rune, _sfte.font.scale, _sfte.font.scale, &x0, &y0, &x1,
+                                    &y1);
 
         int glyph_width = x1 - x0;
         int glyph_height = y1 - y0;
@@ -427,9 +460,9 @@ static sfte_glyph *_sfte_font_get_glyph(uint32_t rune) {
 
         if (glyph_width > 0 && glyph_height > 0) {
             int byte_off = g->y0 * _sfte.font.atlas_width + g->x0;
-            stbtt_MakeCodepointBitmap(&_sfte.font.stb_info, &_sfte.font.atlas_pxs[byte_off],
-                                      glyph_width, glyph_height, _sfte.font.atlas_width,
-                                      _sfte.font.scale, _sfte.font.scale, rune);
+            stbtt_MakeCodepointBitmap(info, &_sfte.font.atlas_pxs[byte_off], glyph_width,
+                                      glyph_height, _sfte.font.atlas_width, _sfte.font.scale,
+                                      _sfte.font.scale, rune);
         }
 
         _sfte.font.atlas_x += glyph_width + 1;  // padding to prevent bleeding
@@ -451,7 +484,12 @@ static void _sfte_font_reset_cache(void) {
     _sfte.font.scale = stbtt_ScaleForPixelHeight(&_sfte.font.stb_info, _sfte.font.cur_size);
 
     // monospace grid using standard 'M' glyph
-    sfte_glyph *m = _sfte_font_get_glyph('M');
+    sfte_glyph *m = _sfte_font_get_glyph('M'
+#ifdef SFTE_FONT_BOLD_PATH
+                                         ,
+                                         0
+#endif  // SFTE_FONT_BOLD_PATH
+    );
     _sfte.font.cell_width = m->xadvance;
     _sfte.font.cell_height = (int)(_sfte.font.cur_size * 1.2f + 0.5f);
 }
@@ -472,8 +510,23 @@ static void _sfte_font_load(void) {
 
     _sfte.font.ttf_buf = (uint8_t *)malloc(size);
     SFTE_ASSERT(fread(_sfte.font.ttf_buf, 1, size, f) == size, "failed to read font file");
-
     fclose(f);
+
+#ifdef SFTE_FONT_BOLD_PATH
+    FILE *f_bold = fopen(SFTE_FONT_BOLD_PATH, "rb");
+    SFTE_ASSERT(f_bold, "failed to open bold font file");
+
+    fseek(f_bold, 0, SEEK_END);
+    size_t size_bold = ftell(f_bold);
+    fseek(f_bold, 0, SEEK_SET);
+
+    _sfte.font.ttf_bold_buf = (uint8_t *)malloc(size_bold);
+    SFTE_ASSERT(fread(_sfte.font.ttf_bold_buf, 1, size_bold, f_bold) == size_bold,
+                "failed to read bold font file");
+    fclose(f_bold);
+
+    stbtt_InitFont(&_sfte.font.stb_bold_info, _sfte.font.ttf_bold_buf, 0);
+#endif  // SFTE_FONT_BOLD_PATH
 
     _sfte.font.glyph_cap = 4096;
     _sfte.font.glyphs = (sfte_glyph *)calloc(_sfte.font.glyph_cap, sizeof(sfte_glyph));
@@ -532,10 +585,20 @@ static void _sfte_render_bg(int col, int row, uint32_t bg) {
     }
 }
 
-static void _sfte_render_fg(int col, int row, uint32_t rune, uint32_t fg) {
+static void _sfte_render_fg(int col, int row, uint32_t rune, uint32_t fg
+#ifdef SFTE_FONT_BOLD_PATH
+                            ,
+                            uint8_t is_bold
+#endif  // SFTE_FONT_BOLD_PATH
+) {
     if (rune == ' ') return;
 
-    sfte_glyph *g = _sfte_font_get_glyph(rune);
+    sfte_glyph *g = _sfte_font_get_glyph(rune
+#ifdef SFTE_FONT_BOLD_PATH
+                                         ,
+                                         is_bold
+#endif  // SFTE_FONT_BOLD_PATH
+    );
     if (!g) return;
 
     int cx = col * _sfte.font.cell_width + SFTE_PAD_X;
@@ -683,7 +746,9 @@ static void _sfte_wayland_render(void) {
                 bg = tmp;
             }
 
-            if ((attr & ATTR_BOLD)) fg = 0xFFFFFF;  // TODO: add bold font option
+#ifdef SFTE_BOLD_WHITE
+            if ((attr & ATTR_BOLD)) fg = 0xFFFFFF;
+#endif  // SFTE_BOLD_WHITE
 
             int is_cursor = (c == vis_cx && r == _sfte.term.cursor_y && !_sfte.term.hide_cursor);
 
@@ -694,7 +759,12 @@ static void _sfte_wayland_render(void) {
             uint32_t draw_fg = fg;
             if (is_cursor && _sfte.term.cursor_style == SFTE_CURSOR_BLOCK) draw_fg = bg;
 
+#ifdef SFTE_FONT_BOLD_PATH
+            uint8_t is_bold = (attr & ATTR_BOLD) ? 1 : 0;
+            _sfte_render_fg(c, r, rune, draw_fg, is_bold);
+#else
             _sfte_render_fg(c, r, rune, draw_fg);
+#endif  // !SFTE_FONT_BOLD_PATH
 
             if (attr & ATTR_UNDERLINE) {
                 int cx = c * _sfte.font.cell_width + SFTE_PAD_X;
@@ -1036,6 +1106,9 @@ static void _sfte_wayland_load(void) {
 static void _sfte_wayland_unload(void) {
     free(_sfte.term.tab_stops);
     free(_sfte.font.ttf_buf);
+#ifdef SFTE_FONT_BOLD_PATH
+    free(_sfte.font.ttf_bold_buf);
+#endif  // SFTE_FONT_BOLD_PATH
     free(_sfte.font.atlas_pxs);
     free(_sfte.term.cells);
     free(_sfte.term.alt_cells);
