@@ -638,6 +638,13 @@ static void _sfte_wayland_render(void) {
 
             uint32_t fg = _sfte.term.cells[idx].fg ? _sfte.term.cells[idx].fg : 0xFFFFFF;
             uint32_t bg = _sfte.term.cells[idx].bg ? _sfte.term.cells[idx].bg : SFTE_BG_COLOR;
+            uint16_t attr = _sfte.term.cells[idx].attr;
+
+            if (attr & ATTR_REVERSE) {
+                uint32_t tmp = fg;
+                fg = bg;
+                bg = tmp;
+            }
 
             int is_cursor = (c == vis_cx && r == _sfte.term.cursor_y && !_sfte.term.hide_cursor);
 
@@ -668,6 +675,15 @@ static void _sfte_wayland_render(void) {
 
             uint32_t fg = _sfte.term.cells[idx].fg ? _sfte.term.cells[idx].fg : 0xFFFFFF;
             uint32_t bg = _sfte.term.cells[idx].bg ? _sfte.term.cells[idx].bg : SFTE_BG_COLOR;
+            uint16_t attr = _sfte.term.cells[idx].attr;
+
+            if (attr & ATTR_REVERSE) {
+                uint32_t tmp = fg;
+                fg = bg;
+                bg = tmp;
+            }
+
+            if ((attr & ATTR_BOLD)) fg = 0xFFFFFF;  // TODO: add bold font option
 
             int is_cursor = (c == vis_cx && r == _sfte.term.cursor_y && !_sfte.term.hide_cursor);
 
@@ -675,35 +691,50 @@ static void _sfte_wayland_render(void) {
             if (!_sfte.term.blink_visible) is_cursor = 0;
 #endif  // SFTE_CURSOR_BLINK
 
-            if (is_cursor && _sfte.term.cursor_style == SFTE_CURSOR_BLOCK)
-                _sfte_render_fg(c, r, rune, bg);  // inverse if under cursor block
-            else {
-                _sfte_render_fg(c, r, rune, fg);
+            uint32_t draw_fg = fg;
+            if (is_cursor && _sfte.term.cursor_style == SFTE_CURSOR_BLOCK) draw_fg = bg;
 
-                if (is_cursor && _sfte.term.cursor_style != SFTE_CURSOR_BLOCK) {  // bar/underline
-                    int cx = c * _sfte.font.cell_width + SFTE_PAD_X;
-                    int cy = r * _sfte.font.cell_height + SFTE_PAD_Y;
+            _sfte_render_fg(c, r, rune, draw_fg);
 
-                    uint32_t cur_col = (SFTE_CURSOR_COLOR & 0x00FFFFFF) | (0xFF << 24);
+            if (attr & ATTR_UNDERLINE) {
+                int cx = c * _sfte.font.cell_width + SFTE_PAD_X;
+                int cy = r * _sfte.font.cell_height + SFTE_PAD_Y;
 
-                    if (_sfte.term.cursor_style == SFTE_CURSOR_UNDERLINE) {
-                        int thickness = _sfte.font.cell_height / 10;
-                        if (thickness < 1) thickness = 1;
+                uint32_t underline_col = (draw_fg & 0x00FFFFFF) | (0xFF << 24);
 
-                        for (int y = cy + _sfte.font.cell_height - thickness;
-                             y < cy + _sfte.font.cell_height; ++y)
-                            for (int x = cx; x < cx + _sfte.font.cell_width; ++x)
-                                if (x < _sfte.width && y < _sfte.height)
-                                    _sfte.shm_data[y * _sfte.width + x] = cur_col;
-                    } else if (_sfte.term.cursor_style == SFTE_CURSOR_BAR) {
-                        int thickness = _sfte.font.cell_width / 10;
-                        if (thickness < 1) thickness = 1;
+                int thickness = _sfte.font.cell_height / 10;
+                if (thickness < 1) thickness = 1;
 
-                        for (int y = cy; y < cy + _sfte.font.cell_height; ++y)
-                            for (int x = cx; x < cx + thickness; ++x)
-                                if (x < _sfte.width && y < _sfte.height)
-                                    _sfte.shm_data[y * _sfte.width + x] = cur_col;
-                    }
+                for (int y = cy + _sfte.font.cell_height - thickness;
+                     y < cy + _sfte.font.cell_height; ++y)
+                    for (int x = cx; x < cx + _sfte.font.cell_width; ++x)
+                        if (x < _sfte.width && y < _sfte.height)
+                            _sfte.shm_data[y * _sfte.width + x] = underline_col;
+            }
+
+            if (is_cursor && _sfte.term.cursor_style != SFTE_CURSOR_BLOCK) {  // bar / underline
+                int cx = c * _sfte.font.cell_width + SFTE_PAD_X;
+                int cy = r * _sfte.font.cell_height + SFTE_PAD_Y;
+
+                uint32_t cur_col = (SFTE_CURSOR_COLOR & 0x00FFFFFF) | (0xFF << 24);
+
+                if (_sfte.term.cursor_style == SFTE_CURSOR_UNDERLINE) {
+                    int thickness = _sfte.font.cell_height / 10;
+                    if (thickness < 1) thickness = 1;
+
+                    for (int y = cy + _sfte.font.cell_height - thickness;
+                         y < cy + _sfte.font.cell_height; ++y)
+                        for (int x = cx; x < cx + _sfte.font.cell_width; ++x)
+                            if (x < _sfte.width && y < _sfte.height)
+                                _sfte.shm_data[y * _sfte.width + x] = cur_col;
+                } else if (_sfte.term.cursor_style == SFTE_CURSOR_BAR) {
+                    int thickness = _sfte.font.cell_width / 10;
+                    if (thickness < 1) thickness = 1;
+
+                    for (int y = cy; y < cy + _sfte.font.cell_height; ++y)
+                        for (int x = cx; x < cx + thickness; ++x)
+                            if (x < _sfte.width && y < _sfte.height)
+                                _sfte.shm_data[y * _sfte.width + x] = cur_col;
                 }
             }
 
@@ -1230,6 +1261,16 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
                 _sfte.term.cur_attr = 0;
             } else if (p[i] == 1)
                 _sfte.term.cur_attr |= ATTR_BOLD;
+            else if (p[i] == 4)
+                _sfte.term.cur_attr |= ATTR_UNDERLINE;
+            else if (p[i] == 7)
+                _sfte.term.cur_attr |= ATTR_REVERSE;
+            else if (p[i] == 22)
+                _sfte.term.cur_attr &= ~ATTR_BOLD;
+            else if (p[i] == 24)
+                _sfte.term.cur_attr &= ~ATTR_UNDERLINE;
+            else if (p[i] == 27)
+                _sfte.term.cur_attr &= ~ATTR_REVERSE;
             else if (p[i] >= 30 && p[i] <= 37)
                 _sfte.term.cur_fg = _sfte_ansi_palette[p[i] - 30];
             else if (p[i] == 39)  // default fg
