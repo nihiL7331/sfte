@@ -211,6 +211,7 @@ typedef struct {
     char saved_title[256];
     uint8_t auto_wrap;
     uint8_t origin_mode;
+    uint8_t *tab_stops;
     // ansi save state
     int ansi_saved_x;
     int ansi_saved_y;
@@ -1002,6 +1003,7 @@ static void _sfte_wayland_load(void) {
 }
 
 static void _sfte_wayland_unload(void) {
+    free(_sfte.term.tab_stops);
     free(_sfte.font.ttf_buf);
     free(_sfte.font.atlas_pxs);
     free(_sfte.term.cells);
@@ -1042,6 +1044,10 @@ static void _sfte_state_load(void) {
     _sfte.term.rows = 24;
     _sfte.term.auto_wrap = 1;
     _sfte.term.origin_mode = 0;
+
+    _sfte.term.tab_stops = (uint8_t *)malloc(_sfte.term.cols);
+    for (int i = 0; i < _sfte.term.cols; ++i) _sfte.term.tab_stops[i] = (i > 0 && i % 8 == 0);
+
 #if SFTE_CURSOR_BLINK
     _sfte.term.blink_enabled = 1;
     _sfte.term.blink_visible = 1;
@@ -1092,6 +1098,15 @@ static void _sfte_term_resize(int new_cols, int new_rows) {
         new_alt_cells = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
         SFTE_ASSERT(new_alt_cells, "failed to allocate resized alt grid");
     }
+
+    uint8_t *new_tabs = (uint8_t *)malloc(new_cols);
+    for (int i = 0; i < new_cols; ++i)
+        if (i < _sfte.term.cols)
+            new_tabs[i] = _sfte.term.tab_stops[i];
+        else
+            new_tabs[i] = (i % 8 == 0);
+    free(_sfte.term.tab_stops);
+    _sfte.term.tab_stops = new_tabs;
 
     int min_cols = new_cols < _sfte.term.cols ? new_cols : _sfte.term.cols;
     int min_rows = new_rows < _sfte.term.rows ? new_rows : _sfte.term.rows;
@@ -1258,11 +1273,8 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
             _sfte_clear_cells(start_idx, (_sfte.term.rows * _sfte.term.cols) - start_idx);
         } else if (p[0] == 1)  // 1J / start of screen to cursor
             _sfte_clear_cells(0, _SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y) + 1);
-        else if (p[0] == 2) {  // 2J / entire screen
+        else if (p[0] == 2)  // 2J / entire screen
             _sfte_clear_cells(0, _sfte.term.rows * _sfte.term.cols);
-            _sfte.term.cursor_x = 0;
-            _sfte.term.cursor_y = 0;
-        }
         break;
     }
     case 'K':  // erase in line
@@ -1525,8 +1537,16 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
                     move_cnt * cols * sizeof(sfte_cell));
 
         int start_idx = (bot - n + 1) * cols;
-        _sfte_clear_cells(start_idx, n);
+        _sfte_clear_cells(start_idx, n * cols);
         _sfte_dirty_range(top * cols, height * cols);
+        break;
+    }
+    case 'g':  // tab clear
+    {
+        if (p[0] == 0)
+            _sfte.term.tab_stops[_sfte.term.cursor_x] = 0;
+        else if (p[0] == 3)
+            memset(_sfte.term.tab_stops, 0, _sfte.term.cols);
         break;
     }
     case 'c':  // device attributes
@@ -1648,8 +1668,10 @@ static void _sfte_parse_byte(uint8_t b) {
             _sfte.term.cursor_x = 0;
         else if (b == '\t') {
             if (_sfte.term.cursor_x >= _sfte.term.cols) _sfte.term.cursor_x = _sfte.term.cols - 1;
-            _sfte.term.cursor_x = (_sfte.term.cursor_x / 8 + 1) * 8;
-            _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.cursor_x, 0, _sfte.term.cols - 1);
+            while (_sfte.term.cursor_x < _sfte.term.cols - 1) {
+                _sfte.term.cursor_x++;
+                if (_sfte.term.tab_stops[_sfte.term.cursor_x]) break;
+            }
         } else if ((b == '\b' || b == '\x7f') && _sfte.term.cursor_x > 0)
             _sfte.term.cursor_x--;
         else if (b >= 0x20) {
