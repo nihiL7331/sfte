@@ -105,6 +105,18 @@
 #define SFTE_CURSOR_BLINK_RATE 500
 #endif  // SFTE_CURSOR_BLINK_RATE
 
+#ifndef SFTE_CURSOR_TRAIL
+#define SFTE_CURSOR_TRAIL 0
+#endif  // SFTE_CURSOR_TRAIL
+
+#ifndef SFTE_CURSOR_TRAIL_DECAY
+#define SFTE_CURSOR_TRAIL_DECAY 0.01f
+#endif  // SFTE_CURSOR_TRAIL_DECAY
+
+#ifndef SFTE_CURSOR_TRAIL_COLOR
+#define SFTE_CURSOR_TRAIL_COLOR SFTE_CURSOR_COLOR
+#endif  // SFTE_CURSOR_TRAIL_COLOR
+
 #define SFTE_MOD_CTRL 0b001
 #define SFTE_MOD_ALT 0b010
 #define SFTE_MOD_SHIFT 0b100
@@ -230,6 +242,15 @@ typedef struct {
     uint8_t blink_visible;  // defining whether cursor is CURRENTLY visible
     uint64_t next_blink_ms;
 #endif  // SFTE_CURSOR_BLINK
+#if SFTE_CURSOR_TRAIL
+    float tail_rx, tail_ry;
+    int last_grid_x, last_grid_y;
+    int trail_damage_x, trail_damage_y;
+    int trail_damage_w, trail_damage_h;
+    uint64_t last_move_ms;
+    uint64_t last_trail_update_ms;
+    int is_trailing;
+#endif  // SFTE_CURSOR_TRAIL
     int cursor_x;
     int cursor_y;
     uint8_t hide_cursor;
@@ -902,6 +923,103 @@ static void _sfte_wayland_render(void) {
     }
 
     memcpy(_sfte.shm_data, _sfte.back_buffer, _sfte.shm_size);
+
+#if SFTE_CURSOR_TRAIL
+    if (_sfte.term.trail_damage_w > 0)
+        wl_surface_damage_buffer(_sfte.surface, _sfte.term.trail_damage_x,
+                                 _sfte.term.trail_damage_y, _sfte.term.trail_damage_w,
+                                 _sfte.term.trail_damage_h);
+
+    if (!_sfte.term.hide_cursor && _sfte.term.is_trailing) {
+        float target_rx = _sfte.term.cursor_x * _sfte.font.cell_width;
+        float target_ry = _sfte.term.cursor_y * _sfte.font.cell_height;
+
+        float min_x = target_rx < _sfte.term.tail_rx ? target_rx : _sfte.term.tail_rx;
+        float max_x = (target_rx > _sfte.term.tail_rx ? target_rx : _sfte.term.tail_rx) +
+                      _sfte.font.cell_width;
+        float min_y = target_ry < _sfte.term.tail_ry ? target_ry : _sfte.term.tail_ry;
+        float max_y = (target_ry > _sfte.term.tail_ry ? target_ry : _sfte.term.tail_ry) +
+                      _sfte.font.cell_height;
+
+        int px_min_x = (int)min_x + SFTE_PAD_X;
+        int px_max_x = (int)max_x + SFTE_PAD_X;
+        int px_min_y = (int)min_y + SFTE_PAD_Y;
+        int px_max_y = (int)max_y + SFTE_PAD_Y;
+
+        uint8_t cr = (SFTE_CURSOR_COLOR >> 16) & 0xFF;
+        uint8_t cg = (SFTE_CURSOR_COLOR >> 8) & 0xFF;
+        uint8_t cb = SFTE_CURSOR_COLOR & 0xFF;
+
+        float w = _sfte.font.cell_width;
+        float h = _sfte.font.cell_height;
+        float cx0 = _sfte.term.tail_rx + w * 0.5f;
+        float cy0 = _sfte.term.tail_ry + h * 0.5f;
+        float cx1 = target_rx + w * 0.5f;
+        float cy1 = target_ry + h * 0.5f;
+
+        float ab_x = cx1 - cx0;
+        float ab_y = cy1 - cy0;
+        float l2 = ab_x * ab_x + ab_y * ab_y;
+
+        for (int y = px_min_y; y < px_max_y; ++y) {
+            for (int x = px_min_x; x < px_max_x; ++x) {
+                if (x < 0 || x >= _sfte.width || y < 0 || y >= _sfte.height) continue;
+
+                int hx = (int)target_rx + SFTE_PAD_X;
+                int hy = (int)target_ry + SFTE_PAD_Y;
+                if (x >= hx && x < hx + _sfte.font.cell_width && y >= hy &&
+                    y < hy + _sfte.font.cell_height)
+                    continue;
+
+                float ap_x = (float)(x - SFTE_PAD_X) - cx0 + 0.5f;
+                float ap_y = (float)(y - SFTE_PAD_Y) - cy0 + 0.5f;
+
+                float t = 0.0f;
+                if (l2 > 0.001f) {
+                    t = (ap_x * ab_x + ap_y * ab_y) / l2;
+                    if (t < 0.0f) t = 0.0f;
+                    if (t > 1.0f) t = 1.0f;
+                }
+
+                float proj_x = cx0 + t * ab_x;
+                float proj_y = cy0 + t * ab_y;
+
+                float dist_x = (float)(x - SFTE_PAD_X) + 0.5f - proj_x;
+                float dist_y = (float)(y - SFTE_PAD_Y) + 0.5f - proj_y;
+                if (dist_x < 0) dist_x = -dist_x;
+                if (dist_y < 0) dist_y = -dist_y;
+
+                if (dist_x <= w * 0.5f && dist_y <= h * 0.5f) {
+                    int alpha = (int)(128.0f * t);
+                    if (alpha == 0) continue;
+                    int inv_alpha = 255 - alpha;
+
+                    uint32_t bg = _sfte.shm_data[y * _sfte.width + x];
+                    uint8_t bg_r = (bg >> 16) & 0xFF;
+                    uint8_t bg_g = (bg >> 8) & 0xFF;
+                    uint8_t bg_b = bg & 0xFF;
+
+                    uint8_t r = (cr * alpha + bg_r * inv_alpha) >> 8;
+                    uint8_t g = (cg * alpha + bg_g * inv_alpha) >> 8;
+                    uint8_t b = (cb * alpha + bg_b * inv_alpha) >> 8;
+
+                    _sfte.shm_data[y * _sfte.width + x] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+                }
+            }
+        }
+
+        _sfte.term.trail_damage_x = px_min_x;
+        _sfte.term.trail_damage_y = px_min_y;
+        _sfte.term.trail_damage_w = px_max_x - px_min_x;
+        _sfte.term.trail_damage_h = px_max_y - px_min_y;
+
+        wl_surface_damage_buffer(_sfte.surface, _sfte.term.trail_damage_x,
+                                 _sfte.term.trail_damage_y, _sfte.term.trail_damage_w,
+                                 _sfte.term.trail_damage_h);
+    } else
+        _sfte.term.trail_damage_w = 0;
+#endif  // SFTE_CURSOR_TRAIL
+
     wl_surface_attach(_sfte.surface, _sfte.buffer, 0, 0);
     wl_surface_commit(_sfte.surface);
 }
@@ -1247,6 +1365,18 @@ static void _sfte_state_load(void) {
     _sfte.term.blink_visible = 1;
     _sfte.term.next_blink_ms = _sfte_time_ms() + SFTE_CURSOR_BLINK_RATE;
 #endif  // SFTE_CURSOR_BLINK
+#if SFTE_CURSOR_TRAIL
+    _sfte.term.tail_rx = 0.0f;
+    _sfte.term.tail_ry = 0.0f;
+    _sfte.term.trail_damage_x = 0.0f;
+    _sfte.term.trail_damage_y = 0.0f;
+    _sfte.term.trail_damage_w = 0.0f;
+    _sfte.term.trail_damage_h = 0.0f;
+    _sfte.term.last_grid_x = 0;
+    _sfte.term.last_grid_y = 0;
+    _sfte.term.last_move_ms = 0;
+    _sfte.term.is_trailing = 0;
+#endif  // SFTE_CURSOR_TRAIL
     _sfte.term.cursor_style = SFTE_CURSOR_STYLE;
     _sfte.term.scroll_top = 0;
     _sfte.term.scroll_bottom = _sfte.term.rows - 1;
@@ -1754,6 +1884,9 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
             // 1047 / 1049 switch to alt screen
             if ((p[0] == 1047 || p[0] == 1049) && !_sfte.term.alt_active) {
                 _sfte.term.alt_active = 1;
+#if SFTE_CURSOR_TRAIL
+                _sfte.term.last_move_ms = 0;
+#endif  // SFTE_CURSOR_TRAIL
 
                 if (!_sfte.term.alt_cells)
                     _sfte.term.alt_cells = (sfte_cell *)calloc(_sfte.term.cols * _sfte.term.rows,
@@ -1878,6 +2011,9 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
 #if SFTE_CURSOR_BLINK
         _sfte.term.blink_enabled = 1;
 #endif  // SFTE_CURSOR_BLINK
+#if SFTE_CURSOR_TRAIL
+        _sfte.term.last_move_ms = 0;
+#endif  // SFTE_CURSOR_TRAIL
         _sfte.term.cursor_style = SFTE_CURSOR_STYLE;
         _sfte.term.scroll_top = 0;
         _sfte.term.scroll_bottom = _sfte.term.rows - 1;
@@ -2176,13 +2312,20 @@ static void _sfte_loop(void) {
                                {.fd = _sfte.pty_fd, .events = POLLIN},
                                {.fd = _sfte.repeat_timer_fd, .events = POLLIN}};
         int timeout = -1;
+        int needs_render = 0;
+
+#if SFTE_CURSOR_TRAIL
+        if (_sfte.term.is_trailing)
+            if (timeout == -1 || timeout > 16) timeout = 16;
+#endif  // SFTE_CURSOR_TRAIL
 
 #if SFTE_CURSOR_BLINK
         uint64_t now = _sfte_time_ms();
         if (_sfte.term.blink_enabled) {
             int time_to_next = (int)(_sfte.term.next_blink_ms - now);
             if (time_to_next < 0) time_to_next = 0;
-            timeout = time_to_next;
+
+            if (timeout == -1 || time_to_next < timeout) timeout = time_to_next;
         }
 #endif  // SFTE_CURSOR_BLINK
 
@@ -2195,13 +2338,14 @@ static void _sfte_loop(void) {
                 _sfte.term.blink_visible = !_sfte.term.blink_visible;
                 _sfte.term.next_blink_ms = now + SFTE_CURSOR_BLINK_RATE;
                 _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
-                _sfte_wayland_render();
+                needs_render = 1;
             }
         }
 #endif  // SFTE_CURSOR_BLINK
 
         if (fds[0].revents & (POLLIN | POLLERR | POLLHUP))
             if (wl_display_dispatch(_sfte.display) == -1) _sfte.running = 0;
+
         if (fds[1].revents & (POLLIN | POLLERR | POLLHUP)) {
             uint8_t buf[SFTE_PTY_BUF_SIZE];
             ssize_t n = read(_sfte.pty_fd, buf, SFTE_PTY_BUF_SIZE);
@@ -2214,10 +2358,33 @@ static void _sfte_loop(void) {
 
                 for (ssize_t i = 0; i < n; ++i) _sfte_parse_byte(buf[i]);
 
-                _sfte_wayland_render();
+#if SFTE_CURSOR_TRAIL
+                float target_rx = _sfte.term.cursor_x * _sfte.font.cell_width;
+                float target_ry = _sfte.term.cursor_y * _sfte.font.cell_height;
+
+                if (_sfte.term.cursor_x != _sfte.term.last_grid_x ||
+                    _sfte.term.cursor_y != _sfte.term.last_grid_y) {
+                    now = _sfte_time_ms();
+
+                    if (_sfte.term.last_move_ms != 0 &&
+                        (now - _sfte.term.last_move_ms >= SFTE_CURSOR_TRAIL)) {
+                        _sfte.term.is_trailing = 1;
+                    } else if (!_sfte.term.is_trailing) {
+                        _sfte.term.tail_rx = target_rx;
+                        _sfte.term.tail_ry = target_ry;
+                    }
+
+                    _sfte.term.last_grid_x = _sfte.term.cursor_x;
+                    _sfte.term.last_grid_y = _sfte.term.cursor_y;
+                    _sfte.term.last_move_ms = now;
+                }
+#endif  // SFTE_CURSOR_TRAIL
+
+                needs_render = 1;
             } else
                 _sfte.running = 0;
         }
+
         if (fds[2].revents & POLLIN) {
             uint64_t expirations;
             if (read(_sfte.repeat_timer_fd, &expirations, sizeof(expirations)) == 0 ||
@@ -2227,6 +2394,39 @@ static void _sfte_loop(void) {
             _sfte_wayland_keyboard_key(NULL, _sfte.keyboard, 0, 0, _sfte.repeating_key,
                                        WL_KEYBOARD_KEY_STATE_PRESSED);
         }
+
+#if SFTE_CURSOR_TRAIL
+        if (_sfte.term.is_trailing) {
+            if (_sfte.term.is_trailing) {
+                float target_rx = _sfte.term.cursor_x * _sfte.font.cell_width;
+                float target_ry = _sfte.term.cursor_y * _sfte.font.cell_height;
+
+                now = _sfte_time_ms();
+                if (_sfte.term.last_trail_update_ms == 0) _sfte.term.last_trail_update_ms = now;
+                float dt_ms = (float)(now - _sfte.term.last_trail_update_ms);
+                _sfte.term.last_trail_update_ms = now;
+
+                float tx = target_rx - _sfte.term.tail_rx;
+                float ty = target_ry - _sfte.term.tail_ry;
+
+                if (tx * tx + ty * ty <= 0.5f) {
+                    _sfte.term.is_trailing = 0;
+                    _sfte.term.tail_rx = target_rx;
+                    _sfte.term.tail_ry = target_ry;
+                    _sfte.term.last_trail_update_ms = 0;
+                } else {
+                    float decay = dt_ms * SFTE_CURSOR_TRAIL_DECAY;
+                    if (decay > 1.0f) decay = 1.0f;
+
+                    _sfte.term.tail_rx += tx * decay;
+                    _sfte.term.tail_ry += ty * decay;
+                }
+            }
+            needs_render = 1;
+        }
+#endif  // SFTE_CURSOR_TRAIL
+
+        if (needs_render) { _sfte_wayland_render(); }
     }
 }
 
