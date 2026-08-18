@@ -1402,14 +1402,415 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
     if (_sfte.term.cursor_x >= _sfte.term.cols) _sfte.term.cursor_x = _sfte.term.cols - 1;
 
     switch (cmd) {
-    case 'm':
-        if (cnt == 1 && p[0] == 0) {
-            _sfte.term.cur_fg = 0xFFFFFF;
-            _sfte.term.cur_bg = SFTE_BG_COLOR;
-            _sfte.term.cur_attr = 0;
-            break;
-        }
+    case '@':  // ICH / Insert Character
+    {
+        /*
+          Inserts n (default 1) spaces at the cursor position.
+          Text shifts right.
+          Text pushed off the right edge is lost.
+         */
+        int n = p[0] > 0 ? p[0] : 1;
+        int rem = _sfte.term.cols - _sfte.term.cursor_x;
+        if (n > rem) n = rem;
 
+        int move_cnt = rem - n;
+        int base_idx = _SFTE_IDX(0, _sfte.term.cursor_y);
+        if (move_cnt > 0)
+            memmove(&_sfte.term.cells[base_idx + _sfte.term.cursor_x + n],
+                    &_sfte.term.cells[base_idx + _sfte.term.cursor_x],
+                    move_cnt * sizeof(sfte_cell));
+
+        int start_idx = base_idx + _sfte.term.cursor_x;
+        _sfte_clear_cells(start_idx, n);
+        _sfte_dirty_range(base_idx + _sfte.term.cursor_x, rem);
+        break;
+    }
+    case 'A':  // CUU / Cursor Up
+    {
+        /*
+          Moves the cursor n (default 1) cells up.
+          If the cursor is already at the edge of the screen, this has no effect.
+         */
+        _sfte.term.cursor_y -= (p[0] > 0 ? p[0] : 1);
+        _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.cursor_y, 0, _sfte.term.rows - 1);
+        break;
+    }
+    case 'B':  // CUD / Cursor Down
+    {
+        /*
+          Moves the cursor n (default 1) cells down.
+          If the cursor is already at the edge of the screen, this has no effect.
+         */
+        _sfte.term.cursor_y += (p[0] > 0 ? p[0] : 1);
+        _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.cursor_y, 0, _sfte.term.rows - 1);
+        break;
+    }
+    case 'C':  // CUF / Cursor Forward
+    {
+        /*
+          Moves the cursor n (default 1) cells forward.
+          If the cursor is already at the edge of the screen, this has no effect.
+         */
+        _sfte.term.cursor_x += (p[0] > 0 ? p[0] : 1);
+        _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.cursor_x, 0, _sfte.term.cols - 1);
+        break;
+    }
+    case 'D':  // CUB / Cursor Back
+    {
+        /*
+          Moves the cursor n (default 1) cells back.
+          If the cursor is already at the edge of the screen, this has no effect.
+         */
+        _sfte.term.cursor_x -= (p[0] > 0 ? p[0] : 1);
+        _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.cursor_x, 0, _sfte.term.cols - 1);
+        break;
+    }
+    case 'E':  // CNL / Cursor Next Line
+    {
+        /*
+          Moves cursor to the beginning of the line n (default 1) lines down.
+         */
+        _sfte.term.cursor_x = 0;
+        _sfte.term.cursor_y += (p[0] > 0 ? p[0] : 1);
+        _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.cursor_y, 0, _sfte.term.rows - 1);
+        break;
+    }
+    case 'F':  // CPL / Cursor Next Line
+    {
+        /*
+          Moves cursor to the beginning of the line n (default 1) lines up.
+         */
+        _sfte.term.cursor_x = 0;
+        _sfte.term.cursor_y -= (p[0] > 0 ? p[0] : 1);
+        _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.cursor_y, 0, _sfte.term.rows - 1);
+        break;
+    }
+    case 'G':  // CHA / Cursor Horizontal Absolute
+    {
+        /*
+          Moves the cursor to column n (default 1).
+         */
+        _sfte.term.cursor_x = (p[0] > 0 ? p[0] : 1) - 1;
+        _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.cursor_x, 0, _sfte.term.cols - 1);
+        break;
+    }
+    case 'H':  // CUP / Cursor Position
+    {
+        /*
+          Moves the cursor to row n, column m.
+          The values are 1-based, and default to 1 (top left corner) if omitted.
+          A sequence such as CSI ;5H is a synonym for CSI 1;5H as well as
+          CSI 17;H is the same as CSI 17H and CSI 17;1H.
+         */
+        _sfte.term.cursor_x = (cnt > 1 && p[1] > 0 ? p[1] : 1) - 1;
+        _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.cursor_x, 0, _sfte.term.cols - 1);
+        _sfte.term.cursor_y = (p[0] > 0 ? p[0] : 1) - 1;
+        _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.cursor_y, 0, _sfte.term.rows - 1);
+        break;
+    }
+    case 'J':  // ED / Erase in Display
+    {
+        /*
+          Clears part of the screen.
+          If n is 0 (or missing), clear from cursor to end of screen.
+          If n is 1, clear from cursor to beginning of the screen.
+          If n is 2, clear entire screen (and moves cursor to upper left on DOS ANSI.SYS)
+          If n is 3, clear entire screen and delete all lines saved in the scrollback buffer.
+         */
+        if (p[0] == 0) {
+            int start_idx = _SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y);
+            _sfte_clear_cells(start_idx, (_sfte.term.rows * _sfte.term.cols) - start_idx);
+        } else if (p[0] == 1)
+            _sfte_clear_cells(0, _SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y) + 1);
+        else if (p[0] == 2)
+            _sfte_clear_cells(0, _sfte.term.rows * _sfte.term.cols);
+        /* NOTE: n = 3 unhandled since scrollback buffer is missing */
+        break;
+    }
+    case 'K':  // EL / Erase in Line
+    {
+        /*
+          Erases part of the line.
+          If n is 0 (or missing), clear from cursor to the end of the line.
+          If n is 1, clear from cursor to beginning of the line.
+          If n is 2, clear entire line.
+          Cursor position does not change.
+         */
+        if (p[0] == 0)
+            _sfte_clear_cells(_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y),
+                              _sfte.term.cols - _sfte.term.cursor_x);
+        else if (p[0] == 1)
+            _sfte_clear_cells(_SFTE_IDX(0, _sfte.term.cursor_y), _sfte.term.cursor_x + 1);
+        else if (p[0] == 2)
+            _sfte_clear_cells(_SFTE_IDX(0, _sfte.term.cursor_y), _sfte.term.cols);
+        break;
+    }
+    case 'L':  // IL / Insert Line
+    {
+        /*
+          Inserts n (default 1) blank lines at cursor position.
+          Lines below the cursor are pushed down.
+          Bottom lines are lost.
+         */
+        int n = p[0] > 0 ? p[0] : 1;
+        int top = _sfte.term.cursor_y;
+        int bot = _sfte.term.scroll_bottom;
+        if (top < _sfte.term.scroll_top || top > bot) break;  // oob
+
+        int height = bot - top + 1;
+        if (n > height) n = height;
+
+        int move_cnt = height - n;
+        int cols = _sfte.term.cols;
+        if (move_cnt > 0)
+            memmove(&_sfte.term.cells[(top + n) * cols], &_sfte.term.cells[top * cols],
+                    move_cnt * cols * sizeof(sfte_cell));
+
+        int start_idx = top * cols;
+        _sfte_clear_cells(start_idx, n * cols);
+        _sfte_dirty_range(top * cols, height * cols);
+        break;
+    }
+    case 'M':  // DL / Delete Line
+    {
+        /*
+          Deletes n (default 1) lines at the cursor position.
+          Lines below the cursor are pulled up.
+          Bottom lines are blanked.
+         */
+        int n = p[0] > 0 ? p[0] : 1;
+        int top = _sfte.term.cursor_y;
+        int bot = _sfte.term.scroll_bottom;
+        if (top < _sfte.term.scroll_top || top > bot) break;  // oob
+
+        int height = bot - top + 1;
+        if (n > height) n = height;
+
+        int move_cnt = height - n;
+        int cols = _sfte.term.cols;
+        if (move_cnt > 0)
+            memmove(&_sfte.term.cells[top * cols], &_sfte.term.cells[(top + n) * cols],
+                    move_cnt * cols * sizeof(sfte_cell));
+
+        int start_idx = (bot - n + 1) * cols;
+        _sfte_clear_cells(start_idx, n * cols);
+        _sfte_dirty_range(top * cols, height * cols);
+        break;
+    }
+    case 'P':  // DCH / Delete Character
+    {
+        /*
+          Deletes n (default 1) characters at the cursor position.
+          Text to the right shifts left.
+          End of line is blanked.
+         */
+        int n = p[0] > 0 ? p[0] : 1;
+        int rem = _sfte.term.cols - _sfte.term.cursor_x;
+        if (n > rem) n = rem;
+
+        int move_cnt = rem - n;
+        int base_idx = _SFTE_IDX(0, _sfte.term.cursor_y);
+        if (move_cnt > 0)
+            memmove(&_sfte.term.cells[base_idx + _sfte.term.cursor_x],
+                    &_sfte.term.cells[base_idx + _sfte.term.cursor_x + n],
+                    move_cnt * sizeof(sfte_cell));
+
+        int start_idx = base_idx + _sfte.term.cols - n;
+        _sfte_clear_cells(start_idx, n);
+        _sfte_dirty_range(base_idx + _sfte.term.cursor_x, rem);
+        break;
+    }
+    case 'S':  // SU / Scroll Up
+    {
+        /*
+          Scroll whole page up by n (default 1) lines.
+          New lines are added at the bottom.
+         */
+        _sfte_scroll(p[0] > 0 ? p[0] : 1);
+        break;
+    }
+    case 'T':  // SD / Scroll Down
+    {
+        /*
+          Scroll whole page down by n (default 1) lines.
+          New lines are added at the top.
+         */
+        _sfte_scroll(-(p[0] > 0 ? p[0] : 1));
+        break;
+    }
+    case 'X':  // ECH / Erase Character
+    {
+        /*
+          Replaces n (default 1) characters with spaces starting at the cursor.
+         */
+        int n = p[0] > 0 ? p[0] : 1;
+        int rem = _sfte.term.cols - _sfte.term.cursor_x;
+        if (n > rem) n = rem;
+
+        _sfte_clear_cells(_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y), n);
+        break;
+    }
+    case 'c':  // DA / Device Attributes
+    {
+        /*
+          Reports the terminal's identity and capabilities to the host.
+         */
+        if (p[0] != 0) break;
+        const char *da = "\033[?6c";  // VT102
+        write(_sfte.pty_fd, da, strlen(da));
+        break;
+    }
+    case 'd':  // VPA / Vertical Position Absolute
+    {
+        /*
+          Moves cursor to the specific row n (default 1).
+          Column remains the same.
+          Format effector function, leads to different handling in certain terminal modes.
+         */
+        _sfte.term.cursor_y = (p[0] > 0 ? p[0] : 1) - 1;
+
+        if (_sfte.term.origin_mode) {
+            _sfte.term.cursor_y += _sfte.term.scroll_top;
+            _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.cursor_y, _sfte.term.scroll_top,
+                                              _sfte.term.scroll_bottom);
+        } else
+            _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.cursor_y, 0, _sfte.term.rows - 1);
+
+        break;
+    }
+    case 'f':  // HVP / Horizontal Vertical Position
+    {
+        /*
+          Same as CUP, but counts as a format effector function (like CR or LF)
+          rather than an editor function (like CUD or CNL).
+          This leads to different handling in certain terminal modes.
+         */
+        _sfte.term.cursor_x = (cnt > 1 && p[1] > 0 ? p[1] : 1) - 1;
+        _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.cursor_x, 0, _sfte.term.cols - 1);
+        _sfte.term.cursor_y = (p[0] > 0 ? p[0] : 1) - 1;
+
+        if (_sfte.term.origin_mode) {  // relative bounds
+            _sfte.term.cursor_y += _sfte.term.scroll_top;
+            _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.cursor_x, _sfte.term.scroll_top,
+                                              _sfte.term.scroll_bottom);
+        } else
+            _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.cursor_y, 0, _sfte.term.rows - 1);
+
+        break;
+    }
+    case 'g':  // TBC / Tab Clear
+    {
+        /*
+          Clears tab stops.
+          If n is 0, clear stop at the current column.
+          If n is 3, clear all stops.
+
+          NOTE: ECMA-48 defines additional parameters (1, 2, 4, 5) for managing
+          vertical tab stops and single-line clears. These were never supported
+          by original VT100, so they're intentionally left unhandled.
+         */
+        if (p[0] == 0)
+            _sfte.term.tab_stops[_sfte.term.cursor_x] = 0;
+        else if (p[0] == 3)
+            memset(_sfte.term.tab_stops, 0, _sfte.term.cols);
+        break;
+    }
+    case 'h':  // SM / Set Mode
+    {
+        /*
+          Enables various terminal modes.
+          Supports DECTCEM (Cursor Show), DECAWM (Auto-Wrap),
+          DECOM (Origin Mode), and alt screen buffer toggles.
+         */
+        if (!_sfte.term.vt_dec_priv) break;
+
+        if (p[0] == 25) {
+            _sfte.term.hide_cursor = 0;
+            _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
+        } else if (p[0] == 7)
+            _sfte.term.auto_wrap = 1;
+        else if (p[0] == 6) {
+            _sfte.term.origin_mode = 1;
+            _sfte.term.cursor_x = 0;
+            _sfte.term.cursor_y = _sfte.term.scroll_top;
+        } else if (p[0] == 1047 || p[0] == 1048 || p[0] == 1049) {
+            // 1048 / 1049 save cursor
+            if (p[0] == 1048 || p[0] == 1049) {
+                _sfte.term.ansi_saved_x = _sfte.term.cursor_x;
+                _sfte.term.ansi_saved_y = _sfte.term.cursor_y;
+                _sfte.term.ansi_saved_fg = _sfte.term.cur_fg;
+                _sfte.term.ansi_saved_bg = _sfte.term.cur_bg;
+                _sfte.term.ansi_saved_attr = _sfte.term.cur_attr;
+            }
+
+            // 1047 / 1049 switch to alt screen
+            if ((p[0] == 1047 || p[0] == 1049) && !_sfte.term.alt_active) {
+                _sfte.term.alt_active = 1;
+
+                if (!_sfte.term.alt_cells)
+                    _sfte.term.alt_cells = (sfte_cell *)calloc(_sfte.term.cols * _sfte.term.rows,
+                                                               sizeof(sfte_cell));
+
+                sfte_cell *tmp = _sfte.term.cells;
+                _sfte.term.cells = _sfte.term.alt_cells;
+                _sfte.term.alt_cells = tmp;
+            }
+
+            if (p[0] == 1049) {
+                _sfte_clear_cells(0, _sfte.term.cols * _sfte.term.rows);
+                _sfte.term.cursor_x = 0;
+                _sfte.term.cursor_y = 0;
+            } else if (p[0] == 1047) {
+                _sfte_dirty_range(0, _sfte.term.cols * _sfte.term.rows);
+            }
+        }
+        break;
+    }
+    case 'l':  // RM / Reset Mode
+    {
+        /*
+          Disables various terminal modes.
+          Matches the implementations found in SM.
+         */
+        if (!_sfte.term.vt_dec_priv) break;
+
+        if (p[0] == 25) {
+            _sfte.term.hide_cursor = 1;
+            _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
+        } else if (p[0] == 7)
+            _sfte.term.auto_wrap = 0;
+        else if (p[0] == 6) {
+            _sfte.term.origin_mode = 0;
+            _sfte.term.cursor_x = 0;
+            _sfte.term.cursor_y = 0;
+        } else if (p[0] == 1047 || p[0] == 1048 || p[0] == 1049) {
+            if ((p[0] == 1047 || p[0] == 1049) && _sfte.term.alt_active) {
+                _sfte.term.alt_active = 0;
+
+                if (_sfte.term.alt_cells) {
+                    sfte_cell *tmp = _sfte.term.cells;
+                    _sfte.term.cells = _sfte.term.alt_cells;
+                    _sfte.term.alt_cells = tmp;
+                    _sfte_dirty_range(0, _sfte.term.cols * _sfte.term.rows);
+                }
+            }
+
+            if (p[0] == 1048 || p[0] == 1049) {
+                _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.ansi_saved_x, 0, _sfte.term.cols - 1);
+                _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.ansi_saved_y, 0, _sfte.term.rows - 1);
+                _sfte.term.cur_fg = _sfte.term.ansi_saved_fg;
+                _sfte.term.cur_bg = _sfte.term.ansi_saved_bg;
+                _sfte.term.cur_attr = _sfte.term.ansi_saved_attr;
+                _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
+            }
+        }
+        break;
+    }
+    case 'm':  // SGR / Select Graphic Rendition
+    {
+        /*
+          Sets colors and style of the characters following this code
+         */
         for (int i = 0; i < cnt; ++i) {
             if (p[i] == 0) {
                 _sfte.term.cur_fg = 0xFFFFFF;
@@ -1448,48 +1849,12 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
             }
         }
         break;
-    case 'H':  // cursor position
-    case 'f': {
-        // NOTE: vt coords are 1-idxd
-        int r = (p[0] > 0 ? p[0] : 1) - 1;
-        int c = (cnt > 1 && p[1] > 0 ? p[1] : 1) - 1;
-        c = _SFTE_CLAMP(c, 0, _sfte.term.cols - 1);
-
-        if (_sfte.term.origin_mode) {  // relative bounds
-            r += _sfte.term.scroll_top;
-            r = _SFTE_CLAMP(r, _sfte.term.scroll_top, _sfte.term.scroll_bottom);
-        } else
-            r = _SFTE_CLAMP(r, 0, _sfte.term.rows - 1);
-
-        _sfte.term.cursor_y = r;
-        _sfte.term.cursor_x = c;
-
-        break;
     }
-    case 'J':  // clear screen
-    {
-        int p0 = p[0];
-        if (p[0] == 0) {  // 0J / cursor to end of screen
-            int start_idx = _SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y);
-            _sfte_clear_cells(start_idx, (_sfte.term.rows * _sfte.term.cols) - start_idx);
-        } else if (p[0] == 1)  // 1J / start of screen to cursor
-            _sfte_clear_cells(0, _SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y) + 1);
-        else if (p[0] == 2)  // 2J / entire screen
-            _sfte_clear_cells(0, _sfte.term.rows * _sfte.term.cols);
-        break;
-    }
-    case 'K':  // erase in line
-    {
-        if (p[0] == 0)  // 0K / clear to eol
-            _sfte_clear_cells(_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y),
-                              _sfte.term.cols - _sfte.term.cursor_x);
-        if (p[0] == 1)  // clear to start of line
-            _sfte_clear_cells(_SFTE_IDX(0, _sfte.term.cursor_y), _sfte.term.cursor_x + 1);
-        else if (p[0] == 2)  // 2K / clear entire line
-            _sfte_clear_cells(_SFTE_IDX(0, _sfte.term.cursor_y), _sfte.term.cols);
-        break;
-    }
-    case 'n': {  // device status report
+    case 'n': {  // DSR / Device Status Report
+        /*
+          Reports the cursor position (CPR) by transmitting ESC[n;mR,
+          where n is the row and m is the column.
+         */
         if (p[0] != 6) break;
         char buf[32];
         int len = snprintf(buf, sizeof(buf), "\033[%d;%dR", _sfte.term.cursor_y + 1,
@@ -1497,270 +1862,31 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         write(_sfte.pty_fd, buf, len);
         break;
     }
-    case 'A':  // cursor up
+    case 'p':  // DECSTR / Soft Terminal Reset
     {
-        _sfte.term.cursor_y -= (p[0] > 0 ? p[0] : 1);
-        _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.cursor_y, 0, _sfte.term.rows - 1);
+        /*
+          Resets terminal state to default values.
+         */
+#if SFTE_CURSOR_BLINK
+        _sfte.term.blink_enabled = 1;
+#endif  // SFTE_CURSOR_BLINK
+        _sfte.term.cursor_style = SFTE_CURSOR_STYLE;
+        _sfte.term.scroll_top = 0;
+        _sfte.term.scroll_bottom = _sfte.term.rows - 1;
+        _sfte.term.cur_fg = 0xFFFFFF;
+        _sfte.term.cur_bg = SFTE_BG_COLOR;
+        _sfte.term.cur_attr = 0;
+        _sfte.term.hide_cursor = 0;
+
+        _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
         break;
     }
-    case 'B':  // cursor down
+    case 'q':  // DECSCUSR / Set Cursor Style
     {
-        _sfte.term.cursor_y += (p[0] > 0 ? p[0] : 1);
-        _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.cursor_y, 0, _sfte.term.rows - 1);
-        break;
-    }
-    case 'C':  // cursor forward
-    {
-        _sfte.term.cursor_x += (p[0] > 0 ? p[0] : 1);
-        _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.cursor_x, 0, _sfte.term.cols - 1);
-        break;
-    }
-    case 'D':  // cursor backward
-    {
-        _sfte.term.cursor_x -= (p[0] > 0 ? p[0] : 1);
-        _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.cursor_x, 0, _sfte.term.cols - 1);
-        break;
-    }
-    case 'G':  // cursor horizontal abs
-    {
-        _sfte.term.cursor_x = (p[0] > 0 ? p[0] : 1) - 1;
-        _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.cursor_x, 0, _sfte.term.cols - 1);
-        break;
-    }
-    case 'h':  // set mode
-    {
-        if (!_sfte.term.vt_dec_priv) break;
-        if (p[0] == 25) {
-            _sfte.term.hide_cursor = 0;  // ?25h / show cursor
-            _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
-        } else if (p[0] == 7)
-            _sfte.term.auto_wrap = 1;
-        else if (p[0] == 6) {
-            _sfte.term.origin_mode = 1;
-            _sfte.term.cursor_x = 0;
-            _sfte.term.cursor_y = _sfte.term.scroll_top;
-        } else if (p[0] == 1047 || p[0] == 1048 || p[0] == 1049) {
-            // 1048 / 1049 save cursor
-            if (p[0] == 1048 || p[0] == 1049) {
-                _sfte.term.ansi_saved_x = _sfte.term.cursor_x;
-                _sfte.term.ansi_saved_y = _sfte.term.cursor_y;
-                _sfte.term.ansi_saved_fg = _sfte.term.cur_fg;
-                _sfte.term.ansi_saved_bg = _sfte.term.cur_bg;
-                _sfte.term.ansi_saved_attr = _sfte.term.cur_attr;
-            }
-
-            // 1047 / 1049 switch to alt screen
-            if ((p[0] == 1047 || p[0] == 1049) && !_sfte.term.alt_active) {
-                _sfte.term.alt_active = 1;
-
-                if (!_sfte.term.alt_cells)
-                    _sfte.term.alt_cells = (sfte_cell *)calloc(_sfte.term.cols * _sfte.term.rows,
-                                                               sizeof(sfte_cell));
-
-                sfte_cell *tmp = _sfte.term.cells;  // swap buffer ptrs
-                _sfte.term.cells = _sfte.term.alt_cells;
-                _sfte.term.alt_cells = tmp;
-            }
-
-            // 1049 clear screen
-            if (p[0] == 1049) {
-                _sfte_clear_cells(0, _sfte.term.cols * _sfte.term.rows);
-                _sfte.term.cursor_x = 0;
-                _sfte.term.cursor_y = 0;
-            } else if (p[0] == 1047) {
-                _sfte_dirty_range(0, _sfte.term.cols * _sfte.term.rows);
-            }
-        }
-        break;
-    }
-    case 'l':  // reset mode
-    {
-        if (!_sfte.term.vt_dec_priv) break;
-        if (p[0] == 25) {
-            _sfte.term.hide_cursor = 1;  // ?25l / hide cursor
-            _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
-        } else if (p[0] == 7)
-            _sfte.term.auto_wrap = 0;
-        else if (p[0] == 6) {
-            _sfte.term.origin_mode = 0;
-            _sfte.term.cursor_x = 0;
-            _sfte.term.cursor_y = 0;
-        } else if (p[0] == 1047 || p[0] == 1048 || p[0] == 1049) {
-            // 1047 / 1049 switch to main screen
-            if ((p[0] == 1047 || p[0] == 1049) && _sfte.term.alt_active) {
-                _sfte.term.alt_active = 0;
-                if (_sfte.term.alt_cells) {
-                    sfte_cell *tmp = _sfte.term.cells;
-                    _sfte.term.cells = _sfte.term.alt_cells;
-                    _sfte.term.alt_cells = tmp;
-                    _sfte_dirty_range(0, _sfte.term.cols * _sfte.term.rows);
-                }
-            }
-
-            // 1048 / 1049 restore cursor
-            if (p[0] == 1048 || p[0] == 1049) {
-                _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.ansi_saved_x, 0, _sfte.term.cols - 1);
-                _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.ansi_saved_y, 0, _sfte.term.rows - 1);
-                _sfte.term.cur_fg = _sfte.term.ansi_saved_fg;
-                _sfte.term.cur_bg = _sfte.term.ansi_saved_bg;
-                _sfte.term.cur_attr = _sfte.term.ansi_saved_attr;
-
-                _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
-            }
-        }
-        break;
-    }
-    case 'r':  // set scroll region
-    {
-        int top = (p[0] > 0 ? p[0] : 1) - 1;
-        if (top < 0) top = 0;
-
-        int bot = (cnt > 1 && p[1] > 0 ? p[1] : _sfte.term.rows) - 1;
-        if (bot >= _sfte.term.rows) bot = _sfte.term.rows - 1;
-
-        if (top < bot) {
-            _sfte.term.scroll_top = top;
-            _sfte.term.scroll_bottom = bot;
-        }
-
-        _sfte.term.cursor_x = 0;
-        _sfte.term.cursor_y = _sfte.term.origin_mode ? _sfte.term.scroll_top : 0;
-        break;
-    }
-    case 'S':  // scroll up
-    {
-        _sfte_scroll(p[0] > 0 ? p[0] : 1);
-        break;
-    }
-    case 'T':  // scroll down
-    {
-        _sfte_scroll(-(p[0] > 0 ? p[0] : 1));
-        break;
-    }
-    case 'd':  // line pos abs / VPA
-    {
-        // move to specific row, keep column same
-        int r = (p[0] > 0 ? p[0] : 1) - 1;
-        if (_sfte.term.origin_mode) {
-            r += _sfte.term.scroll_top;
-            r = _SFTE_CLAMP(r, _sfte.term.scroll_top, _sfte.term.scroll_bottom);
-        } else
-            r = _SFTE_CLAMP(r, 0, _sfte.term.rows - 1);
-        _sfte.term.cursor_y = r;
-        break;
-    }
-    case 'X':  // erase char / ECH
-    {
-        // replace n chars with spaces from cursor
-        int n = p[0] > 0 ? p[0] : 1;
-        int rem = _sfte.term.cols - _sfte.term.cursor_x;
-        if (n > rem) n = rem;
-
-        int start_idx = _SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y);
-        _sfte_clear_cells(start_idx, n);
-        break;
-    }
-    case 'P':  // delete char / DCH
-    {
-        // deletes n chars, text to the right shifts left, eol blanked
-        int n = p[0] > 0 ? p[0] : 1;
-        int rem = _sfte.term.cols - _sfte.term.cursor_x;
-        if (n > rem) n = rem;
-
-        int move_cnt = rem - n;
-        int base_idx = _SFTE_IDX(0, _sfte.term.cursor_y);
-        if (move_cnt > 0)
-            memmove(&_sfte.term.cells[base_idx + _sfte.term.cursor_x],
-                    &_sfte.term.cells[base_idx + _sfte.term.cursor_x + n],
-                    move_cnt * sizeof(sfte_cell));
-
-        int start_idx = base_idx + _sfte.term.cols - n;
-        _sfte_clear_cells(start_idx, n);
-        _sfte_dirty_range(base_idx + _sfte.term.cursor_x, rem);
-        break;
-    }
-    case '@':  // insert char / ICH
-    {
-        // inserts n spaces, text shifts right, text pushed off edge is lost
-        int n = p[0] > 0 ? p[0] : 1;
-        int rem = _sfte.term.cols - _sfte.term.cursor_x;
-        if (n > rem) n = rem;
-
-        int move_cnt = rem - n;
-        int base_idx = _SFTE_IDX(0, _sfte.term.cursor_y);
-        if (move_cnt > 0)
-            memmove(&_sfte.term.cells[base_idx + _sfte.term.cursor_x + n],
-                    &_sfte.term.cells[base_idx + _sfte.term.cursor_x],
-                    move_cnt * sizeof(sfte_cell));
-
-        int start_idx = base_idx + _sfte.term.cursor_x;
-        _sfte_clear_cells(start_idx, n);
-        _sfte_dirty_range(base_idx + _sfte.term.cursor_x, rem);
-        break;
-    }
-    case 'L':  // insert line / IL
-    {
-        // inserts n blank lines at cursor, lines below get pushed
-        int n = p[0] > 0 ? p[0] : 1;
-        int top = _sfte.term.cursor_y;
-        int bot = _sfte.term.scroll_bottom;
-        if (top < _sfte.term.scroll_top || top > bot) break;  // oob
-
-        int height = bot - top + 1;
-        if (n > height) n = height;
-
-        int move_cnt = height - n;
-        int cols = _sfte.term.cols;
-        if (move_cnt > 0)
-            memmove(&_sfte.term.cells[(top + n) * cols], &_sfte.term.cells[top * cols],
-                    move_cnt * cols * sizeof(sfte_cell));
-
-        int start_idx = top * cols;
-        _sfte_clear_cells(start_idx, n * cols);
-        _sfte_dirty_range(top * cols, height * cols);
-        break;
-    }
-    case 'M':  // delete line / DL
-    {
-        // deletes n lines at cursor, lines below are pulled up
-        int n = p[0] > 0 ? p[0] : 1;
-        int top = _sfte.term.cursor_y;
-        int bot = _sfte.term.scroll_bottom;
-        if (top < _sfte.term.scroll_top || top > bot) break;  // oob
-
-        int height = bot - top + 1;
-        if (n > height) n = height;
-
-        int move_cnt = height - n;
-        int cols = _sfte.term.cols;
-        if (move_cnt > 0)
-            memmove(&_sfte.term.cells[top * cols], &_sfte.term.cells[(top + n) * cols],
-                    move_cnt * cols * sizeof(sfte_cell));
-
-        int start_idx = (bot - n + 1) * cols;
-        _sfte_clear_cells(start_idx, n * cols);
-        _sfte_dirty_range(top * cols, height * cols);
-        break;
-    }
-    case 'g':  // tab clear
-    {
-        if (p[0] == 0)
-            _sfte.term.tab_stops[_sfte.term.cursor_x] = 0;
-        else if (p[0] == 3)
-            memset(_sfte.term.tab_stops, 0, _sfte.term.cols);
-        break;
-    }
-    case 'c':  // device attributes
-    {
-        if (p[0] != 0) break;
-        const char *da = "\033[?6c";
-        write(_sfte.pty_fd, da, strlen(da));
-        break;
-    }
-    case 'q':  // dynamic cursor style
-    {
+        /*
+          Changes the cursor shape and blinking style.
+         */
         int style = p[0] ? p[0] : 0;
-// two separate switch cases, not real performance difference and cleaner codebase-wise
 #if SFTE_CURSOR_BLINK
         switch (style) {
         case 0:
@@ -1784,11 +1910,49 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         }
 
         _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
-
         break;
     }
-    case 't':  // window title swap
+    case 'r':  // DECSTBM / Set Top and Bottom Margins
     {
+        /*
+          Sets the scrolling region.
+          n (default 1) is top margin, m (default 1) is bottom margin.
+          Cursor is repositioned dependeing on Origin Mode state.
+         */
+        int top = (p[0] > 0 ? p[0] : 1) - 1;
+        if (top < 0) top = 0;
+
+        int bot = (cnt > 1 && p[1] > 0 ? p[1] : _sfte.term.rows) - 1;
+        if (bot >= _sfte.term.rows) bot = _sfte.term.rows - 1;
+
+        if (top < bot) {
+            _sfte.term.scroll_top = top;
+            _sfte.term.scroll_bottom = bot;
+        }
+
+        _sfte.term.cursor_x = 0;
+        _sfte.term.cursor_y = _sfte.term.origin_mode ? _sfte.term.scroll_top : 0;
+        break;
+    }
+    case 's':  // SCOSC / Save Cursor
+    {
+        /*
+          Saves the current cursor position and attributes.
+         */
+        if (p[0] != 0) break;  // avoid kitty support command
+        _sfte.term.ansi_saved_x = _sfte.term.cursor_x;
+        _sfte.term.ansi_saved_y = _sfte.term.cursor_y;
+        _sfte.term.ansi_saved_fg = _sfte.term.cur_fg;
+        _sfte.term.ansi_saved_bg = _sfte.term.cur_bg;
+        _sfte.term.ansi_saved_attr = _sfte.term.cur_attr;
+        break;
+    }
+    case 't':  // XTWINOPS / Window Manipulation
+    {
+        /*
+          Xterm extension for querying or changing window properties.
+          Used here to push/pop window titles.
+         */
         int op = p[0];
         if (op == 22) {                  // push title to stack
             if (p[1] == 0 || p[1] == 2)  // p[1] == 0 (icon+title), 1 (icon), 2 (title)
@@ -1803,34 +1967,11 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         }
         break;
     }
-    case 'p':  // soft terminal reset
+    case 'u':  // SCORC / Restore Cursor
     {
-#if SFTE_CURSOR_BLINK
-        _sfte.term.blink_enabled = 1;
-#endif  // SFTE_CURSOR_BLINK
-        _sfte.term.cursor_style = SFTE_CURSOR_STYLE;
-        _sfte.term.scroll_top = 0;
-        _sfte.term.scroll_bottom = _sfte.term.rows - 1;
-        _sfte.term.cur_fg = 0xFFFFFF;
-        _sfte.term.cur_bg = SFTE_BG_COLOR;
-        _sfte.term.cur_attr = 0;
-        _sfte.term.hide_cursor = 0;
-
-        _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
-
-        break;
-    }
-    case 's':  // save cursor
-    {
-        if (p[0] != 0) break;  // avoid kitty support command
-        _sfte.term.ansi_saved_x = _sfte.term.cursor_x;
-        _sfte.term.ansi_saved_y = _sfte.term.cursor_y;
-        _sfte.term.ansi_saved_fg = _sfte.term.cur_fg;
-        _sfte.term.ansi_saved_bg = _sfte.term.cur_bg;
-        _sfte.term.ansi_saved_attr = _sfte.term.cur_attr;
-        break;
-    }
-    case 'u': {
+        /*
+          Restores the previously saved cursor position and attributes.
+         */
         if (p[0] != 0) break;  // avoid kitty support command
         _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.ansi_saved_x, 0, _sfte.term.cols - 1);
         _sfte.term.cursor_y = _SFTE_CLAMP(_sfte.term.ansi_saved_y, 0, _sfte.term.rows - 1);
