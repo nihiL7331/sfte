@@ -781,16 +781,15 @@ static void _sfte_wayland_render(void) {
     if (new_cols != _sfte.term.cols || new_rows != _sfte.term.rows)
         _sfte_term_resize(new_cols, new_rows);
 
+    int vis_cx = _sfte.term.cursor_x >= _sfte.term.cols ? _sfte.term.cols - 1 : _sfte.term.cursor_x;
+
     // if cursor moved, dirtyy the old cell to erase it, and dirty the new cell to draw it
-    if (_sfte.term.dirty_saved_x != _sfte.term.cursor_x ||
-        _sfte.term.dirty_saved_y != _sfte.term.cursor_y) {
+    if (_sfte.term.dirty_saved_x != vis_cx || _sfte.term.dirty_saved_y != _sfte.term.cursor_y) {
         _sfte.term.cells[_SFTE_IDX(_sfte.term.dirty_saved_x, _sfte.term.dirty_saved_y)].dirty = 1;
-        _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
-        _sfte.term.dirty_saved_x = _sfte.term.cursor_x;
+        _sfte.term.cells[_SFTE_IDX(vis_cx, _sfte.term.cursor_y)].dirty = 1;
+        _sfte.term.dirty_saved_x = vis_cx;
         _sfte.term.dirty_saved_y = _sfte.term.cursor_y;
     }
-
-    int vis_cx = _sfte.term.cursor_x >= _sfte.term.cols ? _sfte.term.cols - 1 : _sfte.term.cursor_x;
 
     for (int r = 0; r < _sfte.term.rows; ++r) {
         for (int c = 0; c < _sfte.term.cols; ++c) {
@@ -931,7 +930,9 @@ static void _sfte_wayland_render(void) {
                                  _sfte.term.trail_damage_h);
 
     if (!_sfte.term.hide_cursor && _sfte.term.is_trailing) {
-        float target_rx = _sfte.term.cursor_x * _sfte.font.cell_width;
+        int vis_cx = _sfte.term.cursor_x >= _sfte.term.cols ? _sfte.term.cols - 1
+                                                            : _sfte.term.cursor_x;
+        float target_rx = vis_cx * _sfte.font.cell_width;
         float target_ry = _sfte.term.cursor_y * _sfte.font.cell_height;
 
         float min_x = target_rx < _sfte.term.tail_rx ? target_rx : _sfte.term.tail_rx;
@@ -1537,7 +1538,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
     int *p = _sfte.term.vt_params;
     int cnt = _sfte.term.vt_param_idx + 1;
 
-    if (_sfte.term.cursor_x >= _sfte.term.cols) _sfte.term.cursor_x = _sfte.term.cols - 1;
+    int cx = _sfte.term.cursor_x >= _sfte.term.cols ? _sfte.term.cols - 1 : _sfte.term.cursor_x;
 
     switch (cmd) {
     case '@':  // ICH / Insert Character
@@ -1548,19 +1549,18 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
           Text pushed off the right edge is lost.
          */
         int n = p[0] > 0 ? p[0] : 1;
-        int rem = _sfte.term.cols - _sfte.term.cursor_x;
+        int rem = _sfte.term.cols - cx;
         if (n > rem) n = rem;
 
         int move_cnt = rem - n;
         int base_idx = _SFTE_IDX(0, _sfte.term.cursor_y);
         if (move_cnt > 0)
-            memmove(&_sfte.term.cells[base_idx + _sfte.term.cursor_x + n],
-                    &_sfte.term.cells[base_idx + _sfte.term.cursor_x],
+            memmove(&_sfte.term.cells[base_idx + cx + n], &_sfte.term.cells[base_idx + cx],
                     move_cnt * sizeof(sfte_cell));
 
-        int start_idx = base_idx + _sfte.term.cursor_x;
+        int start_idx = base_idx + cx;
         _sfte_clear_cells(start_idx, n);
-        _sfte_dirty_range(base_idx + _sfte.term.cursor_x, rem);
+        _sfte_dirty_range(base_idx + cx, rem);
         break;
     }
     case 'A':  // CUU / Cursor Up
@@ -1656,10 +1656,10 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
           If n is 3, clear entire screen and delete all lines saved in the scrollback buffer.
          */
         if (p[0] == 0) {
-            int start_idx = _SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y);
+            int start_idx = _SFTE_IDX(cx, _sfte.term.cursor_y);
             _sfte_clear_cells(start_idx, (_sfte.term.rows * _sfte.term.cols) - start_idx);
         } else if (p[0] == 1)
-            _sfte_clear_cells(0, _SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y) + 1);
+            _sfte_clear_cells(0, _SFTE_IDX(cx, _sfte.term.cursor_y) + 1);
         else if (p[0] == 2)
             _sfte_clear_cells(0, _sfte.term.rows * _sfte.term.cols);
         /* NOTE: n = 3 unhandled since scrollback buffer is missing */
@@ -1675,10 +1675,9 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
           Cursor position does not change.
          */
         if (p[0] == 0)
-            _sfte_clear_cells(_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y),
-                              _sfte.term.cols - _sfte.term.cursor_x);
+            _sfte_clear_cells(_SFTE_IDX(cx, _sfte.term.cursor_y), _sfte.term.cols - cx);
         else if (p[0] == 1)
-            _sfte_clear_cells(_SFTE_IDX(0, _sfte.term.cursor_y), _sfte.term.cursor_x + 1);
+            _sfte_clear_cells(_SFTE_IDX(0, _sfte.term.cursor_y), cx + 1);
         else if (p[0] == 2)
             _sfte_clear_cells(_SFTE_IDX(0, _sfte.term.cursor_y), _sfte.term.cols);
         break;
@@ -1743,19 +1742,18 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
           End of line is blanked.
          */
         int n = p[0] > 0 ? p[0] : 1;
-        int rem = _sfte.term.cols - _sfte.term.cursor_x;
+        int rem = _sfte.term.cols - cx;
         if (n > rem) n = rem;
 
         int move_cnt = rem - n;
         int base_idx = _SFTE_IDX(0, _sfte.term.cursor_y);
         if (move_cnt > 0)
-            memmove(&_sfte.term.cells[base_idx + _sfte.term.cursor_x],
-                    &_sfte.term.cells[base_idx + _sfte.term.cursor_x + n],
+            memmove(&_sfte.term.cells[base_idx + cx], &_sfte.term.cells[base_idx + cx + n],
                     move_cnt * sizeof(sfte_cell));
 
         int start_idx = base_idx + _sfte.term.cols - n;
         _sfte_clear_cells(start_idx, n);
-        _sfte_dirty_range(base_idx + _sfte.term.cursor_x, rem);
+        _sfte_dirty_range(base_idx + cx, rem);
         break;
     }
     case 'S':  // SU / Scroll Up
@@ -1782,10 +1780,10 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
           Replaces n (default 1) characters with spaces starting at the cursor.
          */
         int n = p[0] > 0 ? p[0] : 1;
-        int rem = _sfte.term.cols - _sfte.term.cursor_x;
+        int rem = _sfte.term.cols - cx;
         if (n > rem) n = rem;
 
-        _sfte_clear_cells(_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y), n);
+        _sfte_clear_cells(_SFTE_IDX(cx, _sfte.term.cursor_y), n);
         break;
     }
     case 'c':  // DA / Device Attributes
@@ -1864,7 +1862,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
 
         if (p[0] == 25) {
             _sfte.term.hide_cursor = 0;
-            _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
+            _sfte.term.cells[_SFTE_IDX(cx, _sfte.term.cursor_y)].dirty = 1;
         } else if (p[0] == 7)
             _sfte.term.auto_wrap = 1;
         else if (p[0] == 6) {
@@ -1917,7 +1915,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
 
         if (p[0] == 25) {
             _sfte.term.hide_cursor = 1;
-            _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
+            _sfte.term.cells[_SFTE_IDX(cx, _sfte.term.cursor_y)].dirty = 1;
         } else if (p[0] == 7)
             _sfte.term.auto_wrap = 0;
         else if (p[0] == 6) {
@@ -2022,7 +2020,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         _sfte.term.cur_attr = 0;
         _sfte.term.hide_cursor = 0;
 
-        _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
+        _sfte.term.cells[_SFTE_IDX(cx, _sfte.term.cursor_y)].dirty = 1;
         break;
     }
     case 'q':  // DECSCUSR / Set Cursor Style
@@ -2053,7 +2051,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         case 6: _sfte.term.cursor_style = SFTE_CURSOR_BAR; break;
         }
 
-        _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
+        _sfte.term.cells[_SFTE_IDX(cx, _sfte.term.cursor_y)].dirty = 1;
         break;
     }
     case 'r':  // DECSTBM / Set Top and Bottom Margins
@@ -2142,10 +2140,8 @@ static void _sfte_parse_byte(uint8_t b) {
     switch (_sfte.term.vt_state) {
     case VT_GROUND:
         if (b == '\033' || b == '\x1b') {
-            if (_sfte.term.cursor_x >= _sfte.term.cols) _sfte.term.cursor_x = _sfte.term.cols - 1;
             _sfte.term.vt_state = VT_ESCAPE;
         } else if (b == '\n') {
-            if (_sfte.term.cursor_x >= _sfte.term.cols) _sfte.term.cursor_x = _sfte.term.cols - 1;
             if (_sfte.term.cursor_y == _sfte.term.scroll_bottom)
                 _sfte_scroll(1);  // at bot margin, scroll text up
             else if (_sfte.term.cursor_y < _sfte.term.rows - 1)
@@ -2153,7 +2149,6 @@ static void _sfte_parse_byte(uint8_t b) {
         } else if (b == '\r')
             _sfte.term.cursor_x = 0;
         else if (b == '\t') {
-            if (_sfte.term.cursor_x >= _sfte.term.cols) _sfte.term.cursor_x = _sfte.term.cols - 1;
             while (_sfte.term.cursor_x < _sfte.term.cols - 1) {
                 _sfte.term.cursor_x++;
                 if (_sfte.term.tab_stops[_sfte.term.cursor_x]) break;
@@ -2337,7 +2332,9 @@ static void _sfte_loop(void) {
             if (now >= _sfte.term.next_blink_ms) {
                 _sfte.term.blink_visible = !_sfte.term.blink_visible;
                 _sfte.term.next_blink_ms = now + SFTE_CURSOR_BLINK_RATE;
-                _sfte.term.cells[_SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y)].dirty = 1;
+                int vis_cx = _sfte.term.cursor_x >= _sfte.term.cols ? _sfte.term.cols - 1
+                                                                    : _sfte.term.cursor_x;
+                _sfte.term.cells[_SFTE_IDX(vis_cx, _sfte.term.cursor_y)].dirty = 1;
                 needs_render = 1;
             }
         }
@@ -2359,10 +2356,12 @@ static void _sfte_loop(void) {
                 for (ssize_t i = 0; i < n; ++i) _sfte_parse_byte(buf[i]);
 
 #if SFTE_CURSOR_TRAIL
-                float target_rx = _sfte.term.cursor_x * _sfte.font.cell_width;
+                int vis_cx = _sfte.term.cursor_x >= _sfte.term.cols ? _sfte.term.cols - 1
+                                                                    : _sfte.term.cursor_x;
+                float target_rx = vis_cx * _sfte.font.cell_width;
                 float target_ry = _sfte.term.cursor_y * _sfte.font.cell_height;
 
-                if (_sfte.term.cursor_x != _sfte.term.last_grid_x ||
+                if (vis_cx != _sfte.term.last_grid_x ||
                     _sfte.term.cursor_y != _sfte.term.last_grid_y) {
                     now = _sfte_time_ms();
 
@@ -2374,7 +2373,7 @@ static void _sfte_loop(void) {
                         _sfte.term.tail_ry = target_ry;
                     }
 
-                    _sfte.term.last_grid_x = _sfte.term.cursor_x;
+                    _sfte.term.last_grid_x = vis_cx;
                     _sfte.term.last_grid_y = _sfte.term.cursor_y;
                     _sfte.term.last_move_ms = now;
                 }
@@ -2397,30 +2396,30 @@ static void _sfte_loop(void) {
 
 #if SFTE_CURSOR_TRAIL
         if (_sfte.term.is_trailing) {
-            if (_sfte.term.is_trailing) {
-                float target_rx = _sfte.term.cursor_x * _sfte.font.cell_width;
-                float target_ry = _sfte.term.cursor_y * _sfte.font.cell_height;
+            int vis_cx = _sfte.term.cursor_x >= _sfte.term.cols ? _sfte.term.cols - 1
+                                                                : _sfte.term.cursor_x;
+            float target_rx = vis_cx * _sfte.font.cell_width;
+            float target_ry = _sfte.term.cursor_y * _sfte.font.cell_height;
 
-                now = _sfte_time_ms();
-                if (_sfte.term.last_trail_update_ms == 0) _sfte.term.last_trail_update_ms = now;
-                float dt_ms = (float)(now - _sfte.term.last_trail_update_ms);
-                _sfte.term.last_trail_update_ms = now;
+            now = _sfte_time_ms();
+            if (_sfte.term.last_trail_update_ms == 0) _sfte.term.last_trail_update_ms = now;
+            float dt_ms = (float)(now - _sfte.term.last_trail_update_ms);
+            _sfte.term.last_trail_update_ms = now;
 
-                float tx = target_rx - _sfte.term.tail_rx;
-                float ty = target_ry - _sfte.term.tail_ry;
+            float tx = target_rx - _sfte.term.tail_rx;
+            float ty = target_ry - _sfte.term.tail_ry;
 
-                if (tx * tx + ty * ty <= 0.5f) {
-                    _sfte.term.is_trailing = 0;
-                    _sfte.term.tail_rx = target_rx;
-                    _sfte.term.tail_ry = target_ry;
-                    _sfte.term.last_trail_update_ms = 0;
-                } else {
-                    float decay = dt_ms * SFTE_CURSOR_TRAIL_DECAY;
-                    if (decay > 1.0f) decay = 1.0f;
+            if (tx * tx + ty * ty <= 0.5f) {
+                _sfte.term.is_trailing = 0;
+                _sfte.term.tail_rx = target_rx;
+                _sfte.term.tail_ry = target_ry;
+                _sfte.term.last_trail_update_ms = 0;
+            } else {
+                float decay = dt_ms * SFTE_CURSOR_TRAIL_DECAY;
+                if (decay > 1.0f) decay = 1.0f;
 
-                    _sfte.term.tail_rx += tx * decay;
-                    _sfte.term.tail_ry += ty * decay;
-                }
+                _sfte.term.tail_rx += tx * decay;
+                _sfte.term.tail_ry += ty * decay;
             }
             needs_render = 1;
         }
