@@ -200,6 +200,9 @@ typedef struct {
 #ifdef SFTE_FONT_BOLD_PATH
     uint8_t is_bold;
 #endif  // SFTE_FONT_BOLD_PATH
+#ifdef SFTE_FONT_ITALIC_PATH
+    uint8_t is_italic;
+#endif  // SFTE_FONT_ITALIC_PATH
 
     int x0, y0, x1, y1;  // atlas tex coords
     int xoff, yoff;      // render offsets
@@ -262,6 +265,9 @@ typedef struct {
 #ifdef SFTE_FONT_BOLD_PATH
     uint8_t *ttf_bold_buf;
 #endif  // SFTE_FONT_BOLD_PATH
+#ifdef SFTE_FONT_ITALIC_PATH
+    uint8_t *ttf_italic_buf;
+#endif  // SFTE_FONT_ITALIC_PATH
 
     float cur_size;  // starts at SFTE_DEFAULT_FONT_SIZE
 
@@ -273,6 +279,9 @@ typedef struct {
 #ifdef SFTE_FONT_BOLD_PATH
     stbtt_fontinfo stb_bold_info;
 #endif  // SFTE_FONT_BOLD_PATH
+#ifdef SFTE_FONT_ITALIC_PATH
+    stbtt_fontinfo stb_italic_info;
+#endif  // SFTE_FONT_ITALIC_PATH
     float scale;
 
     // hash map
@@ -398,26 +407,36 @@ static sfte_glyph *_sfte_font_get_glyph(uint32_t rune
                                         ,
                                         uint8_t is_bold
 #endif  // SFTE_FONT_BOLD_PATH
+#ifdef SFTE_FONT_ITALIC_PATH
+                                        ,
+                                        uint8_t is_italic
+#endif  // SFTE_FONT_ITALIC_PATH
 ) {
     if (rune == 0) rune = ' ';
 
     uint32_t h = rune;
 // offset hash if bold is requested to avoid collisions
 #ifdef SFTE_FONT_BOLD_PATH
-    h += 0x9E3779B1;
+    if (is_bold) h += 0x9E3779B1;
 #endif  // SFTE_FONT_BOLD_PATH
+#ifdef SFTE_FONT_ITALIC_PATH
+    if (is_italic) h += 0x9E3779B9;
+#endif  // SFTE_FONT_ITALIC_PATH
     h %= _sfte.font.glyph_cap;
 
     // hash map logic
     for (int i = 0; i < _sfte.font.glyph_cap; ++i) {
         int idx = (h + i) % _sfte.font.glyph_cap;
 
+        if (_sfte.font.glyphs[idx].rune == rune
 #ifdef SFTE_FONT_BOLD_PATH
-        if (_sfte.font.glyphs[idx].rune == rune && _sfte.font.glyphs[idx].is_bold == is_bold)
-            return &_sfte.font.glyphs[idx];
-#else
-        if (_sfte.font.glyphs[idx].rune == rune) return &_sfte.font.glyphs[idx];  // cache hit
+            && _sfte.font.glyphs[idx].is_bold == is_bold
 #endif  // SFTE_FONT_BOLD_PATH
+#ifdef SFTE_FONT_ITALIC_PATH
+            && _sfte.font.glyphs[idx].is_italic == is_italic
+#endif  // SFTE_FONT_ITALIC_PATH
+        )
+            return &_sfte.font.glyphs[idx];
 
         if (_sfte.font.glyphs[idx].rune != 0) continue;  // cache miss, taken, continue
 
@@ -426,6 +445,11 @@ static sfte_glyph *_sfte_font_get_glyph(uint32_t rune
         // cache miss, free, take space
         sfte_glyph *g = &_sfte.font.glyphs[idx];
         g->rune = rune;
+        // NOTE: currently just set info to bold if italic AND bold
+#ifdef SFTE_FONT_ITALIC_PATH
+        g->is_italic = is_italic;
+        if (is_italic) info = &_sfte.font.stb_italic_info;
+#endif  // SFTE_FONT_ITALIC_PATH
 #ifdef SFTE_FONT_BOLD_PATH
         g->is_bold = is_bold;
         if (is_bold) info = &_sfte.font.stb_bold_info;
@@ -489,6 +513,10 @@ static void _sfte_font_reset_cache(void) {
                                          ,
                                          0
 #endif  // SFTE_FONT_BOLD_PATH
+#ifdef SFTE_FONT_ITALIC_PATH
+                                         ,
+                                         0
+#endif  // SFTE_FONT_ITALIC_PATH
     );
     _sfte.font.cell_width = m->xadvance;
     _sfte.font.cell_height = (int)(_sfte.font.cur_size * 1.2f + 0.5f);
@@ -527,6 +555,22 @@ static void _sfte_font_load(void) {
 
     stbtt_InitFont(&_sfte.font.stb_bold_info, _sfte.font.ttf_bold_buf, 0);
 #endif  // SFTE_FONT_BOLD_PATH
+
+#ifdef SFTE_FONT_ITALIC_PATH
+    FILE *f_italic = fopen(SFTE_FONT_ITALIC_PATH, "rb");
+    SFTE_ASSERT(f_italic, "failed to open italic font file");
+
+    fseek(f_italic, 0, SEEK_END);
+    size_t size_italic = ftell(f_italic);
+    fseek(f_italic, 0, SEEK_SET);
+
+    _sfte.font.ttf_italic_buf = (uint8_t *)malloc(size_italic);
+    SFTE_ASSERT(fread(_sfte.font.ttf_italic_buf, 1, size_italic, f_italic) == size_italic,
+                "failed to read italic font file");
+    fclose(f_italic);
+
+    stbtt_InitFont(&_sfte.font.stb_italic_info, _sfte.font.ttf_italic_buf, 0);
+#endif  // SFTE_FONT_ITALIC_PATH
 
     _sfte.font.glyph_cap = 4096;
     _sfte.font.glyphs = (sfte_glyph *)calloc(_sfte.font.glyph_cap, sizeof(sfte_glyph));
@@ -590,6 +634,10 @@ static void _sfte_render_fg(int col, int row, uint32_t rune, uint32_t fg
                             ,
                             uint8_t is_bold
 #endif  // SFTE_FONT_BOLD_PATH
+#ifdef SFTE_FONT_ITALIC_PATH
+                            ,
+                            uint8_t is_italic
+#endif  // SFTE_FONT_ITALIC_PATH
 ) {
     if (rune == ' ') return;
 
@@ -598,6 +646,10 @@ static void _sfte_render_fg(int col, int row, uint32_t rune, uint32_t fg
                                          ,
                                          is_bold
 #endif  // SFTE_FONT_BOLD_PATH
+#ifdef SFTE_FONT_ITALIC_PATH
+                                         ,
+                                         is_italic
+#endif  // SFTE_FONT_ITALIC_PATH
     );
     if (!g) return;
 
@@ -761,9 +813,23 @@ static void _sfte_wayland_render(void) {
 
 #ifdef SFTE_FONT_BOLD_PATH
             uint8_t is_bold = (attr & ATTR_BOLD) ? 1 : 0;
-            _sfte_render_fg(c, r, rune, draw_fg, is_bold);
+#ifdef SFTE_FONT_ITALIC_PATH
+            uint8_t is_italic = (attr & ATTR_ITALIC) ? 1 : 0;
+#endif  // SFTE_FONT_ITALIC_PATH
+
+            _sfte_render_fg(c, r, rune, draw_fg, is_bold
+#ifdef SFTE_FONT_ITALIC_PATH
+                            ,
+                            is_italic
+#endif  // SFTE_FONT_ITALIC_PATH
+            );
+#else
+#ifdef SFTE_FONT_ITALIC_PATH
+            uint8_t is_italic = (attr & ATTR_ITALIC) ? 1 : 0;
+            _sfte_render_fg(c, r, rune, draw_fg, is_italic);
 #else
             _sfte_render_fg(c, r, rune, draw_fg);
+#endif  // !SFTE_FONT_ITALIC_PATH
 #endif  // !SFTE_FONT_BOLD_PATH
 
             if (attr & ATTR_UNDERLINE) {
@@ -1109,6 +1175,9 @@ static void _sfte_wayland_unload(void) {
 #ifdef SFTE_FONT_BOLD_PATH
     free(_sfte.font.ttf_bold_buf);
 #endif  // SFTE_FONT_BOLD_PATH
+#ifdef SFTE_FONT_ITALIC_PATH
+    free(_sfte.font.ttf_italic_buf);
+#endif  // SFTE_FONT_ITALIC_PATH
     free(_sfte.font.atlas_pxs);
     free(_sfte.term.cells);
     free(_sfte.term.alt_cells);
@@ -1334,12 +1403,16 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
                 _sfte.term.cur_attr = 0;
             } else if (p[i] == 1)
                 _sfte.term.cur_attr |= ATTR_BOLD;
+            else if (p[i] == 3)
+                _sfte.term.cur_attr |= ATTR_ITALIC;
             else if (p[i] == 4)
                 _sfte.term.cur_attr |= ATTR_UNDERLINE;
             else if (p[i] == 7)
                 _sfte.term.cur_attr |= ATTR_REVERSE;
             else if (p[i] == 22)
                 _sfte.term.cur_attr &= ~ATTR_BOLD;
+            else if (p[i] == 23)
+                _sfte.term.cur_attr &= ~ATTR_ITALIC;
             else if (p[i] == 24)
                 _sfte.term.cur_attr &= ~ATTR_UNDERLINE;
             else if (p[i] == 27)
