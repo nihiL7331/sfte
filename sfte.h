@@ -207,8 +207,9 @@ typedef struct {
     uint32_t rune;
     uint32_t fg;
     uint32_t bg;
-    uint16_t attr;  // bitmask of sfte_attr
-    uint8_t dirty;  // 1 if this cell changed
+    uint16_t attr;    // bitmask of sfte_attr
+    uint8_t dirty;    // 1 if this cell changed
+    uint8_t wrapped;  // 1 if this cell caused a soft line-wrap
 } sfte_cell;
 
 typedef struct {
@@ -782,8 +783,6 @@ static void _sfte_wayland_create_buffer(void) {
 
     close(fd);
 }
-
-static void _sfte_term_resize(int new_cols, int new_rows);
 
 static inline sfte_cell *_sfte_get_view_cell(int c, int r) {
 #if SFTE_SCROLLBACK_CAP
@@ -1491,60 +1490,193 @@ static void _sfte_pty_spawn(void) {
 // >>vt
 static const uint32_t _sfte_ansi_palette[16] = SFTE_ANSI_PALETTE;
 
-static void _sfte_term_resize(int new_cols, int new_rows) {
-    sfte_cell *new_cells = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
-    SFTE_ASSERT(new_cells, "failed to allocate resized terminal grid");
+typedef struct {
+    sfte_cell *temp_rows;
+    int new_cols;
+    int tr, tc;
+    int new_cx, new_cy;
+    int target_old_cx, target_old_cy;
+    int is_live;
+} sfte_reflow_state;
 
-    sfte_cell *new_alt_cells = NULL;
-    if (_sfte.term.alt_cells) {
-        new_alt_cells = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
-        SFTE_ASSERT(new_alt_cells, "failed to allocate resized alt grid");
+static void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell c, int is_cursor) {
+    if (st->tc == st->new_cols) {
+        st->temp_rows[st->tr * st->new_cols + st->new_cols - 1].wrapped = 1;
+        st->tc = 0;
+        st->tr++;
     }
+
+    if (is_cursor) {
+        st->new_cx = st->tc;
+        st->new_cy = st->tr;
+    }
+
+    c.wrapped = 0;
+    st->temp_rows[st->tr * st->new_cols + st->tc] = c;
+    st->tc++;
+}
+
+static void _sfte_term_resize(int new_cols, int new_rows) {
+    sfte_cell *main_old = _sfte.term.alt_active ? _sfte.term.alt_cells : _sfte.term.cells;
+    sfte_cell *alt_old = _sfte.term.alt_active ? _sfte.term.cells : NULL;
+
+    int target_cx = _sfte.term.alt_active ? _sfte.term.ansi_saved_x : _sfte.term.cursor_x;
+    int target_cy = _sfte.term.alt_active ? _sfte.term.ansi_saved_y : _sfte.term.cursor_y;
+
+    int max_temp_rows = (
+#if SFTE_SCROLLBACK_CAP
+                            _sfte.term.sb_len +
+#endif  // SFTE_SCROLLBACK_CAP
+                            _sfte.term.rows) *
+                        (_sfte.term.cols / new_cols + 2);
+    if (max_temp_rows < new_rows) max_temp_rows = new_rows;
+    sfte_cell *temp_rows = (sfte_cell *)calloc(max_temp_rows * new_cols, sizeof(sfte_cell));
+
+    sfte_reflow_state st = {.temp_rows = temp_rows,
+                            .new_cols = new_cols,
+                            .tr = 0,
+                            .tc = 0,
+                            .new_cx = 0,
+                            .new_cy = 0,
+                            .target_old_cx = target_cx,
+                            .target_old_cy = target_cy,
+                            .is_live = 0};
+
+#if SFTE_SCROLLBACK_CAP
+    for (int i = 0; i < _sfte.term.sb_len; ++i) {
+        int ring_idx = (_sfte.term.sb_head - _sfte.term.sb_len + i + _sfte.term.sb_cap) %
+                       _sfte.term.sb_cap;
+        sfte_cell *row = &_sfte.term.scrollback[ring_idx * _sfte.term.cols];
+        int is_wrapped = row[_sfte.term.cols - 1].wrapped;
+
+        int len = _sfte.term.cols;
+        if (!is_wrapped)
+            while (len > 0 && (row[len - 1].rune == ' ' || row[len - 1].rune == 0) &&
+                   row[len - 1].bg == SFTE_BG_COLOR)
+                len--;
+
+        for (int c = 0; c < len; ++c) _sfte_reflow_push(&st, row[c], 0);
+        if (!is_wrapped) {
+            st.tc = 0;
+            st.tr++;
+        }
+    }
+#endif  // SFTE_SCROLLBACK_CAP
+
+    // reflow live grid
+    st.is_live = 1;
+    for (int r = 0; r < _sfte.term.rows; ++r) {
+        sfte_cell *row = &main_old[r * _sfte.term.cols];
+        int is_wrapped = row[_sfte.term.cols - 1].wrapped;
+
+        int len = _sfte.term.cols;
+        if (!is_wrapped) {
+            while (len > 0 && (row[len - 1].rune == ' ' || row[len - 1].rune == 0) &&
+                   row[len - 1].bg == SFTE_BG_COLOR) {
+                if (r == st.target_old_cy && len - 1 == st.target_old_cx) break;
+                len--;
+            }
+            if (r == st.target_old_cy && len <= st.target_old_cx) len = st.target_old_cx + 1;
+        }
+
+        for (int c = 0; c < len; ++c) {
+            int is_cursor = (r == st.target_old_cy && c == st.target_old_cx);
+            _sfte_reflow_push(&st, row[c], is_cursor);
+        }
+
+        if (r == st.target_old_cy && st.target_old_cx >= len) {
+            if (st.tc == new_cols) {
+                st.temp_rows[st.tr * new_cols + new_cols - 1].wrapped = 1;
+                st.tc = 0;
+                st.tr++;
+            }
+            st.new_cx = st.tc;
+            st.new_cy = st.tr;
+        }
+
+        if (!is_wrapped) {
+            st.tc = 0;
+            st.tr++;
+        }
+    }
+
+    int total_lines = st.tr + (st.tc > 0 ? 1 : 0);
+
+    // map into new layout arrays
+    sfte_cell *new_main = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
+
+    int screen_top = total_lines - new_rows;
+    if (st.new_cy >= screen_top + new_rows) screen_top = st.new_cy - new_rows + 1;
+    screen_top = _SFTE_CLAMP(screen_top, 0, st.new_cy);
+
+#if SFTE_SCROLLBACK_CAP
+    sfte_cell *new_sb = (sfte_cell *)calloc(_sfte.term.sb_cap * new_cols, sizeof(sfte_cell));
+
+    int sb_lines = screen_top;
+    if (sb_lines > _sfte.term.sb_cap) sb_lines = _sfte.term.sb_cap;
+    int sb_start = screen_top - sb_lines;
+
+    for (int i = 0; i < sb_lines; ++i)
+        memcpy(&new_sb[i * new_cols], &temp_rows[(sb_start + i) * new_cols],
+               new_cols * sizeof(sfte_cell));
+#endif  // SFTE_SCROLLBACK_CAP
+
+    int copy_lines = total_lines - screen_top;
+    if (copy_lines > new_rows) copy_lines = new_rows;
+    for (int i = 0; i < copy_lines; ++i)
+        memcpy(&new_main[i * new_cols], &temp_rows[(screen_top + i) * new_cols],
+               new_cols * sizeof(sfte_cell));
+
+    // anchor cursors
+    if (_sfte.term.alt_active) {
+        _sfte.term.ansi_saved_x = st.new_cx;
+        _sfte.term.ansi_saved_y = _SFTE_CLAMP(st.new_cy - screen_top, 0, new_rows - 1);
+    } else {
+        _sfte.term.cursor_x = st.new_cx;
+        _sfte.term.cursor_y = _SFTE_CLAMP(st.new_cy - screen_top, 0, new_rows - 1);
+    }
+
+    // hard copy alt grid
+    // NOTE: alt grid gets no reflow, it destroys visuals of alt-screen based interfaces
+    sfte_cell *new_alt = NULL;
+    if (alt_old) {
+        new_alt = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
+        int min_cols = new_cols < _sfte.term.cols ? new_cols : _sfte.term.cols;
+        int min_rows = new_rows < _sfte.term.rows ? new_rows : _sfte.term.rows;
+        for (int r = 0; r < min_rows; ++r)
+            for (int c = 0; c < min_cols; ++c)
+                new_alt[r * new_cols + c] = alt_old[r * _sfte.term.cols + c];
+
+        if (_sfte.term.cursor_x >= new_cols) _sfte.term.cursor_x = new_cols - 1;
+        if (_sfte.term.cursor_y >= new_rows) _sfte.term.cursor_y = new_rows - 1;
+    }
+
+    free(_sfte.term.cells);
+    if (_sfte.term.alt_cells) free(_sfte.term.alt_cells);
+    free(temp_rows);
+
+    _sfte.term.cells = _sfte.term.alt_active ? new_alt : new_main;
+    _sfte.term.alt_cells = _sfte.term.alt_active ? new_main : NULL;
 
 #if SFTE_SCROLLBACK_CAP
     if (_sfte.term.scrollback) free(_sfte.term.scrollback);
-    _sfte.term.scrollback = (sfte_cell *)calloc(_sfte.term.sb_cap * new_cols, sizeof(sfte_cell));
-    _sfte.term.sb_head = 0;
+    _sfte.term.scrollback = new_sb;
+    _sfte.term.sb_head = sb_lines % _sfte.term.sb_cap;
     _sfte.term.sb_offset = 0;
-    _sfte.term.sb_len = 0;
+    _sfte.term.sb_len = sb_lines;
 #endif  // SFTE_SCROLLBACK_CAP
-
-    uint8_t *new_tabs = (uint8_t *)malloc(new_cols);
-    for (int i = 0; i < new_cols; ++i)
-        if (i < _sfte.term.cols)
-            new_tabs[i] = _sfte.term.tab_stops[i];
-        else
-            new_tabs[i] = (i % 8 == 0);
-    free(_sfte.term.tab_stops);
-    _sfte.term.tab_stops = new_tabs;
-
-    int min_cols = new_cols < _sfte.term.cols ? new_cols : _sfte.term.cols;
-    int min_rows = new_rows < _sfte.term.rows ? new_rows : _sfte.term.rows;
-
-    for (int r = 0; r < min_rows; ++r)
-        for (int c = 0; c < min_cols; ++c) {
-            new_cells[r * new_cols + c] = _sfte.term.cells[r * _sfte.term.cols + c];
-            if (new_alt_cells)
-                new_alt_cells[r * new_cols + c] = _sfte.term.alt_cells[r * _sfte.term.cols + c];
-        }
-
-    free(_sfte.term.cells);
-    _sfte.term.cells = new_cells;
-    if (_sfte.term.alt_cells) {
-        free(_sfte.term.alt_cells);
-        _sfte.term.alt_cells = new_alt_cells;
-    }
 
     _sfte.term.cols = new_cols;
     _sfte.term.rows = new_rows;
-
     _sfte.term.scroll_top = 0;
     _sfte.term.scroll_bottom = new_rows - 1;
 
-    if (_sfte.term.cursor_x >= new_cols) _sfte.term.cursor_x = new_cols - 1;
-    if (_sfte.term.cursor_y >= new_rows) _sfte.term.cursor_y = new_rows - 1;
-
     _sfte_dirty_range(0, new_cols * new_rows);
+
+    uint8_t *new_tabs = (uint8_t *)malloc(new_cols);
+    for (int i = 0; i < new_cols; ++i) new_tabs[i] = (i % 8 == 0);
+    free(_sfte.term.tab_stops);
+    _sfte.term.tab_stops = new_tabs;
 
     struct winsize ws = {.ws_row = (unsigned short)new_rows,
                          .ws_col = (unsigned short)new_cols,
@@ -1567,6 +1699,7 @@ static inline void _sfte_clear_cells(int start_idx, int cnt) {
         _sfte.term.cells[start_idx + i].bg = _sfte.term.cur_bg;
         _sfte.term.cells[start_idx + i].attr = 0;
         _sfte.term.cells[start_idx + i].dirty = 1;
+        _sfte.term.cells[start_idx + i].wrapped = 0;
     }
 }
 
@@ -1619,6 +1752,7 @@ static void _sfte_scroll(int lines) {
 static inline void _sfte_check_wrap(void) {
     if (_sfte.term.cursor_x >= _sfte.term.cols) {
         if (_sfte.term.auto_wrap) {
+            _sfte.term.cells[_SFTE_IDX(_sfte.term.cols - 1, _sfte.term.cursor_y)].wrapped = 1;
             _sfte.term.cursor_x = 0;
             if (_sfte.term.cursor_y == _sfte.term.scroll_bottom)
                 _sfte_scroll(1);
