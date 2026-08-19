@@ -121,6 +121,10 @@
 #define SFTE_SCROLLBACK_CAP 2000
 #endif  // SFTE_SCROLLBACK_CAP
 
+#ifndef SFTE_ALT_SCREEN
+#define SFTE_ALT_SCREEN 1
+#endif  // SFTE_ALT_SCREEN
+
 #define SFTE_MOD_CTRL 0b001
 #define SFTE_MOD_ALT 0b010
 #define SFTE_MOD_SHIFT 0b100
@@ -228,7 +232,6 @@ typedef struct {
 
 typedef struct {
     sfte_cell *cells;
-    sfte_cell *alt_cells;
     int cols;
     int rows;
     char title[256];
@@ -271,8 +274,11 @@ typedef struct {
     int cursor_y;
     uint8_t hide_cursor;
     uint8_t cursor_style;  // block/underline/bar (lsb)
-    // alt screen state
+// alt screen state
+#if SFTE_ALT_SCREEN
     int alt_active;  // tracks if in alt buffer
+    sfte_cell *alt_cells;
+#endif  // SFTE_ALT_SCREEN
 
     int scroll_top;
     int scroll_bottom;
@@ -803,7 +809,9 @@ static inline sfte_cell *_sfte_get_view_cell(int c, int r) {
 static void _sfte_view_scroll(const sfte_arg *arg) {
     (void)arg;
 #if SFTE_SCROLLBACK_CAP
+#if SFTE_ALT_SCREEN
     if (_sfte.term.alt_active) return;
+#endif  // SFTE_ALT_SCREEN
 
     int delta = arg->i;
     int new_off = _sfte.term.sb_offset + delta;
@@ -1387,7 +1395,9 @@ static void _sfte_wayland_unload(void) {
 #endif  // SFTE_FONT_ITALIC_PATH
     free(_sfte.font.atlas_pxs);
     free(_sfte.term.cells);
+#if SFTE_ALT_SCREEN
     free(_sfte.term.alt_cells);
+#endif  // SFTE_ALT_SCREEN
 #if SFTE_SCROLLBACK_CAP
     free(_sfte.term.scrollback);
 #endif  // SFTE_SCROLLBACK_CAP
@@ -1517,11 +1527,19 @@ static void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell c, int is_cursor)
 }
 
 static void _sfte_term_resize(int new_cols, int new_rows) {
+#if SFTE_ALT_SCREEN
     sfte_cell *main_old = _sfte.term.alt_active ? _sfte.term.alt_cells : _sfte.term.cells;
     sfte_cell *alt_old = _sfte.term.alt_active ? _sfte.term.cells : NULL;
 
     int target_cx = _sfte.term.alt_active ? _sfte.term.ansi_saved_x : _sfte.term.cursor_x;
     int target_cy = _sfte.term.alt_active ? _sfte.term.ansi_saved_y : _sfte.term.cursor_y;
+#else
+    sfte_cell *main_old = _sfte.term.cells;
+    sfte_cell *alt_old = NULL;
+
+    int target_cx = _sfte.term.cursor_x;
+    int target_cy = _sfte.term.cursor_y;
+#endif  // !SFTE_ALT_SCREEN
 
     int max_temp_rows = (
 #if SFTE_SCROLLBACK_CAP
@@ -1627,15 +1645,20 @@ static void _sfte_term_resize(int new_cols, int new_rows) {
         memcpy(&new_main[i * new_cols], &temp_rows[(screen_top + i) * new_cols],
                new_cols * sizeof(sfte_cell));
 
-    // anchor cursors
+// anchor cursors
+#if SFTE_ALT_SCREEN
     if (_sfte.term.alt_active) {
         _sfte.term.ansi_saved_x = st.new_cx;
         _sfte.term.ansi_saved_y = _SFTE_CLAMP(st.new_cy - screen_top, 0, new_rows - 1);
     } else {
+#endif  // SFTE_ALT_SCREEN
         _sfte.term.cursor_x = st.new_cx;
         _sfte.term.cursor_y = _SFTE_CLAMP(st.new_cy - screen_top, 0, new_rows - 1);
+#if SFTE_ALT_SCREEN
     }
+#endif  // SFTE_ALT_SCREEN
 
+#if SFTE_ALT_SCREEN
     // hard copy alt grid
     // NOTE: alt grid gets no reflow, it destroys visuals of alt-screen based interfaces
     sfte_cell *new_alt = NULL;
@@ -1650,13 +1673,18 @@ static void _sfte_term_resize(int new_cols, int new_rows) {
         if (_sfte.term.cursor_x >= new_cols) _sfte.term.cursor_x = new_cols - 1;
         if (_sfte.term.cursor_y >= new_rows) _sfte.term.cursor_y = new_rows - 1;
     }
+#endif  // SFTE_ALT_SCREEN
 
     free(_sfte.term.cells);
-    if (_sfte.term.alt_cells) free(_sfte.term.alt_cells);
     free(temp_rows);
 
+#if SFTE_ALT_SCREEN
+    if (_sfte.term.alt_cells) free(_sfte.term.alt_cells);
     _sfte.term.cells = _sfte.term.alt_active ? new_alt : new_main;
     _sfte.term.alt_cells = _sfte.term.alt_active ? new_main : NULL;
+#else
+    _sfte.term.cells = new_main;
+#endif  // !SFTE_ALT_SCREEN
 
 #if SFTE_SCROLLBACK_CAP
     if (_sfte.term.scrollback) free(_sfte.term.scrollback);
@@ -1713,7 +1741,11 @@ static void _sfte_scroll(int lines) {
         if (lines > height) lines = height;
 
 #if SFTE_SCROLLBACK_CAP
-        if (top == 0 && !_sfte.term.alt_active) {
+        if (top == 0
+#if SFTE_ALT_SCREEN
+            && !_sfte.term.alt_active
+#endif  // SFTE_ALT_SCREEN
+        ) {
             for (int i = 0; i < lines; ++i) {
                 int ring_idx = _sfte.term.sb_head * cols;
                 int screen_idx = i * cols;
@@ -2118,6 +2150,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
                 _sfte.term.ansi_saved_attr = _sfte.term.cur_attr;
             }
 
+#if SFTE_ALT_SCREEN
             // 1047 / 1049 switch to alt screen
             if ((p[0] == 1047 || p[0] == 1049) && !_sfte.term.alt_active) {
                 _sfte.term.alt_active = 1;
@@ -2133,6 +2166,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
                 _sfte.term.cells = _sfte.term.alt_cells;
                 _sfte.term.alt_cells = tmp;
             }
+#endif  // SFTE_ALT_SCREEN
 
             if (p[0] == 1049) {
                 _sfte_clear_cells(0, _sfte.term.cols * _sfte.term.rows);
@@ -2162,6 +2196,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
             _sfte.term.cursor_x = 0;
             _sfte.term.cursor_y = 0;
         } else if (p[0] == 1047 || p[0] == 1048 || p[0] == 1049) {
+#if SFTE_ALT_SCREEN
             if ((p[0] == 1047 || p[0] == 1049) && _sfte.term.alt_active) {
                 _sfte.term.alt_active = 0;
 
@@ -2172,6 +2207,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
                     _sfte_dirty_range(0, _sfte.term.cols * _sfte.term.rows);
                 }
             }
+#endif  // SFTE_ALT_SCREEN
 
             if (p[0] == 1048 || p[0] == 1049) {
                 _sfte.term.cursor_x = _SFTE_CLAMP(_sfte.term.ansi_saved_x, 0, _sfte.term.cols - 1);
