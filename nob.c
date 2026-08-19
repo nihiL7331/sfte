@@ -62,8 +62,9 @@ int main(int argc, char **argv) {
 
     if (!build_amalgamation("sfte.h", "sfte_release.h")) return 1;
 
-    nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-O3", "config.c", "-o", "sfte",
-                   "-lwayland-client", "-lrt", "-lm", "-D_GNU_SOURCE", "-lutil", "-lxkbcommon");
+    nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-O3", "-flto", "-march=native", "config.c",
+                   "-o", "sfte", "-lwayland-client", "-lrt", "-lm", "-D_GNU_SOURCE", "-lutil",
+                   "-lxkbcommon");
     if (!nob_cmd_run_sync(cmd)) return 1;
 
     return 0;
