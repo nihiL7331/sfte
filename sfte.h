@@ -221,6 +221,7 @@ int sfte_run(void);
 #endif  // SFTE_CURSOR_BLINK
 
 // >>structs
+#ifndef SFTE_NO_LOGGING
 typedef struct sfte_logger {
     void (*func)(const char *tag,              // always "sfte"
                  uint32_t log_level,           // 0=panic, 1=error, 2=warning, 3=info
@@ -228,6 +229,7 @@ typedef struct sfte_logger {
                  uint32_t line_nr              // line number in sfte.h
     );
 } sfte_logger;
+#endif  // !SFTE_NO_LOGGING
 
 typedef enum {
     ATTR_NONE = 0b0000,
@@ -407,7 +409,9 @@ typedef struct {
     int32_t repeat_delay;
     uint32_t repeating_key;
 
+#ifndef SFTE_NO_LOGGING
     sfte_logger logger;
+#endif  // !SFTE_NO_LOGGING
     sfte_term term;
     sfte_font font;
 } _sfte_state;
@@ -427,6 +431,8 @@ static inline void _sfte_dirty_range(int start_idx, int cnt) {
 #include <assert.h>
 #define SFTE_ASSERT(c, m) assert(c &&m)
 #endif  // SFTE_ASSERT
+
+#ifndef SFTE_NO_LOGGING
 
 static void _sfte_logger_default(const char *tag, uint32_t log_level, const char *msg,
                                  uint32_t line_nr) {
@@ -480,6 +486,21 @@ static void _sfte_log(_sfte_log_item_t log_item, uint32_t log_level, uint32_t li
 #define _SFTE_ERROR(code, ...) _sfte_log(code, 1, __LINE__, ##__VA_ARGS__)
 #define _SFTE_WARN(code, ...) _sfte_log(code, 2, __LINE__, ##__VA_ARGS__)
 #define _SFTE_INFO(code, ...) _sfte_log(code, 3, __LINE__, ##__VA_ARGS__)
+
+#else
+
+#define _SFTE_PANIC(code, ...) abort()
+#define _SFTE_ERROR(code, ...)                                                                     \
+    do {                                                                                           \
+    } while (0)
+#define _SFTE_WARN(code, ...)                                                                      \
+    do {                                                                                           \
+    } while (0)
+#define _SFTE_INFO(code, ...)                                                                      \
+    do {                                                                                           \
+    } while (0)
+
+#endif  // !SFTE_NO_LOGGING
 
 // >>font
 static sfte_glyph *_sfte_font_get_glyph(uint32_t rune
@@ -1485,7 +1506,9 @@ static void _sfte_state_load(void) {
     memset(&_sfte, 0, sizeof(_sfte));
 
     _sfte.running = 1;
+#ifndef SFTE_NO_LOGGING
     _sfte.logger.func = SFTE_LOGGER_FUNC;
+#endif  // !SFTE_NO_LOGGING
     _sfte.term.cols = 80;
     _sfte.term.rows = 24;
     _sfte.term.auto_wrap = 1;
