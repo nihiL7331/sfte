@@ -81,6 +81,10 @@
      0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C, 0xEBDBB2}
 #endif  // SFTE_ANSI_PALETTE
 
+#ifndef SFTE_TRUE_COLOR
+#define SFTE_TRUE_COLOR 1
+#endif  // SFTE_TRUE_COLOR
+
 #ifndef SFTE_PAD_X  // in pxs
 #define SFTE_PAD_X 8
 #endif  // SFTE_PAD_X
@@ -1824,9 +1828,11 @@ static inline void _sfte_check_wrap(void) {
     }
 }
 
+#if SFTE_TRUE_COLOR
 static inline uint32_t _sfte_parse_truecolor(int *p, int i) {
     return (p[i + 2] << 16) | (p[i + 3] << 8) | p[i + 4];
 }
+#endif  // SFTE_TRUE_COLOR
 
 static void _sfte_dispatch_csi(uint8_t cmd) {
     int *p = _sfte.term.vt_params;
@@ -2284,10 +2290,14 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
             else if (p[i] == 49)  // default bg
                 _sfte.term.cur_bg = SFTE_BG_COLOR;
             else if (p[i] == 38 && i + 4 < cnt && p[i + 1] == 2) {  // true fg
+#if SFTE_TRUE_COLOR
                 _sfte.term.cur_fg = _sfte_parse_truecolor(p, i);
+#endif  // SFTE_TRUE_COLOR
                 i += 4;
             } else if (p[i] == 48 && i + 4 < cnt && p[i + 1] == 2) {  // true bg
+#if SFTE_TRUE_COLOR
                 _sfte.term.cur_bg = _sfte_parse_truecolor(p, i);
+#endif  // SFTE_TRUE_COLOR
                 i += 4;
             }
         }
