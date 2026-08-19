@@ -71,6 +71,10 @@
 #define SFTE_DEFAULT_FONT_SIZE 12.0f
 #endif  // SFTE_DEFAULT_FONT_SIZE
 
+#ifndef SFTE_FONT_ZOOM
+#define SFTE_FONT_ZOOM 1
+#endif  // SFTE_FONT_ZOOM
+
 #ifndef SFTE_ANSI_PALETTE
 #define SFTE_ANSI_PALETTE                                                                          \
     {0x181818, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0xA89984,               \
@@ -145,16 +149,26 @@ typedef struct {
 
 static void _sfte_view_scroll(const sfte_arg *arg);
 
-#ifndef SFTE_SHORTCUTS
-#define SFTE_SHORTCUTS                                                                             \
-    {                                                                                              \
-        {SFTE_MOD_SHIFT, XKB_KEY_Page_Up, _sfte_view_scroll, {.i = 10}},                           \
-        {SFTE_MOD_SHIFT, XKB_KEY_Page_Down, _sfte_view_scroll, {.i = -10}},                        \
-        {SFTE_MOD_CTRL, XKB_KEY_equal, _sfte_font_resize, {.f = 2.0f}},                            \
+#if SFTE_FONT_ZOOM
+#define _SFTE_ZOOM_BINDS                                                                           \
+    {SFTE_MOD_CTRL, XKB_KEY_equal, _sfte_font_resize, {.f = 2.0f}},                                \
         {SFTE_MOD_CTRL, XKB_KEY_plus, _sfte_font_resize, {.f = 2.0f}},                             \
         {SFTE_MOD_CTRL, XKB_KEY_minus, _sfte_font_resize, {.f = -2.0f}},                           \
-        {SFTE_MOD_CTRL, XKB_KEY_0, _sfte_font_reset, {.v = NULL}},                                 \
-    }
+        {SFTE_MOD_CTRL, XKB_KEY_0, _sfte_font_reset, {.v = NULL}},
+#else
+#define _SFTE_ZOOM_BINDS
+#endif  // !SFTE_FONT_ZOOM
+
+#if SFTE_SCROLLBACK_CAP
+#define _SFTE_SCROLL_BINDS                                                                         \
+    {SFTE_MOD_SHIFT, XKB_KEY_Page_Up, _sfte_view_scroll, {.i = 10}},                               \
+        {SFTE_MOD_SHIFT, XKB_KEY_Page_Down, _sfte_view_scroll, {.i = -10}},
+#else
+#define _SFTE_SCROLL_BINDS
+#endif  // !SFTE_SCROLLBACK_CAP
+
+#ifndef SFTE_SHORTCUTS
+#define SFTE_SHORTCUTS {_SFTE_ZOOM_BINDS _SFTE_SCROLL_BINDS}
 #endif  // SFTE_SHORTCUTS
 
 // >>api
@@ -655,6 +669,7 @@ static void _sfte_font_load(void) {
 static void _sfte_wayland_render(void);
 static void _sfte_term_resize(int new_cols, int new_rows);
 
+#if SFTE_FONT_ZOOM
 static void _sfte_font_resize(const sfte_arg *arg) {
     float delta = arg->f;
 
@@ -680,6 +695,7 @@ static void _sfte_font_reset(const sfte_arg *dummy) {
     const sfte_arg arg = {.f = SFTE_DEFAULT_FONT_SIZE - _sfte.font.cur_size};
     _sfte_font_resize(&arg);
 }
+#endif  // SFTE_FONT_ZOOM
 
 static const sfte_shortcut _sfte_shortcuts[] = SFTE_SHORTCUTS;
 
@@ -806,9 +822,8 @@ static inline sfte_cell *_sfte_get_view_cell(int c, int r) {
 #endif  // !SFTE_SCROLLBACK_CAP
 }
 
-static void _sfte_view_scroll(const sfte_arg *arg) {
-    (void)arg;
 #if SFTE_SCROLLBACK_CAP
+static void _sfte_view_scroll(const sfte_arg *arg) {
 #if SFTE_ALT_SCREEN
     if (_sfte.term.alt_active) return;
 #endif  // SFTE_ALT_SCREEN
@@ -825,8 +840,8 @@ static void _sfte_view_scroll(const sfte_arg *arg) {
         _sfte_dirty_range(0, _sfte.term.cols * _sfte.term.rows);
         _sfte_wayland_render();
     }
-#endif  // SFTE_SCROLLBACK_CAP
 }
+#endif  // SFTE_SCROLLBACK_CAP
 
 static void _sfte_wayland_render(void) {
     int new_cols = (_sfte.width - (2 * SFTE_PAD_X)) / _sfte.font.cell_width;
