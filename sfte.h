@@ -67,9 +67,9 @@
 #define SFTE_BG_OPACITY 0xFF
 #endif  // SFTE_BG_OPACITY
 
-#ifndef SFTE_DEFAULT_FONT_SIZE
-#define SFTE_DEFAULT_FONT_SIZE 12.0f
-#endif  // SFTE_DEFAULT_FONT_SIZE
+#ifndef SFTE_FONT_DEFAULT_SIZE
+#define SFTE_FONT_DEFAULT_SIZE 12.0f
+#endif  // SFTE_FONT_DEFAULT_SIZE
 
 #ifndef SFTE_FONT_ZOOM
 #define SFTE_FONT_ZOOM 1
@@ -345,7 +345,7 @@ typedef struct {
     uint8_t *ttf_bold_italic_buf;
 #endif  // SFTE_FONT_BOLD_ITALIC_PATH
 
-    float cur_size;  // starts at SFTE_DEFAULT_FONT_SIZE
+    float cur_size;  // starts at SFTE_FONT_DEFAULT_SIZE
 
     uint8_t *atlas_pxs;
     int atlas_width;
@@ -628,7 +628,7 @@ static void _sfte_font_reset_cache(void) {
 }
 
 static void _sfte_font_load(void) {
-    _sfte.font.cur_size = SFTE_DEFAULT_FONT_SIZE;
+    _sfte.font.cur_size = SFTE_FONT_DEFAULT_SIZE;
     _sfte.font.atlas_width = 1024;
     _sfte.font.atlas_height = 1024;
 
@@ -733,7 +733,7 @@ static void _sfte_font_resize(const sfte_arg *arg) {
 
 static void _sfte_font_reset(const sfte_arg *dummy) {
     (void)dummy;
-    const sfte_arg arg = {.f = SFTE_DEFAULT_FONT_SIZE - _sfte.font.cur_size};
+    const sfte_arg arg = {.f = SFTE_FONT_DEFAULT_SIZE - _sfte.font.cur_size};
     _sfte_font_resize(&arg);
 }
 #endif  // SFTE_FONT_ZOOM
