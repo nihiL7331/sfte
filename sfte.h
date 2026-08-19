@@ -117,6 +117,10 @@
 #define SFTE_CURSOR_BLINK_RATE 500
 #endif  // SFTE_CURSOR_BLINK_RATE
 
+// WARN: it relies on double buffer behavior:
+// #define SFTE_CURSOR_TRAIL >0
+// #define SFTE_DOUBLE_BUFFER 0
+// WILL provide unexpected behavior, permanent smearing, etc.
 #ifndef SFTE_CURSOR_TRAIL
 #define SFTE_CURSOR_TRAIL 0
 #endif  // SFTE_CURSOR_TRAIL
@@ -136,6 +140,10 @@
 #ifndef SFTE_ALT_SCREEN
 #define SFTE_ALT_SCREEN 1
 #endif  // SFTE_ALT_SCREEN
+
+#ifndef SFTE_DOUBLE_BUFFER
+#define SFTE_DOUBLE_BUFFER 1
+#endif  // SFTE_DOUBLE BUFFER
 
 #define SFTE_MOD_CTRL 0b001
 #define SFTE_MOD_ALT 0b010
@@ -382,7 +390,9 @@ typedef struct {
     struct xdg_toplevel *xdg_toplevel;
     struct wl_buffer *buffer;
     uint32_t *shm_data;
+#if SFTE_DOUBLE_BUFFER
     uint32_t *back_buffer;
+#endif  // SFTE_DOUBLE_BUFFER
     int shm_size;
 
     int pty_fd;     // master fd to r/w from
@@ -710,6 +720,12 @@ static void _sfte_font_reset(const sfte_arg *dummy) {
 static const sfte_shortcut _sfte_shortcuts[] = SFTE_SHORTCUTS;
 
 // >>render
+#if SFTE_DOUBLE_BUFFER
+#define _SFTE_RENDER_BUF (_sfte.back_buffer)
+#else
+#define _SFTE_RENDER_BUF (_sfte.shm_data)
+#endif  // !SFTE_DOUBLE_BUFFER
+
 static void _sfte_render_bg(int col, int row, uint32_t bg) {
     int cx = col * _sfte.font.cell_width + SFTE_PAD_X;
     int cy = row * _sfte.font.cell_height + SFTE_PAD_Y;
@@ -718,7 +734,7 @@ static void _sfte_render_bg(int col, int row, uint32_t bg) {
     for (int y = 0; y < _sfte.font.cell_height; ++y) {
         for (int x = 0; x < _sfte.font.cell_width; ++x) {
             int px_idx = (cy + y) * _sfte.width + (cx + x);
-            if (px_idx < _sfte.width * _sfte.height) _sfte.back_buffer[px_idx] = final_bg;
+            if (px_idx < _sfte.width * _sfte.height) _SFTE_RENDER_BUF[px_idx] = final_bg;
         }
     }
 }
@@ -773,9 +789,9 @@ static void _sfte_render_fg(int col, int row, uint32_t rune, uint32_t fg
             int px_idx = screen_y * _sfte.width + screen_x;
 
             if (alpha == 255)
-                _sfte.back_buffer[px_idx] = (0xFF << 24) | (fg & 0x00FFFFFF);
+                _SFTE_RENDER_BUF[px_idx] = (0xFF << 24) | (fg & 0x00FFFFFF);
             else {
-                uint32_t dst = _sfte.back_buffer[px_idx];
+                uint32_t dst = _SFTE_RENDER_BUF[px_idx];
                 uint8_t bg_r = (dst >> 16) & 0xFF;
                 uint8_t bg_g = (dst >> 8) & 0xFF;
                 uint8_t bg_b = dst & 0xFF;
@@ -784,8 +800,8 @@ static void _sfte_render_fg(int col, int row, uint32_t rune, uint32_t fg
                 uint8_t col_g = (fg_g * alpha + bg_g * (255 - alpha)) >> 8;
                 uint8_t col_b = (fg_b * alpha + bg_b * (255 - alpha)) >> 8;
 
-                _sfte.back_buffer[px_idx] = (SFTE_BG_OPACITY << 24) | (col_r << 16) | (col_g << 8) |
-                                            col_b;
+                _SFTE_RENDER_BUF[px_idx] = (SFTE_BG_OPACITY << 24) | (col_r << 16) | (col_g << 8) |
+                                           col_b;
             }
         }
     }
@@ -804,9 +820,11 @@ static void _sfte_wayland_create_buffer(void) {
                                       0);
     SFTE_ASSERT(_sfte.shm_data != MAP_FAILED, "failed to mmap shm data");
 
+#if SFTE_DOUBLE_BUFFER
     if (_sfte.back_buffer) free(_sfte.back_buffer);
     _sfte.back_buffer = (uint32_t *)malloc(_sfte.shm_size);
     SFTE_ASSERT(_sfte.back_buffer, "failed to allocate back buffer");
+#endif  // SFTE_DOUBLE_BUFFER
 
     struct wl_shm_pool *pool = wl_shm_create_pool(_sfte.shm, fd, _sfte.shm_size);
     _sfte.buffer = wl_shm_pool_create_buffer(pool, 0, _sfte.width, _sfte.height, stride,
@@ -980,7 +998,7 @@ static void _sfte_wayland_render(void) {
                      y < cy + _sfte.font.cell_height; ++y)
                     for (int x = cx; x < cx + _sfte.font.cell_width; ++x)
                         if (x < _sfte.width && y < _sfte.height)
-                            _sfte.back_buffer[y * _sfte.width + x] = underline_col;
+                            _SFTE_RENDER_BUF[y * _sfte.width + x] = underline_col;
             }
 
             if (is_cursor && _SFTE_CUR_STYLE != SFTE_CURSOR_BLOCK) {  // bar / underline
@@ -997,7 +1015,7 @@ static void _sfte_wayland_render(void) {
                          y < cy + _sfte.font.cell_height; ++y)
                         for (int x = cx; x < cx + _sfte.font.cell_width; ++x)
                             if (x < _sfte.width && y < _sfte.height)
-                                _sfte.back_buffer[y * _sfte.width + x] = cur_col;
+                                _SFTE_RENDER_BUF[y * _sfte.width + x] = cur_col;
                 } else if (_SFTE_CUR_STYLE == SFTE_CURSOR_BAR) {
                     int thickness = _sfte.font.cell_width / 10;
                     if (thickness < 1) thickness = 1;
@@ -1005,7 +1023,7 @@ static void _sfte_wayland_render(void) {
                     for (int y = cy; y < cy + _sfte.font.cell_height; ++y)
                         for (int x = cx; x < cx + thickness; ++x)
                             if (x < _sfte.width && y < _sfte.height)
-                                _sfte.back_buffer[y * _sfte.width + x] = cur_col;
+                                _SFTE_RENDER_BUF[y * _sfte.width + x] = cur_col;
                 }
             }
 
@@ -1017,7 +1035,9 @@ static void _sfte_wayland_render(void) {
         }
     }
 
+#if SFTE_DOUBLE_BUFFER
     memcpy(_sfte.shm_data, _sfte.back_buffer, _sfte.shm_size);
+#endif  // SFTE_DOUBLE_BUFFER
 
 #if SFTE_CURSOR_TRAIL
     if (_sfte.term.trail_damage_w > 0)
@@ -1415,7 +1435,9 @@ static void _sfte_wayland_load(void) {
 }
 
 static void _sfte_wayland_unload(void) {
+#if SFTE_DOUBLE_BUFFER
     free(_sfte.back_buffer);
+#endif  // SFTE_DOUBLE_BUFFER
     free(_sfte.term.tab_stops);
     free(_sfte.font.ttf_buf);
 #ifdef SFTE_FONT_BOLD_PATH
@@ -1748,7 +1770,9 @@ static void _sfte_term_resize(int new_cols, int new_rows) {
 
     uint32_t clear_col = (SFTE_BG_COLOR & 0x00FFFFFF) | (SFTE_BG_OPACITY << 24);
     for (int i = 0; i < _sfte.width * _sfte.height; ++i) _sfte.shm_data[i] = clear_col;
+#if SFTE_DOUBLE_BUFFER
     for (int i = 0; i < _sfte.width * _sfte.height; ++i) _sfte.back_buffer[i] = clear_col;
+#endif  // SFTE_DOUBLE_BUFFER
 
     _SFTE_INFO(TERM_RESIZE, new_cols, new_rows);
 }
