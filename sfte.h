@@ -97,6 +97,10 @@
 #define SFTE_CURSOR_STYLE SFTE_CURSOR_BLOCK
 #endif  // SFTE_CURSOR_STYLE
 
+#ifndef SFTE_CURSOR_DYNAMIC
+#define SFTE_CURSOR_DYNAMIC 1
+#endif  // SFTE_CURSOR_DYNAMIC
+
 #ifndef SFTE_CURSOR_COLOR  // RGB
 #define SFTE_CURSOR_COLOR 0xFFFFFF
 #endif  // SFTE_CURSOR_COLOR
@@ -287,7 +291,9 @@ typedef struct {
     int cursor_x;
     int cursor_y;
     uint8_t hide_cursor;
-    uint8_t cursor_style;  // block/underline/bar (lsb)
+#if SFTE_CURSOR_DYNAMIC
+    uint8_t cursor_style;  // block/underline/bar
+#endif                     // SFTE_CURSOR_DYNAMIC
 // alt screen state
 #if SFTE_ALT_SCREEN
     int alt_active;  // tracks if in alt buffer
@@ -843,6 +849,12 @@ static void _sfte_view_scroll(const sfte_arg *arg) {
 }
 #endif  // SFTE_SCROLLBACK_CAP
 
+#if SFTE_CURSOR_DYNAMIC
+#define _SFTE_CUR_STYLE (_sfte.term.cursor_style)
+#else
+#define _SFTE_CUR_STYLE (SFTE_CURSOR_STYLE)
+#endif  // !SFTE_CURSOR_DYNAMIC
+
 static void _sfte_wayland_render(void) {
     int new_cols = (_sfte.width - (2 * SFTE_PAD_X)) / _sfte.font.cell_width;
     if (new_cols < 1) new_cols = 1;
@@ -896,7 +908,7 @@ static void _sfte_wayland_render(void) {
             if (!_sfte.term.blink_visible) is_cursor = 0;
 #endif  // SFTE_CURSOR_BLINK
 
-            if (is_cursor && _sfte.term.cursor_style == SFTE_CURSOR_BLOCK)
+            if (is_cursor && _SFTE_CUR_STYLE == SFTE_CURSOR_BLOCK)
                 _sfte_render_bg(c, r, fg);  // inverse if under cursor block
             else
                 _sfte_render_bg(c, r, bg);
@@ -938,7 +950,7 @@ static void _sfte_wayland_render(void) {
 #endif  // SFTE_CURSOR_BLINK
 
             uint32_t draw_fg = fg;
-            if (is_cursor && _sfte.term.cursor_style == SFTE_CURSOR_BLOCK) draw_fg = bg;
+            if (is_cursor && _SFTE_CUR_STYLE == SFTE_CURSOR_BLOCK) draw_fg = bg;
 
             _sfte_render_fg(c, r, rune, draw_fg
 #if defined(SFTE_FONT_BOLD_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
@@ -967,13 +979,13 @@ static void _sfte_wayland_render(void) {
                             _sfte.back_buffer[y * _sfte.width + x] = underline_col;
             }
 
-            if (is_cursor && _sfte.term.cursor_style != SFTE_CURSOR_BLOCK) {  // bar / underline
+            if (is_cursor && _SFTE_CUR_STYLE != SFTE_CURSOR_BLOCK) {  // bar / underline
                 int cx = c * _sfte.font.cell_width + SFTE_PAD_X;
                 int cy = r * _sfte.font.cell_height + SFTE_PAD_Y;
 
                 uint32_t cur_col = (SFTE_CURSOR_COLOR & 0x00FFFFFF) | (0xFF << 24);
 
-                if (_sfte.term.cursor_style == SFTE_CURSOR_UNDERLINE) {
+                if (_SFTE_CUR_STYLE == SFTE_CURSOR_UNDERLINE) {
                     int thickness = _sfte.font.cell_height / 10;
                     if (thickness < 1) thickness = 1;
 
@@ -982,7 +994,7 @@ static void _sfte_wayland_render(void) {
                         for (int x = cx; x < cx + _sfte.font.cell_width; ++x)
                             if (x < _sfte.width && y < _sfte.height)
                                 _sfte.back_buffer[y * _sfte.width + x] = cur_col;
-                } else if (_sfte.term.cursor_style == SFTE_CURSOR_BAR) {
+                } else if (_SFTE_CUR_STYLE == SFTE_CURSOR_BAR) {
                     int thickness = _sfte.font.cell_width / 10;
                     if (thickness < 1) thickness = 1;
 
@@ -1479,7 +1491,9 @@ static void _sfte_state_load(void) {
     _sfte.term.last_move_ms = 0;
     _sfte.term.is_trailing = 0;
 #endif  // SFTE_CURSOR_TRAIL
+#if SFTE_CURSOR_DYNAMIC
     _sfte.term.cursor_style = SFTE_CURSOR_STYLE;
+#endif  // SFTE_CURSOR_DYNAMIC
     _sfte.term.scroll_top = 0;
     _sfte.term.scroll_bottom = _sfte.term.rows - 1;
 
@@ -2307,7 +2321,9 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
 #if SFTE_CURSOR_TRAIL
         _sfte.term.last_move_ms = 0;
 #endif  // SFTE_CURSOR_TRAIL
+#if SFTE_CURSOR_DYNAMIC
         _sfte.term.cursor_style = SFTE_CURSOR_STYLE;
+#endif  // SFTE_CURSOR_DYNAMIC
         _sfte.term.scroll_top = 0;
         _sfte.term.scroll_bottom = _sfte.term.rows - 1;
         _sfte.term.cur_fg = 0xFFFFFF;
@@ -2336,6 +2352,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         }
 #endif  // SFTE_CURSOR_BLINK
 
+#if SFTE_CURSOR_DYNAMIC
         switch (style) {
         case 0: _sfte.term.cursor_style = SFTE_CURSOR_STYLE; break;
         case 1:
@@ -2345,6 +2362,7 @@ static void _sfte_dispatch_csi(uint8_t cmd) {
         case 5:
         case 6: _sfte.term.cursor_style = SFTE_CURSOR_BAR; break;
         }
+#endif  // SFTE_CURSOR_DYNAMIC
 
         _sfte.term.cells[_SFTE_IDX(cx, _sfte.term.cursor_y)].dirty = 1;
         break;
