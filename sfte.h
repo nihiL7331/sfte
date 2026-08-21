@@ -149,6 +149,23 @@
 #define SFTE_REFLOW 1
 #endif  // SFTE_REFLOW
 
+#ifndef SFTE_SELECTION
+#define SFTE_SELECTION 1
+#endif  // SFTE_SELECTION
+
+// NOTE: SFTE_CLIPBOARD implicity enables SFTE_SELECTION
+#ifndef SFTE_CLIPBOARD
+#define SFTE_CLIPBOARD 1
+#endif  // SFTE_CLIPBOARD
+
+#ifndef SFTE_CLIPBOARD_BUF_SIZE
+#define SFTE_CLIPBOARD_BUF_SIZE 4096
+#endif  // SFTE_CLIPBOARD_BUF_SIZE
+
+#if SFTE_CLIPBOARD
+#define SFTE_SELECTION 1
+#endif  // SFTE_CLIPBOARD
+
 #define SFTE_MOD_CTRL 0b001
 #define SFTE_MOD_ALT 0b010
 #define SFTE_MOD_SHIFT 0b100
@@ -168,6 +185,8 @@ typedef struct {
 } sfte_shortcut;
 
 static void _sfte_view_scroll(const sfte_arg *arg);
+static void _sfte_clipboard_copy(const sfte_arg *arg);
+static void _sfte_clipboard_paste(const sfte_arg *arg);
 
 #if SFTE_FONT_ZOOM
 #define _SFTE_ZOOM_BINDS                                                                           \
@@ -187,8 +206,16 @@ static void _sfte_view_scroll(const sfte_arg *arg);
 #define _SFTE_SCROLL_BINDS
 #endif  // !SFTE_SCROLLBACK_CAP
 
+#if SFTE_CLIPBOARD
+#define _SFTE_CLIPBOARD_BINDS                                                                      \
+    {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_C, _sfte_clipboard_copy, {.v = NULL}},                \
+        {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_V, _sfte_clipboard_paste, {.v = NULL}},
+#else
+#define _SFTE_CLIPBOARD_BINDS
+#endif
+
 #ifndef SFTE_SHORTCUTS
-#define SFTE_SHORTCUTS {_SFTE_ZOOM_BINDS _SFTE_SCROLL_BINDS}
+#define SFTE_SHORTCUTS {_SFTE_ZOOM_BINDS _SFTE_SCROLL_BINDS _SFTE_CLIPBOARD_BINDS}
 #endif  // SFTE_SHORTCUTS
 
 // >>api
@@ -208,6 +235,7 @@ int sfte_run(void);
 #include <fcntl.h>
 #include <poll.h>
 #include <pty.h>  // forkpty
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>  // getenv/setenv/malloc
@@ -319,6 +347,14 @@ typedef struct {
     int alt_active;  // tracks if in alt buffer
     sfte_cell *alt_cells;
 #endif  // SFTE_ALT_SCREEN
+// mouse state
+#if SFTE_SELECTION
+    int sel_active;    // 1 if has selection
+    int sel_dragging;  // 1 if lmb is held down
+    int hover_x, hover_y;
+    int sel_start_x, sel_start_y;  // abs grid coords
+    int sel_end_x, sel_end_y;
+#endif  // SFTE_SELECTION
 
     int scroll_top;
     int scroll_bottom;
@@ -392,6 +428,17 @@ typedef struct {
     struct xkb_context *xkb_context;
     struct xkb_keymap *xkb_keymap;
     struct xkb_state *xkb_state;
+#if SFTE_SELECTION
+    struct wl_pointer *pointer;
+    uint32_t serial;
+#endif  // SFTE_SELECTION
+#if SFTE_CLIPBOARD
+    struct wl_data_device_manager *data_device_manager;
+    struct wl_data_device *data_device;
+    struct wl_data_source *data_source;
+    struct wl_data_offer *data_offer;
+    char *selection_text;
+#endif  // SFTE_CLIPBOARD
     struct xdg_wm_base *xdg_wm_base;
     struct wl_surface *surface;
     struct xdg_surface *xdg_surface;
@@ -898,6 +945,126 @@ static void _sfte_view_scroll(const sfte_arg *arg) {
 }
 #endif  // SFTE_SCROLLBACK_CAP
 
+#if SFTE_SELECTION
+static char *_sfte_extract_selection(void) {
+    if (!_sfte.term.sel_active) return NULL;
+
+    int sx = _sfte.term.sel_start_x;
+    int sy = _sfte.term.sel_start_y;
+    int ex = _sfte.term.sel_end_x;
+    int ey = _sfte.term.sel_end_y;
+
+    // if dragging backwards, flip start/end pnts
+    if (sy > ey || (sy == ey && sx > ex)) {
+        int tmp = sy;
+        sy = ey;
+        ey = tmp;
+        tmp = sx;
+        sx = ex;
+        ex = tmp;
+    }
+
+    int max_bytes = (ey - sy + 1) * (_sfte.term.cols * 4 + 1) + 1;
+    char *buf = (char *)malloc(max_bytes);
+    SFTE_ASSERT(buf, "failed to allocate temporary clipboard buffer");
+    int pos = 0;
+
+    for (int r = sy; r <= ey; ++r) {
+        int row_start = (r == sy) ? sx : 0;
+        int row_end = (r == ey) ? ex : _sfte.term.cols - 1;
+
+        int phys_r = r;
+#if SFTE_SCROLLBACK_CAP
+        phys_r += _sfte.term.sb_offset;
+#endif  // SFTE_SCROLLBACK_CAP
+
+        // trim trailing spaces if selecting to edge
+        int actual_end = row_end;
+        if (actual_end == _sfte.term.cols - 1) {
+            while (actual_end >= row_start) {
+                sfte_cell *vcell = _sfte_get_view_cell(actual_end, phys_r);
+                if (vcell->rune != ' ' && vcell->rune != 0) break;
+                actual_end--;
+            }
+        }
+
+        for (int c = row_start; c <= actual_end; ++c) {
+            sfte_cell *vcell = _sfte_get_view_cell(c, phys_r);
+            uint32_t rune = (vcell->rune && vcell->rune != ' ') ? vcell->rune : ' ';
+
+            // convert 32b to UTF-8
+            if (rune < 0x80)
+                buf[pos++] = rune;
+            else if (rune < 0x800) {
+                buf[pos++] = 0xC0 | (rune >> 6);
+                buf[pos++] = 0x80 | (rune & 0x3F);
+            } else if (rune < 0x10000) {
+                buf[pos++] = 0xE0 | (rune >> 12);
+                buf[pos++] = 0x80 | ((rune >> 6) & 0x3F);
+                buf[pos++] = 0x80 | (rune & 0x3F);
+            } else {
+                buf[pos++] = 0xF0 | (rune >> 18);
+                buf[pos++] = 0x80 | ((rune >> 12) & 0x3F);
+                buf[pos++] = 0x80 | ((rune >> 6) & 0x3F);
+                buf[pos++] = 0x80 | (rune & 0x3F);
+            }
+        }
+
+        if (r < ey) {
+#if SFTE_REFLOW
+            if (!_sfte_get_view_cell(_sfte.term.cols - 1, phys_r)->wrapped)
+#endif  // SFTE_REFLOW
+                buf[pos++] = '\n';
+        }
+    }
+
+    buf[pos] = '\0';
+    return buf;
+}
+
+static void _sfte_dirty_selection_rows(int y1, int y2) {
+    int min_y = y1 < y2 ? y1 : y2;
+    int max_y = y1 > y2 ? y1 : y2;
+
+#if SFTE_SCROLLBACK_CAP
+    min_y += _sfte.term.sb_offset;
+    max_y += _sfte.term.sb_offset;
+#endif  // SFTE_SCROLLBACK_CAP
+
+    if (min_y < 0) min_y = 0;
+    if (max_y >= _sfte.term.rows) max_y = _sfte.term.rows - 1;
+
+    if (min_y <= max_y) {
+        _sfte_dirty_range(min_y * _sfte.term.cols, (max_y - min_y + 1) * _sfte.term.cols);
+    }
+}
+
+static inline int _sfte_is_selected(int c, int logical_r) {
+    if (!_sfte.term.sel_active) return 0;
+
+    int sx = _sfte.term.sel_start_x;
+    int sy = _sfte.term.sel_start_y;
+    int ex = _sfte.term.sel_end_x;
+    int ey = _sfte.term.sel_end_y;
+
+    // if dragging backwards, flip start/end pnts
+    if (sy > ey || (sy == ey && sx > ex)) {
+        int tmp = sy;
+        sy = ey;
+        ey = tmp;
+        tmp = sx;
+        sx = ex;
+        ex = tmp;
+    }
+
+    if (logical_r < sy || logical_r > ey) return 0;
+    if (sy == ey) return (c >= sx && c <= ex);  // same line
+    if (logical_r == sy) return c >= sx;        // first line
+    if (logical_r == ey) return c <= ex;        // last line
+    return 1;                                   // middle lines
+}
+#endif  // SFTE_SELECTION
+
 #if SFTE_CURSOR_DYNAMIC
 #define _SFTE_CUR_STYLE (_sfte.term.cursor_style)
 #else
@@ -944,8 +1111,18 @@ static void _sfte_wayland_render(void) {
             sfte_cell *vcell = _sfte_get_view_cell(c, r);
             uint32_t fg = vcell->fg ? vcell->fg : 0xFFFFFF;
             uint32_t bg = vcell->bg ? vcell->bg : SFTE_BG_COLOR;
+            uint16_t attr = vcell->attr;
 
-            if (vcell->attr & ATTR_REVERSE) {
+#if SFTE_SELECTION
+            if (_sfte_is_selected(c, r
+#if SFTE_SCROLLBACK_CAP
+                                         - _sfte.term.sb_offset
+#endif  // SFTE_SCROLLBACK_CAP
+                                  ))
+                attr |= ATTR_REVERSE;
+#endif  // SFTE_SELECTION
+
+            if (attr & ATTR_REVERSE) {
                 uint32_t tmp = fg;
                 fg = bg;
                 bg = tmp;
@@ -981,8 +1158,9 @@ static void _sfte_wayland_render(void) {
 
             uint32_t fg = vcell->fg ? vcell->fg : 0xFFFFFF;
             uint32_t bg = vcell->bg ? vcell->bg : SFTE_BG_COLOR;
+            uint16_t attr = vcell->attr;
 
-            if (vcell->attr & ATTR_REVERSE) {
+            if (attr & ATTR_REVERSE) {
                 uint32_t tmp = fg;
                 fg = bg;
                 bg = tmp;
@@ -1004,15 +1182,15 @@ static void _sfte_wayland_render(void) {
             _sfte_render_fg(c, r, rune, draw_fg
 #if defined(SFTE_FONT_BOLD_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
                             ,
-                            vcell->attr & ATTR_BOLD
+                            attr & ATTR_BOLD
 #endif  // SFTE_FONT_BOLD_PATH || SFTE_FONT_BOLD_ITALIC_PATH
 #if defined(SFTE_FONT_ITALIC_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
                             ,
-                            vcell->attr & ATTR_ITALIC
+                            attr & ATTR_ITALIC
 #endif  // SFTE_FONT_ITALIC_PATH || SFTE_FONT_BOLD_ITALIC_PATH
             );
 
-            if (vcell->attr & ATTR_UNDERLINE) {
+            if (attr & ATTR_UNDERLINE) {
                 int cx = c * _sfte.font.cell_width + SFTE_PAD_X;
                 int cy = r * _sfte.font.cell_height + SFTE_PAD_Y;
 
@@ -1168,6 +1346,240 @@ static void _sfte_wayland_render(void) {
     wl_surface_commit(_sfte.surface);
 }
 
+#if SFTE_CLIPBOARD
+static void _sfte_data_offer_offer(void *data, struct wl_data_offer *offer, const char *mime_type) {
+    (void)data;
+    if (strcmp(mime_type, "text/plain;charset=utf-8") == 0 ||
+        strcmp(mime_type, "text/plain") == 0) {
+        wl_data_offer_accept(offer, _sfte.serial, mime_type);
+    }
+}
+
+static void _sfte_data_offer_source_actions(void *data, struct wl_data_offer *offer,
+                                            uint32_t actions) {
+    (void)data, (void)offer, (void)actions;
+}
+
+static void _sfte_data_offer_action(void *data, struct wl_data_offer *offer, uint32_t action) {
+    (void)data, (void)offer, (void)action;
+}
+
+static const struct wl_data_offer_listener _sfte_data_offer_listener = {
+    .offer = _sfte_data_offer_offer,
+    .source_actions = _sfte_data_offer_source_actions,
+    .action = _sfte_data_offer_action,
+};
+
+static void _sfte_data_device_data_offer(void *data, struct wl_data_device *device,
+                                         struct wl_data_offer *offer) {
+    (void)data, (void)device;
+    wl_data_offer_add_listener(offer, &_sfte_data_offer_listener, NULL);
+}
+
+static void _sfte_data_device_enter(void *data, struct wl_data_device *device, uint32_t serial,
+                                    struct wl_surface *surface, wl_fixed_t x, wl_fixed_t y,
+                                    struct wl_data_offer *offer) {
+    (void)data, (void)device, (void)serial, (void)surface, (void)x, (void)y, (void)offer;
+}
+
+static void _sfte_data_device_leave(void *data, struct wl_data_device *device) {
+    (void)data, (void)device;
+}
+
+static void _sfte_data_device_motion(void *data, struct wl_data_device *device, uint32_t time,
+                                     wl_fixed_t x, wl_fixed_t y) {
+    (void)data, (void)device, (void)time, (void)x, (void)y;
+}
+
+static void _sfte_data_device_drop(void *data, struct wl_data_device *device) {
+    (void)data, (void)device;
+}
+
+static void _sfte_data_device_selection(void *data, struct wl_data_device *device,
+                                        struct wl_data_offer *offer) {
+    if (_sfte.data_offer && _sfte.data_offer != offer) wl_data_offer_destroy(_sfte.data_offer);
+    _sfte.data_offer = offer;
+}
+
+static const struct wl_data_device_listener _sfte_data_device_listener = {
+    .data_offer = _sfte_data_device_data_offer,
+    .enter = _sfte_data_device_enter,
+    .leave = _sfte_data_device_leave,
+    .motion = _sfte_data_device_motion,
+    .drop = _sfte_data_device_drop,
+    .selection = _sfte_data_device_selection,
+};
+
+static void _sfte_data_source_target(void *data, struct wl_data_source *src,
+                                     const char *mime_type) {
+    (void)data, (void)src, (void)mime_type;
+}
+
+static void _sfte_data_source_send(void *data, struct wl_data_source *src, const char *mime_type,
+                                   int32_t fd) {
+    if (_sfte.selection_text) write(fd, _sfte.selection_text, strlen(_sfte.selection_text));
+
+    close(fd);
+}
+
+static void _sfte_data_source_cancelled(void *data, struct wl_data_source *src) {
+    wl_data_source_destroy(src);
+    if (_sfte.selection_text) {
+        free(_sfte.selection_text);
+        _sfte.selection_text = NULL;
+    }
+    _sfte.data_source = NULL;
+}
+
+static void _sfte_data_source_dnd_drop_performed(void *data, struct wl_data_source *src) {
+    (void)data, (void)src;
+}
+
+static void _sfte_data_source_dnd_finished(void *data, struct wl_data_source *src) {
+    (void)data, (void)src;
+}
+
+static void _sfte_data_source_action(void *data, struct wl_data_source *src, uint32_t action) {
+    (void)data, (void)src, (void)action;
+}
+
+static const struct wl_data_source_listener _sfte_data_source_listener = {
+    .target = _sfte_data_source_target,
+    .send = _sfte_data_source_send,
+    .cancelled = _sfte_data_source_cancelled,
+    .dnd_drop_performed = _sfte_data_source_dnd_drop_performed,
+    .dnd_finished = _sfte_data_source_dnd_finished,
+    .action = _sfte_data_source_action,
+};
+#endif  // SFTE_CLIPBOARD
+
+#if SFTE_SELECTION
+static void _sfte_update_hover(wl_fixed_t surface_x, wl_fixed_t surface_y) {
+    int px_x = wl_fixed_to_int(surface_x) - SFTE_PAD_X;
+    int px_y = wl_fixed_to_int(surface_y) - SFTE_PAD_Y;
+
+    int grid_x = px_x / _sfte.font.cell_width;
+    int grid_y = px_y / _sfte.font.cell_height;
+
+    grid_x = _SFTE_CLAMP(grid_x, 0, _sfte.term.cols - 1);
+    grid_y = _SFTE_CLAMP(grid_y, 0, _sfte.term.rows - 1);
+
+#if SFTE_SCROLLBACK_CAP
+    grid_y -= _sfte.term.sb_offset;
+#endif  // SFTE_SCROLLBACK_CAP
+
+    _sfte.term.hover_x = grid_x;
+    _sfte.term.hover_y = grid_y;
+}
+
+static void _sfte_wayland_pointer_enter(void *data, struct wl_pointer *pointer, uint32_t serial,
+                                        struct wl_surface *surface, wl_fixed_t surface_x,
+                                        wl_fixed_t surface_y) {
+    (void)data, (void)pointer, (void)serial, (void)surface;
+    _sfte_update_hover(surface_x, surface_y);
+}
+
+static void _sfte_wayland_pointer_leave(void *data, struct wl_pointer *pointer, uint32_t serial,
+                                        struct wl_surface *surface) {
+    (void)data, (void)pointer, (void)serial, (void)surface;
+}
+
+static void _sfte_wayland_pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time,
+                                         wl_fixed_t surface_x, wl_fixed_t surface_y) {
+    (void)data, (void)pointer, (void)time;
+    _sfte_update_hover(surface_x, surface_y);
+
+    if (!_sfte.term.sel_dragging) return;
+
+    if (_sfte.term.sel_end_x != _sfte.term.hover_x || _sfte.term.sel_end_y != _sfte.term.hover_y) {
+        // dirty old bounds to erase prev highlight
+        _sfte_dirty_selection_rows(_sfte.term.sel_start_y, _sfte.term.sel_end_y);
+
+        _sfte.term.sel_end_x = _sfte.term.hover_x;
+        _sfte.term.sel_end_y = _sfte.term.hover_y;
+
+        // dirty new bounds to draw new highlight
+        _sfte_dirty_selection_rows(_sfte.term.sel_start_y, _sfte.term.sel_end_y);
+
+        _sfte_wayland_render();
+    }
+}
+
+static void _sfte_wayland_pointer_button(void *data, struct wl_pointer *pointer, uint32_t serial,
+                                         uint32_t time, uint32_t button, uint32_t state) {
+    if (button != 0x110) return;  // lmb
+
+#if SFTE_CLIPBOARD
+    _sfte.serial = serial;
+#endif  // SFTE_CLIPBOARD
+
+    if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
+        if (_sfte.term.sel_active)
+            _sfte_dirty_selection_rows(_sfte.term.sel_start_y, _sfte.term.sel_end_y);
+
+        _sfte.term.sel_start_x = _sfte.term.hover_x;
+        _sfte.term.sel_start_y = _sfte.term.hover_y;
+        _sfte.term.sel_end_x = _sfte.term.hover_x;
+        _sfte.term.sel_end_y = _sfte.term.hover_y;
+        _sfte.term.sel_active = 1;
+        _sfte.term.sel_dragging = 1;
+
+        _sfte_dirty_selection_rows(_sfte.term.sel_start_y, _sfte.term.sel_end_y);
+        _sfte_wayland_render();
+    } else if (state == WL_POINTER_BUTTON_STATE_RELEASED) {
+        _sfte.term.sel_dragging = 0;
+
+        if (_sfte.term.sel_start_x == _sfte.term.sel_end_x &&
+            _sfte.term.sel_start_y == _sfte.term.sel_end_y) {
+            _sfte.term.sel_active = 0;
+
+            _sfte_dirty_selection_rows(_sfte.term.sel_start_y, _sfte.term.sel_end_y);
+            _sfte_wayland_render();
+        }
+
+#if SFTE_CLIPBOARD
+        _sfte_clipboard_copy(NULL);
+#endif  // SFTE_CLIPBOARD
+    }
+}
+
+static void _sfte_wayland_pointer_axis(void *data, struct wl_pointer *pointer, uint32_t time,
+                                       uint32_t axis, wl_fixed_t value) {
+    (void)data, (void)pointer, (void)time, (void)axis, (void)value;
+}
+
+static void _sfte_wayland_pointer_frame(void *data, struct wl_pointer *pointer) {
+    (void)data, (void)pointer;
+}
+
+static void _sfte_wayland_pointer_axis_source(void *data, struct wl_pointer *pointer,
+                                              uint32_t axis_source) {
+    (void)data, (void)pointer, (void)axis_source;
+}
+
+static void _sfte_wayland_pointer_axis_stop(void *data, struct wl_pointer *pointer, uint32_t time,
+                                            uint32_t axis) {
+    (void)data, (void)pointer, (void)time, (void)axis;
+}
+
+static void _sfte_wayland_pointer_axis_discrete(void *data, struct wl_pointer *pointer,
+                                                uint32_t axis, int32_t discrete) {
+    (void)data, (void)pointer, (void)axis, (void)discrete;
+}
+
+static const struct wl_pointer_listener _sfte_wayland_pointer_listener = {
+    .enter = _sfte_wayland_pointer_enter,
+    .leave = _sfte_wayland_pointer_leave,
+    .motion = _sfte_wayland_pointer_motion,
+    .button = _sfte_wayland_pointer_button,
+    .axis = _sfte_wayland_pointer_axis,
+    .frame = _sfte_wayland_pointer_frame,
+    .axis_source = _sfte_wayland_pointer_axis_source,
+    .axis_stop = _sfte_wayland_pointer_axis_stop,
+    .axis_discrete = _sfte_wayland_pointer_axis_discrete,
+};
+#endif  // SFTE_SELECTION
+
 static void _sfte_wayland_keyboard_keymap(void *data, struct wl_keyboard *keyboard, uint32_t format,
                                           int32_t fd, uint32_t size) {
     (void)data, (void)keyboard;
@@ -1201,6 +1613,10 @@ static void _sfte_wayland_keyboard_leave(void *data, struct wl_keyboard *keyboar
 static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard, uint32_t serial,
                                        uint32_t time, uint32_t key, uint32_t state) {
     (void)data, (void)keyboard, (void)serial, (void)time;
+#if SFTE_CLIPBOARD
+    _sfte.serial = serial;
+#endif  // SFTE_CLIPBOARD
+
     if (state == WL_KEYBOARD_KEY_STATE_RELEASED && key == _sfte.repeating_key) {
         struct itimerspec its = {0};
         timerfd_settime(_sfte.repeat_timer_fd, 0, &its, NULL);
@@ -1341,6 +1757,24 @@ static void _sfte_wayland_seat_capabilities(void *data, struct wl_seat *seat,
         wl_keyboard_release(_sfte.keyboard);
         _sfte.keyboard = NULL;
     }
+
+#if SFTE_SELECTION
+    if ((capabilities & WL_SEAT_CAPABILITY_POINTER) && !_sfte.pointer) {
+        _sfte.pointer = wl_seat_get_pointer(seat);
+        wl_pointer_add_listener(_sfte.pointer, &_sfte_wayland_pointer_listener, &_sfte);
+
+#if SFTE_CLIPBOARD
+        if (_sfte.data_device_manager && !_sfte.data_device) {
+            _sfte.data_device = (struct wl_data_device *)wl_data_device_manager_get_data_device(
+                _sfte.data_device_manager, seat);
+            wl_data_device_add_listener(_sfte.data_device, &_sfte_data_device_listener, NULL);
+        }
+#endif  // SFTE_CLIPBOARD
+    } else if (!(capabilities & WL_SEAT_CAPABILITY_POINTER) && _sfte.pointer) {
+        wl_pointer_release(_sfte.pointer);
+        _sfte.pointer = NULL;
+    }
+#endif  // SFTE_SELECTION
 }
 
 static void _sfte_wayland_seat_name(void *data, struct wl_seat *seat, const char *name) {
@@ -1380,6 +1814,12 @@ static void _sfte_wayland_registry_global(void *data, struct wl_registry *regist
             registry, name, &xdg_wm_base_interface, 1 /* xdg wm base version */);
         xdg_wm_base_add_listener(_sfte.xdg_wm_base, &_sfte_wayland_xdg_wm_base_listener, &_sfte);
     }
+#if SFTE_CLIPBOARD
+    else if (strcmp(interface, wl_data_device_manager_interface.name) == 0) {
+        _sfte.data_device_manager = (struct wl_data_device_manager *)wl_registry_bind(
+            registry, name, &wl_data_device_manager_interface, 3 /* data device manager version */);
+    }
+#endif  // SFTE_CLIPBOARD
 }
 
 static void _sfte_wayland_registry_global_remove(void *data, struct wl_registry *registry,
@@ -1498,6 +1938,53 @@ static void _sfte_wayland_unload(void) {
     xkb_keymap_unref(_sfte.xkb_keymap);
     xkb_context_unref(_sfte.xkb_context);
 }
+
+#if SFTE_CLIPBOARD
+static void _sfte_clipboard_copy(const sfte_arg *arg) {
+    (void)arg;
+
+    if (_sfte.data_source) {
+        wl_data_source_destroy(_sfte.data_source);
+        _sfte.data_source = NULL;
+    }
+    if (_sfte.selection_text) {
+        free(_sfte.selection_text);
+        _sfte.selection_text = NULL;
+    }
+
+    if (_sfte.term.sel_active && _sfte.data_device_manager && _sfte.data_device) {
+        _sfte.selection_text = _sfte_extract_selection();
+
+        if (_sfte.selection_text) {
+            _sfte.data_source = wl_data_device_manager_create_data_source(
+                _sfte.data_device_manager);
+            wl_data_source_add_listener(_sfte.data_source, &_sfte_data_source_listener, NULL);
+            wl_data_source_offer(_sfte.data_source, "text/plain;charset=utf-8");
+            wl_data_source_offer(_sfte.data_source, "text/plain");
+            wl_data_device_set_selection(_sfte.data_device, _sfte.data_source, _sfte.serial);
+        }
+    }
+}
+
+static void _sfte_clipboard_paste(const sfte_arg *arg) {
+    (void)arg;
+    if (!_sfte.data_offer) return;
+
+    int fds[2];
+    if (pipe(fds) == 0) {
+        wl_data_offer_receive(_sfte.data_offer, "text/plain;charset=utf-8", fds[1]);
+        close(fds[1]);
+
+        wl_display_roundtrip(_sfte.display);
+
+        char buf[SFTE_CLIPBOARD_BUF_SIZE];
+        ssize_t n;
+        while ((n = read(fds[0], buf, sizeof(buf))) > 0) write(_sfte.pty_fd, buf, n);
+
+        close(fds[0]);
+    }
+}
+#endif  // SFTE_CLIPBOARD
 
 // >>state
 #if SFTE_CURSOR_BLINK
@@ -2811,6 +3298,8 @@ static void _sfte_parse_byte(uint8_t b) {
 
 // >>loop
 static void _sfte_loop(void) {
+    signal(SIGPIPE, SIG_IGN);
+
     _sfte.repeat_timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
     int wl_fd = wl_display_get_fd(_sfte.display);
 
@@ -2947,7 +3436,7 @@ static void _sfte_loop(void) {
         }
 #endif  // SFTE_CURSOR_TRAIL
 
-        if (needs_render) { _sfte_wayland_render(); }
+        if (needs_render) _sfte_wayland_render();
     }
 }
 
