@@ -768,11 +768,7 @@ static void _sfte_term_resize(int new_cols, int new_rows);
 static void _sfte_font_resize(const sfte_arg *arg) {
     float delta = arg->f;
 
-#if SFTE_DOUBLE_BUFFER
-    _sfte.padding_dirty = 2;
-#else
     _sfte.padding_dirty = 1;
-#endif  // !SFTE_DOUBLE_BUFFER
 
     float new_size = _sfte.font.cur_size + delta;
     if (new_size < 4.0f || new_size > 96.0f) return;
