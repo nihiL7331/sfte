@@ -158,6 +158,10 @@
 #define SFTE_CLIPBOARD 1
 #endif  // SFTE_CLIPBOARD
 
+#ifndef SFTE_CLIPBOARD_BUF_SIZE
+#define SFTE_CLIPBOARD_BUF_SIZE 4096
+#endif  // SFTE_CLIPBOARD_BUF_SIZE
+
 #if SFTE_CLIPBOARD
 #define SFTE_SELECTION 1
 #endif  // SFTE_CLIPBOARD
@@ -181,6 +185,7 @@ typedef struct {
 } sfte_shortcut;
 
 static void _sfte_view_scroll(const sfte_arg *arg);
+static void _sfte_clipboard_paste(const sfte_arg *arg);
 
 #if SFTE_FONT_ZOOM
 #define _SFTE_ZOOM_BINDS                                                                           \
@@ -200,8 +205,15 @@ static void _sfte_view_scroll(const sfte_arg *arg);
 #define _SFTE_SCROLL_BINDS
 #endif  // !SFTE_SCROLLBACK_CAP
 
+#if SFTE_CLIPBOARD
+#define _SFTE_CLIPBOARD_BINDS                                                                      \
+    {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_V, _sfte_clipboard_paste, {.v = NULL}},
+#else
+#define _SFTE_CLIPBOARD_BINDS
+#endif
+
 #ifndef SFTE_SHORTCUTS
-#define SFTE_SHORTCUTS {_SFTE_ZOOM_BINDS _SFTE_SCROLL_BINDS}
+#define SFTE_SHORTCUTS {_SFTE_ZOOM_BINDS _SFTE_SCROLL_BINDS _SFTE_CLIPBOARD_BINDS}
 #endif  // SFTE_SHORTCUTS
 
 // >>api
@@ -422,6 +434,7 @@ typedef struct {
     struct wl_data_device_manager *data_device_manager;
     struct wl_data_device *data_device;
     struct wl_data_source *data_source;
+    struct wl_data_offer *data_offer;
     char *selection_text;
 #endif  // SFTE_CLIPBOARD
     struct xdg_wm_base *xdg_wm_base;
@@ -909,6 +922,27 @@ static inline sfte_cell *_sfte_get_view_cell(int c, int r) {
 #endif  // !SFTE_SCROLLBACK_CAP
 }
 
+#if SFTE_CLIPBOARD
+static void _sfte_clipboard_paste(const sfte_arg *arg) {
+    (void)arg;
+    if (!_sfte.data_offer) return;
+
+    int fds[2];
+    if (pipe(fds) == 0) {
+        wl_data_offer_receive(_sfte.data_offer, "text/plain;charset=utf-8", fds[1]);
+        close(fds[1]);
+
+        wl_display_roundtrip(_sfte.display);
+
+        char buf[SFTE_CLIPBOARD_BUF_SIZE];
+        ssize_t n;
+        while ((n = read(fds[0], buf, sizeof(buf))) > 0) write(_sfte.pty_fd, buf, n);
+
+        close(fds[0]);
+    }
+}
+#endif  // SFTE_CLIPBOARD
+
 #if SFTE_SCROLLBACK_CAP
 static void _sfte_view_scroll(const sfte_arg *arg) {
 #if SFTE_ALT_SCREEN
@@ -1332,6 +1366,69 @@ static void _sfte_wayland_render(void) {
 }
 
 #if SFTE_CLIPBOARD
+static void _sfte_data_offer_offer(void *data, struct wl_data_offer *offer, const char *mime_type) {
+    (void)data;
+    if (strcmp(mime_type, "text/plain;charset=utf-8") == 0 ||
+        strcmp(mime_type, "text/plain") == 0) {
+        wl_data_offer_accept(offer, _sfte.pointer_serial, mime_type);
+    }
+}
+
+static void _sfte_data_offer_source_actions(void *data, struct wl_data_offer *offer,
+                                            uint32_t actions) {
+    (void)data, (void)offer, (void)actions;
+}
+
+static void _sfte_data_offer_action(void *data, struct wl_data_offer *offer, uint32_t action) {
+    (void)data, (void)offer, (void)action;
+}
+
+static const struct wl_data_offer_listener _sfte_data_offer_listener = {
+    .offer = _sfte_data_offer_offer,
+    .source_actions = _sfte_data_offer_source_actions,
+    .action = _sfte_data_offer_action,
+};
+
+static void _sfte_data_device_data_offer(void *data, struct wl_data_device *device,
+                                         struct wl_data_offer *offer) {
+    (void)data, (void)device;
+    wl_data_offer_add_listener(offer, &_sfte_data_offer_listener, NULL);
+}
+
+static void _sfte_data_device_enter(void *data, struct wl_data_device *device, uint32_t serial,
+                                    struct wl_surface *surface, wl_fixed_t x, wl_fixed_t y,
+                                    struct wl_data_offer *offer) {
+    (void)data, (void)device, (void)serial, (void)surface, (void)x, (void)y, (void)offer;
+}
+
+static void _sfte_data_device_leave(void *data, struct wl_data_device *device) {
+    (void)data, (void)device;
+}
+
+static void _sfte_data_device_motion(void *data, struct wl_data_device *device, uint32_t time,
+                                     wl_fixed_t x, wl_fixed_t y) {
+    (void)data, (void)device, (void)time, (void)x, (void)y;
+}
+
+static void _sfte_data_device_drop(void *data, struct wl_data_device *device) {
+    (void)data, (void)device;
+}
+
+static void _sfte_data_device_selection(void *data, struct wl_data_device *device,
+                                        struct wl_data_offer *offer) {
+    if (_sfte.data_offer && _sfte.data_offer != offer) wl_data_offer_destroy(_sfte.data_offer);
+    _sfte.data_offer = offer;
+}
+
+static const struct wl_data_device_listener _sfte_data_device_listener = {
+    .data_offer = _sfte_data_device_data_offer,
+    .enter = _sfte_data_device_enter,
+    .leave = _sfte_data_device_leave,
+    .motion = _sfte_data_device_motion,
+    .drop = _sfte_data_device_drop,
+    .selection = _sfte_data_device_selection,
+};
+
 static void _sfte_data_source_target(void *data, struct wl_data_source *src,
                                      const char *mime_type) {
     (void)data, (void)src, (void)mime_type;
@@ -1703,9 +1800,11 @@ static void _sfte_wayland_seat_capabilities(void *data, struct wl_seat *seat,
         wl_pointer_add_listener(_sfte.pointer, &_sfte_wayland_pointer_listener, &_sfte);
 
 #if SFTE_CLIPBOARD
-        if (_sfte.data_device_manager && !_sfte.data_device)
+        if (_sfte.data_device_manager && !_sfte.data_device) {
             _sfte.data_device = (struct wl_data_device *)wl_data_device_manager_get_data_device(
                 _sfte.data_device_manager, seat);
+            wl_data_device_add_listener(_sfte.data_device, &_sfte_data_device_listener, NULL);
+        }
 #endif  // SFTE_CLIPBOARD
     } else if (!(capabilities & WL_SEAT_CAPABILITY_POINTER) && _sfte.pointer) {
         wl_pointer_release(_sfte.pointer);
