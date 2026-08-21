@@ -149,6 +149,10 @@
 #define SFTE_REFLOW 1
 #endif  // SFTE_REFLOW
 
+#ifndef SFTE_SELECTION
+#define SFTE_SELECTION 1
+#endif  // SFTE_SELECTION
+
 #define SFTE_MOD_CTRL 0b001
 #define SFTE_MOD_ALT 0b010
 #define SFTE_MOD_SHIFT 0b100
@@ -319,6 +323,14 @@ typedef struct {
     int alt_active;  // tracks if in alt buffer
     sfte_cell *alt_cells;
 #endif  // SFTE_ALT_SCREEN
+// mouse state
+#if SFTE_SELECTION
+    int sel_active;    // 1 if has selection
+    int sel_dragging;  // 1 if lmb is held down
+    int hover_x, hover_y;
+    int sel_start_x, sel_start_y;  // abs grid coords
+    int sel_end_x, sel_end_y;
+#endif  // SFTE_SELECTION
 
     int scroll_top;
     int scroll_bottom;
@@ -392,6 +404,9 @@ typedef struct {
     struct xkb_context *xkb_context;
     struct xkb_keymap *xkb_keymap;
     struct xkb_state *xkb_state;
+#if SFTE_SELECTION
+    struct wl_pointer *pointer;
+#endif  // SFTE_SELECTION
     struct xdg_wm_base *xdg_wm_base;
     struct wl_surface *surface;
     struct xdg_surface *xdg_surface;
@@ -898,6 +913,50 @@ static void _sfte_view_scroll(const sfte_arg *arg) {
 }
 #endif  // SFTE_SCROLLBACK_CAP
 
+#if SFTE_SELECTION
+static void _sfte_dirty_selection_rows(int y1, int y2) {
+    int min_y = y1 < y2 ? y1 : y2;
+    int max_y = y1 > y2 ? y1 : y2;
+
+#if SFTE_SCROLLBACK_CAP
+    min_y += _sfte.term.sb_offset;
+    max_y += _sfte.term.sb_offset;
+#endif  // SFTE_SCROLLBACK_CAP
+
+    if (min_y < 0) min_y = 0;
+    if (max_y >= _sfte.term.rows) max_y = _sfte.term.rows - 1;
+
+    if (min_y <= max_y) {
+        _sfte_dirty_range(min_y * _sfte.term.cols, (max_y - min_y + 1) * _sfte.term.cols);
+    }
+}
+
+static inline int _sfte_is_selected(int c, int logical_r) {
+    if (!_sfte.term.sel_active) return 0;
+
+    int sx = _sfte.term.sel_start_x;
+    int sy = _sfte.term.sel_start_y;
+    int ex = _sfte.term.sel_end_x;
+    int ey = _sfte.term.sel_end_y;
+
+    // if dragging backwards, flip start/end pnts
+    if (sy > ey || (sy == ey && sx > ex)) {
+        int tmp = sy;
+        sy = ey;
+        ey = tmp;
+        tmp = sx;
+        sx = ex;
+        ex = tmp;
+    }
+
+    if (logical_r < sy || logical_r > ey) return 0;
+    if (sy == ey) return (c >= sx && c <= ex);  // same line
+    if (logical_r == sy) return c >= sx;        // first line
+    if (logical_r == ey) return c <= ex;        // last line
+    return 1;                                   // middle lines
+}
+#endif  // SFTE_SELECTION
+
 #if SFTE_CURSOR_DYNAMIC
 #define _SFTE_CUR_STYLE (_sfte.term.cursor_style)
 #else
@@ -944,8 +1003,18 @@ static void _sfte_wayland_render(void) {
             sfte_cell *vcell = _sfte_get_view_cell(c, r);
             uint32_t fg = vcell->fg ? vcell->fg : 0xFFFFFF;
             uint32_t bg = vcell->bg ? vcell->bg : SFTE_BG_COLOR;
+            uint16_t attr = vcell->attr;
 
-            if (vcell->attr & ATTR_REVERSE) {
+#if SFTE_SELECTION
+            if (_sfte_is_selected(c, r
+#if SFTE_SCROLLBACK_CAP
+                                         - _sfte.term.sb_offset
+#endif  // SFTE_SCROLLBACK_CAP
+                                  ))
+                attr |= ATTR_REVERSE;
+#endif  // SFTE_SELECTION
+
+            if (attr & ATTR_REVERSE) {
                 uint32_t tmp = fg;
                 fg = bg;
                 bg = tmp;
@@ -981,8 +1050,9 @@ static void _sfte_wayland_render(void) {
 
             uint32_t fg = vcell->fg ? vcell->fg : 0xFFFFFF;
             uint32_t bg = vcell->bg ? vcell->bg : SFTE_BG_COLOR;
+            uint16_t attr = vcell->attr;
 
-            if (vcell->attr & ATTR_REVERSE) {
+            if (attr & ATTR_REVERSE) {
                 uint32_t tmp = fg;
                 fg = bg;
                 bg = tmp;
@@ -1004,15 +1074,15 @@ static void _sfte_wayland_render(void) {
             _sfte_render_fg(c, r, rune, draw_fg
 #if defined(SFTE_FONT_BOLD_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
                             ,
-                            vcell->attr & ATTR_BOLD
+                            attr & ATTR_BOLD
 #endif  // SFTE_FONT_BOLD_PATH || SFTE_FONT_BOLD_ITALIC_PATH
 #if defined(SFTE_FONT_ITALIC_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
                             ,
-                            vcell->attr & ATTR_ITALIC
+                            attr & ATTR_ITALIC
 #endif  // SFTE_FONT_ITALIC_PATH || SFTE_FONT_BOLD_ITALIC_PATH
             );
 
-            if (vcell->attr & ATTR_UNDERLINE) {
+            if (attr & ATTR_UNDERLINE) {
                 int cx = c * _sfte.font.cell_width + SFTE_PAD_X;
                 int cy = r * _sfte.font.cell_height + SFTE_PAD_Y;
 
@@ -1167,6 +1237,126 @@ static void _sfte_wayland_render(void) {
     wl_surface_attach(_sfte.surface, _sfte.buffer, 0, 0);
     wl_surface_commit(_sfte.surface);
 }
+
+#if SFTE_SELECTION
+static void _sfte_update_hover(wl_fixed_t surface_x, wl_fixed_t surface_y) {
+    int px_x = wl_fixed_to_int(surface_x) - SFTE_PAD_X;
+    int px_y = wl_fixed_to_int(surface_y) - SFTE_PAD_Y;
+
+    int grid_x = px_x / _sfte.font.cell_width;
+    int grid_y = px_y / _sfte.font.cell_height;
+
+    grid_x = _SFTE_CLAMP(grid_x, 0, _sfte.term.cols - 1);
+    grid_y = _SFTE_CLAMP(grid_y, 0, _sfte.term.rows - 1);
+
+#if SFTE_SCROLLBACK_CAP
+    grid_y -= _sfte.term.sb_offset;
+#endif  // SFTE_SCROLLBACK_CAP
+
+    _sfte.term.hover_x = grid_x;
+    _sfte.term.hover_y = grid_y;
+}
+
+static void _sfte_wayland_pointer_enter(void *data, struct wl_pointer *pointer, uint32_t serial,
+                                        struct wl_surface *surface, wl_fixed_t surface_x,
+                                        wl_fixed_t surface_y) {
+    (void)data, (void)pointer, (void)serial, (void)surface;
+    _sfte_update_hover(surface_x, surface_y);
+}
+
+static void _sfte_wayland_pointer_leave(void *data, struct wl_pointer *pointer, uint32_t serial,
+                                        struct wl_surface *surface) {
+    (void)data, (void)pointer, (void)serial, (void)surface;
+}
+
+static void _sfte_wayland_pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time,
+                                         wl_fixed_t surface_x, wl_fixed_t surface_y) {
+    (void)data, (void)pointer, (void)time;
+    _sfte_update_hover(surface_x, surface_y);
+
+    if (!_sfte.term.sel_dragging) return;
+
+    if (_sfte.term.sel_end_x != _sfte.term.hover_x || _sfte.term.sel_end_y != _sfte.term.hover_y) {
+        // dirty old bounds to erase prev highlight
+        _sfte_dirty_selection_rows(_sfte.term.sel_start_y, _sfte.term.sel_end_y);
+
+        _sfte.term.sel_end_x = _sfte.term.hover_x;
+        _sfte.term.sel_end_y = _sfte.term.hover_y;
+
+        // dirty new bounds to draw new highlight
+        _sfte_dirty_selection_rows(_sfte.term.sel_start_y, _sfte.term.sel_end_y);
+
+        _sfte_wayland_render();
+    }
+}
+
+static void _sfte_wayland_pointer_button(void *data, struct wl_pointer *pointer, uint32_t serial,
+                                         uint32_t time, uint32_t button, uint32_t state) {
+    if (button != 0x110) return;  // lmb
+
+    if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
+        if (_sfte.term.sel_active)
+            _sfte_dirty_selection_rows(_sfte.term.sel_start_y, _sfte.term.sel_end_y);
+
+        _sfte.term.sel_start_x = _sfte.term.hover_x;
+        _sfte.term.sel_start_y = _sfte.term.hover_y;
+        _sfte.term.sel_end_x = _sfte.term.hover_x;
+        _sfte.term.sel_end_y = _sfte.term.hover_y;
+        _sfte.term.sel_active = 1;
+        _sfte.term.sel_dragging = 1;
+
+        _sfte_dirty_selection_rows(_sfte.term.sel_start_y, _sfte.term.sel_end_y);
+        _sfte_wayland_render();
+    } else if (state == WL_POINTER_BUTTON_STATE_RELEASED) {
+        _sfte.term.sel_dragging = 0;
+
+        if (_sfte.term.sel_start_x == _sfte.term.sel_end_x &&
+            _sfte.term.sel_start_y == _sfte.term.sel_end_y) {
+            _sfte.term.sel_active = 0;
+
+            _sfte_dirty_selection_rows(_sfte.term.sel_start_y, _sfte.term.sel_end_y);
+            _sfte_wayland_render();
+        }
+        // TODO: wayland clipboard trigger
+    }
+}
+
+static void _sfte_wayland_pointer_axis(void *data, struct wl_pointer *pointer, uint32_t time,
+                                       uint32_t axis, wl_fixed_t value) {
+    (void)data, (void)pointer, (void)time, (void)axis, (void)value;
+}
+
+static void _sfte_wayland_pointer_frame(void *data, struct wl_pointer *pointer) {
+    (void)data, (void)pointer;
+}
+
+static void _sfte_wayland_pointer_axis_source(void *data, struct wl_pointer *pointer,
+                                              uint32_t axis_source) {
+    (void)data, (void)pointer, (void)axis_source;
+}
+
+static void _sfte_wayland_pointer_axis_stop(void *data, struct wl_pointer *pointer, uint32_t time,
+                                            uint32_t axis) {
+    (void)data, (void)pointer, (void)time, (void)axis;
+}
+
+static void _sfte_wayland_pointer_axis_discrete(void *data, struct wl_pointer *pointer,
+                                                uint32_t axis, int32_t discrete) {
+    (void)data, (void)pointer, (void)axis, (void)discrete;
+}
+
+static const struct wl_pointer_listener _sfte_wayland_pointer_listener = {
+    .enter = _sfte_wayland_pointer_enter,
+    .leave = _sfte_wayland_pointer_leave,
+    .motion = _sfte_wayland_pointer_motion,
+    .button = _sfte_wayland_pointer_button,
+    .axis = _sfte_wayland_pointer_axis,
+    .frame = _sfte_wayland_pointer_frame,
+    .axis_source = _sfte_wayland_pointer_axis_source,
+    .axis_stop = _sfte_wayland_pointer_axis_stop,
+    .axis_discrete = _sfte_wayland_pointer_axis_discrete,
+};
+#endif  // SFTE_SELECTION
 
 static void _sfte_wayland_keyboard_keymap(void *data, struct wl_keyboard *keyboard, uint32_t format,
                                           int32_t fd, uint32_t size) {
@@ -1341,6 +1531,16 @@ static void _sfte_wayland_seat_capabilities(void *data, struct wl_seat *seat,
         wl_keyboard_release(_sfte.keyboard);
         _sfte.keyboard = NULL;
     }
+
+#if SFTE_SELECTION
+    if ((capabilities & WL_SEAT_CAPABILITY_POINTER) && !_sfte.pointer) {
+        _sfte.pointer = wl_seat_get_pointer(seat);
+        wl_pointer_add_listener(_sfte.pointer, &_sfte_wayland_pointer_listener, &_sfte);
+    } else if (!(capabilities & WL_SEAT_CAPABILITY_POINTER) && _sfte.pointer) {
+        wl_pointer_release(_sfte.pointer);
+        _sfte.pointer = NULL;
+    }
+#endif  // SFTE_SELECTION
 }
 
 static void _sfte_wayland_seat_name(void *data, struct wl_seat *seat, const char *name) {
@@ -2947,7 +3147,7 @@ static void _sfte_loop(void) {
         }
 #endif  // SFTE_CURSOR_TRAIL
 
-        if (needs_render) { _sfte_wayland_render(); }
+        if (needs_render) _sfte_wayland_render();
     }
 }
 
