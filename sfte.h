@@ -185,6 +185,7 @@ typedef struct {
 } sfte_shortcut;
 
 static void _sfte_view_scroll(const sfte_arg *arg);
+static void _sfte_clipboard_copy(const sfte_arg *arg);
 static void _sfte_clipboard_paste(const sfte_arg *arg);
 
 #if SFTE_FONT_ZOOM
@@ -207,7 +208,8 @@ static void _sfte_clipboard_paste(const sfte_arg *arg);
 
 #if SFTE_CLIPBOARD
 #define _SFTE_CLIPBOARD_BINDS                                                                      \
-    {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_V, _sfte_clipboard_paste, {.v = NULL}},
+    {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_C, _sfte_clipboard_copy, {.v = NULL}},                \
+        {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_V, _sfte_clipboard_paste, {.v = NULL}},
 #else
 #define _SFTE_CLIPBOARD_BINDS
 #endif
@@ -428,7 +430,7 @@ typedef struct {
     struct xkb_state *xkb_state;
 #if SFTE_SELECTION
     struct wl_pointer *pointer;
-    uint32_t pointer_serial;
+    uint32_t serial;
 #endif  // SFTE_SELECTION
 #if SFTE_CLIPBOARD
     struct wl_data_device_manager *data_device_manager;
@@ -922,27 +924,6 @@ static inline sfte_cell *_sfte_get_view_cell(int c, int r) {
 #endif  // !SFTE_SCROLLBACK_CAP
 }
 
-#if SFTE_CLIPBOARD
-static void _sfte_clipboard_paste(const sfte_arg *arg) {
-    (void)arg;
-    if (!_sfte.data_offer) return;
-
-    int fds[2];
-    if (pipe(fds) == 0) {
-        wl_data_offer_receive(_sfte.data_offer, "text/plain;charset=utf-8", fds[1]);
-        close(fds[1]);
-
-        wl_display_roundtrip(_sfte.display);
-
-        char buf[SFTE_CLIPBOARD_BUF_SIZE];
-        ssize_t n;
-        while ((n = read(fds[0], buf, sizeof(buf))) > 0) write(_sfte.pty_fd, buf, n);
-
-        close(fds[0]);
-    }
-}
-#endif  // SFTE_CLIPBOARD
-
 #if SFTE_SCROLLBACK_CAP
 static void _sfte_view_scroll(const sfte_arg *arg) {
 #if SFTE_ALT_SCREEN
@@ -1370,7 +1351,7 @@ static void _sfte_data_offer_offer(void *data, struct wl_data_offer *offer, cons
     (void)data;
     if (strcmp(mime_type, "text/plain;charset=utf-8") == 0 ||
         strcmp(mime_type, "text/plain") == 0) {
-        wl_data_offer_accept(offer, _sfte.pointer_serial, mime_type);
+        wl_data_offer_accept(offer, _sfte.serial, mime_type);
     }
 }
 
@@ -1529,7 +1510,7 @@ static void _sfte_wayland_pointer_button(void *data, struct wl_pointer *pointer,
     if (button != 0x110) return;  // lmb
 
 #if SFTE_CLIPBOARD
-    _sfte.pointer_serial = serial;
+    _sfte.serial = serial;
 #endif  // SFTE_CLIPBOARD
 
     if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
@@ -1557,28 +1538,7 @@ static void _sfte_wayland_pointer_button(void *data, struct wl_pointer *pointer,
         }
 
 #if SFTE_CLIPBOARD
-        if (_sfte.data_source) {
-            wl_data_source_destroy(_sfte.data_source);
-            _sfte.data_source = NULL;
-        }
-        if (_sfte.selection_text) {
-            free(_sfte.selection_text);
-            _sfte.selection_text = NULL;
-        }
-
-        if (_sfte.term.sel_active && _sfte.data_device_manager && _sfte.data_device) {
-            _sfte.selection_text = _sfte_extract_selection();
-
-            if (_sfte.selection_text) {
-                _sfte.data_source = wl_data_device_manager_create_data_source(
-                    _sfte.data_device_manager);
-                wl_data_source_add_listener(_sfte.data_source, &_sfte_data_source_listener, NULL);
-                wl_data_source_offer(_sfte.data_source, "text/plain;charset=utf-8");
-                wl_data_source_offer(_sfte.data_source, "text/plain");
-                wl_data_device_set_selection(_sfte.data_device, _sfte.data_source,
-                                             _sfte.pointer_serial);
-            }
-        }
+        _sfte_clipboard_copy(NULL);
 #endif  // SFTE_CLIPBOARD
     }
 }
@@ -1653,6 +1613,10 @@ static void _sfte_wayland_keyboard_leave(void *data, struct wl_keyboard *keyboar
 static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard, uint32_t serial,
                                        uint32_t time, uint32_t key, uint32_t state) {
     (void)data, (void)keyboard, (void)serial, (void)time;
+#if SFTE_CLIPBOARD
+    _sfte.serial = serial;
+#endif  // SFTE_CLIPBOARD
+
     if (state == WL_KEYBOARD_KEY_STATE_RELEASED && key == _sfte.repeating_key) {
         struct itimerspec its = {0};
         timerfd_settime(_sfte.repeat_timer_fd, 0, &its, NULL);
@@ -1974,6 +1938,53 @@ static void _sfte_wayland_unload(void) {
     xkb_keymap_unref(_sfte.xkb_keymap);
     xkb_context_unref(_sfte.xkb_context);
 }
+
+#if SFTE_CLIPBOARD
+static void _sfte_clipboard_copy(const sfte_arg *arg) {
+    (void)arg;
+
+    if (_sfte.data_source) {
+        wl_data_source_destroy(_sfte.data_source);
+        _sfte.data_source = NULL;
+    }
+    if (_sfte.selection_text) {
+        free(_sfte.selection_text);
+        _sfte.selection_text = NULL;
+    }
+
+    if (_sfte.term.sel_active && _sfte.data_device_manager && _sfte.data_device) {
+        _sfte.selection_text = _sfte_extract_selection();
+
+        if (_sfte.selection_text) {
+            _sfte.data_source = wl_data_device_manager_create_data_source(
+                _sfte.data_device_manager);
+            wl_data_source_add_listener(_sfte.data_source, &_sfte_data_source_listener, NULL);
+            wl_data_source_offer(_sfte.data_source, "text/plain;charset=utf-8");
+            wl_data_source_offer(_sfte.data_source, "text/plain");
+            wl_data_device_set_selection(_sfte.data_device, _sfte.data_source, _sfte.serial);
+        }
+    }
+}
+
+static void _sfte_clipboard_paste(const sfte_arg *arg) {
+    (void)arg;
+    if (!_sfte.data_offer) return;
+
+    int fds[2];
+    if (pipe(fds) == 0) {
+        wl_data_offer_receive(_sfte.data_offer, "text/plain;charset=utf-8", fds[1]);
+        close(fds[1]);
+
+        wl_display_roundtrip(_sfte.display);
+
+        char buf[SFTE_CLIPBOARD_BUF_SIZE];
+        ssize_t n;
+        while ((n = read(fds[0], buf, sizeof(buf))) > 0) write(_sfte.pty_fd, buf, n);
+
+        close(fds[0]);
+    }
+}
+#endif  // SFTE_CLIPBOARD
 
 // >>state
 #if SFTE_CURSOR_BLINK
