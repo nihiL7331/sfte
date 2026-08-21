@@ -455,6 +455,7 @@ typedef struct {
 
     int width;
     int height;
+    uint8_t padding_dirty;
     uint8_t running;
 
     int repeat_timer_fd;
@@ -767,6 +768,12 @@ static void _sfte_term_resize(int new_cols, int new_rows);
 static void _sfte_font_resize(const sfte_arg *arg) {
     float delta = arg->f;
 
+#if SFTE_DOUBLE_BUFFER
+    _sfte.padding_dirty = 2;
+#else
+    _sfte.padding_dirty = 1;
+#endif  // !SFTE_DOUBLE_BUFFER
+
     float new_size = _sfte.font.cur_size + delta;
     if (new_size < 4.0f || new_size > 96.0f) return;
     _sfte.font.cur_size = new_size;
@@ -1071,7 +1078,45 @@ static inline int _sfte_is_selected(int c, int logical_r) {
 #define _SFTE_CUR_STYLE (SFTE_CURSOR_STYLE)
 #endif  // !SFTE_CURSOR_DYNAMIC
 
+static void _sfte_clear_padding_rects(void) {
+    uint32_t *px = _sfte.shm_data;
+    int w = _sfte.width;
+    int h = _sfte.height;
+
+    int grid_w = _sfte.term.cols * _sfte.font.cell_width;
+    int grid_h = _sfte.term.rows * _sfte.font.cell_height;
+
+    uint32_t bg = (SFTE_BG_OPACITY << 24) | SFTE_BG_COLOR;
+
+#if SFTE_PAD_Y
+    for (int y = 0; y < SFTE_PAD_Y && y < h; ++y)
+        for (int x = 0; x < w; ++x) px[y * w + x] = bg;
+    wl_surface_damage_buffer(_sfte.surface, 0, 0, w, SFTE_PAD_Y);
+
+    int bot_y = SFTE_PAD_Y + grid_h;
+    for (int y = bot_y; y < h; ++y)
+        for (int x = 0; x < w; ++x) px[y * w + x] = bg;
+    wl_surface_damage_buffer(_sfte.surface, 0, bot_y, w, h - bot_y);
+#endif  // SFTE_PAD_Y
+
+#if SFTE_PAD_X
+    for (int y = SFTE_PAD_Y; y < SFTE_PAD_Y + grid_h && y < h; ++y)
+        for (int x = 0; x < SFTE_PAD_X && x < w; ++x) px[y * w + x] = bg;
+    wl_surface_damage_buffer(_sfte.surface, 0, SFTE_PAD_Y, SFTE_PAD_X, grid_h);
+
+    int right_x = SFTE_PAD_X + grid_w;
+    for (int y = SFTE_PAD_Y; y < SFTE_PAD_Y + grid_h && y < h; ++y)
+        for (int x = right_x; x < w; ++x) px[y * w + x] = bg;
+    wl_surface_damage_buffer(_sfte.surface, right_x, SFTE_PAD_Y, w - right_x, grid_h);
+#endif  // SFTE_PAD_X
+}
+
 static void _sfte_wayland_render(void) {
+    if (_sfte.padding_dirty > 0) {
+        _sfte_clear_padding_rects();
+        _sfte.padding_dirty--;
+    }
+
     int new_cols = (_sfte.width - (2 * SFTE_PAD_X)) / _sfte.font.cell_width;
     if (new_cols < 1) new_cols = 1;
     int new_rows = (_sfte.height - (2 * SFTE_PAD_Y)) / _sfte.font.cell_height;
@@ -2099,6 +2144,7 @@ static void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell c, int is_cursor)
 }
 
 static void _sfte_term_resize(int new_cols, int new_rows) {
+    if (new_cols < 1 || new_rows < 1) return;
 #if SFTE_ALT_SCREEN
     sfte_cell *main_old = _sfte.term.alt_active ? _sfte.term.alt_cells : _sfte.term.cells;
     sfte_cell *alt_old = _sfte.term.alt_active ? _sfte.term.cells : NULL;
@@ -2349,10 +2395,12 @@ static void _sfte_term_resize(int new_cols, int new_rows) {
 
     free(_sfte.term.cells);
     _sfte.term.cells = new_cells;
+#if SFTE_ALT_SCREEN
     if (_sfte.term.alt_cells) {
         free(_sfte.term.alt_cells);
         _sfte.term.alt_cells = new_alt_cells;
     }
+#endif  // SFTE_ALT_SCREEN
 
     _sfte.term.cols = new_cols;
     _sfte.term.rows = new_rows;
