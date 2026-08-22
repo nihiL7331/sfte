@@ -71,6 +71,14 @@
 #define SFTE_FONT_DEFAULT_SIZE 12.0f
 #endif  // SFTE_FONT_DEFAULT_SIZE
 
+#ifndef SFTE_FONT_ALTAS_SIZE
+#define SFTE_FONT_ATLAS_SIZE 1024
+#endif  // SFTE_FONT_ATLAS_SIZE
+
+#ifndef SFTE_FONT_GLYPH_CAP
+#define SFTE_FONT_GLYPH_CAP 4096
+#endif  // SFTE_FONT_GLYPH_CAP
+
 #ifndef SFTE_FONT_ZOOM
 #define SFTE_FONT_ZOOM 1
 #endif  // SFTE_FONT_ZOOM
@@ -700,8 +708,8 @@ static void _sfte_font_reset_cache(void) {
 
 static void _sfte_font_load(void) {
     _sfte.font.cur_size = SFTE_FONT_DEFAULT_SIZE;
-    _sfte.font.atlas_width = 1024;
-    _sfte.font.atlas_height = 1024;
+    _sfte.font.atlas_width = SFTE_FONT_ATLAS_SIZE;
+    _sfte.font.atlas_height = SFTE_FONT_ATLAS_SIZE;
 
     _sfte.font.atlas_pxs = (uint8_t *)malloc(_sfte.font.atlas_width * _sfte.font.atlas_height);
     SFTE_ASSERT(_sfte.font.atlas_pxs, "failed to allocate font atlas");
@@ -766,7 +774,7 @@ static void _sfte_font_load(void) {
     stbtt_InitFont(&_sfte.font.stb_bold_italic_info, _sfte.font.ttf_bold_italic_buf, 0);
 #endif  // SFTE_FONT_BOLD_ITALIC_PATH
 
-    _sfte.font.glyph_cap = 4096;
+    _sfte.font.glyph_cap = SFTE_FONT_GLYPH_CAP;
     _sfte.font.glyphs = (sfte_glyph *)calloc(_sfte.font.glyph_cap, sizeof(sfte_glyph));
     SFTE_ASSERT(_sfte.font.glyphs, "failed to allocate glyphs storage");
     stbtt_InitFont(&_sfte.font.stb_info, _sfte.font.ttf_buf, 0);
