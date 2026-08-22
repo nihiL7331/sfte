@@ -2025,6 +2025,7 @@ static void _sfte_wayland_unload(void) {
     free(_sfte.font.ttf_italic_buf);
 #endif  // SFTE_FONT_ITALIC_PATH
     free(_sfte.font.atlas_pxs);
+    free(_sfte.font.glyphs);
     free(_sfte.term.cells);
 #if SFTE_ALT_SCREEN
     free(_sfte.term.alt_cells);
