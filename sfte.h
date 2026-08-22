@@ -153,6 +153,10 @@
 #define SFTE_SCROLLBACK_CAP 2000
 #endif  // SFTE_SCROLLBACK_CAP
 
+#ifndef SFTE_TAB_WIDTH
+#define SFTE_TAB_WIDTH 8
+#endif  // SFTE_TAB_WIDTH
+
 #ifndef SFTE_ALT_SCREEN
 #define SFTE_ALT_SCREEN 1
 #endif  // SFTE_ALT_SCREEN
@@ -2134,7 +2138,8 @@ static void _sfte_state_load(void) {
 #endif  // SFTE_SCROLLBACK_CAP
 
     _sfte.term.tab_stops = (uint8_t *)malloc(_sfte.term.cols);
-    for (int i = 0; i < _sfte.term.cols; ++i) _sfte.term.tab_stops[i] = (i > 0 && i % 8 == 0);
+    for (int i = 0; i < _sfte.term.cols; ++i)
+        _sfte.term.tab_stops[i] = (i > 0 && i % SFTE_TAB_WIDTH == 0);
 
 #if SFTE_CURSOR_BLINK
     _sfte.term.blink_enabled = 1;
@@ -2405,7 +2410,7 @@ static void _sfte_term_resize(int new_cols, int new_rows) {
         if (i < _sfte.term.cols)
             new_tabs[i] = _sfte.term.tab_stops[i];
         else
-            new_tabs[i] = (i % 8 == 0);
+            new_tabs[i] = (i % SFTE_TAB_WIDTH == 0);
     free(_sfte.term.tab_stops);
     _sfte.term.tab_stops = new_tabs;
 
@@ -2451,7 +2456,7 @@ static void _sfte_term_resize(int new_cols, int new_rows) {
         if (i < _sfte.term.cols)
             new_tabs[i] = _sfte.term.tab_stops[i];
         else
-            new_tabs[i] = (i % 8 == 0);
+            new_tabs[i] = (i % SFTE_TAB_WIDTH == 0);
     free(_sfte.term.tab_stops);
     _sfte.term.tab_stops = new_tabs;
 
