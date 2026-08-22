@@ -71,6 +71,14 @@
 #define SFTE_FONT_DEFAULT_SIZE 12.0f
 #endif  // SFTE_FONT_DEFAULT_SIZE
 
+#ifndef SFTE_FONT_ALTAS_SIZE
+#define SFTE_FONT_ATLAS_SIZE 1024
+#endif  // SFTE_FONT_ATLAS_SIZE
+
+#ifndef SFTE_FONT_GLYPH_CAP
+#define SFTE_FONT_GLYPH_CAP 4096
+#endif  // SFTE_FONT_GLYPH_CAP
+
 #ifndef SFTE_FONT_ZOOM
 #define SFTE_FONT_ZOOM 1
 #endif  // SFTE_FONT_ZOOM
@@ -84,6 +92,14 @@
 #ifndef SFTE_TRUE_COLOR
 #define SFTE_TRUE_COLOR 1
 #endif  // SFTE_TRUE_COLOR
+
+#ifndef SFTE_WIDE_CHARS
+#define SFTE_WIDE_CHARS 1
+#endif  // SFTE_WIDE_CHARS
+
+#ifndef SFTE_MAX_COMBINING
+#define SFTE_MAX_COMBINING 2
+#endif  // SFTE_MAX_COMBINING
 
 #ifndef SFTE_PAD_X  // in pxs
 #define SFTE_PAD_X 8
@@ -136,6 +152,10 @@
 #ifndef SFTE_SCROLLBACK_CAP
 #define SFTE_SCROLLBACK_CAP 2000
 #endif  // SFTE_SCROLLBACK_CAP
+
+#ifndef SFTE_TAB_WIDTH
+#define SFTE_TAB_WIDTH 8
+#endif  // SFTE_TAB_WIDTH
 
 #ifndef SFTE_ALT_SCREEN
 #define SFTE_ALT_SCREEN 1
@@ -233,6 +253,7 @@ int sfte_run(void);
 #include "xdg-shell.h"
 
 #include <fcntl.h>
+#include <locale.h>  // LC_ALL
 #include <poll.h>
 #include <pty.h>  // forkpty
 #include <signal.h>
@@ -264,15 +285,23 @@ typedef struct sfte_logger {
 #endif  // !SFTE_NO_LOGGING
 
 typedef enum {
-    ATTR_NONE = 0b0000,
-    ATTR_BOLD = 0b0001,
-    ATTR_ITALIC = 0b0010,
-    ATTR_UNDERLINE = 0b0100,
-    ATTR_REVERSE = 0b1000
+    ATTR_NONE = 0b00000,
+    ATTR_BOLD = 0b00001,
+    ATTR_ITALIC = 0b00010,
+    ATTR_UNDERLINE = 0b00100,
+    ATTR_REVERSE = 0b01000,
+#if SFTE_WIDE_CHARS
+    ATTR_DUMMY = 0b100000,  // marks skipped trailing cell after wide rune
+    ATTR_WIDE = 0b010000
+#endif  // SFTE_WIDE_CHARS
 } sfte_attr;
 
 typedef struct {
     uint32_t rune;
+#if SFTE_WIDE_CHARS
+    uint32_t combining[SFTE_MAX_COMBINING];
+    uint8_t num_combining;
+#endif  // SFTE_WIDE_CHARS
     uint32_t fg;
     uint32_t bg;
     uint16_t attr;  // bitmask of sfte_attr
@@ -683,8 +712,8 @@ static void _sfte_font_reset_cache(void) {
 
 static void _sfte_font_load(void) {
     _sfte.font.cur_size = SFTE_FONT_DEFAULT_SIZE;
-    _sfte.font.atlas_width = 1024;
-    _sfte.font.atlas_height = 1024;
+    _sfte.font.atlas_width = SFTE_FONT_ATLAS_SIZE;
+    _sfte.font.atlas_height = SFTE_FONT_ATLAS_SIZE;
 
     _sfte.font.atlas_pxs = (uint8_t *)malloc(_sfte.font.atlas_width * _sfte.font.atlas_height);
     SFTE_ASSERT(_sfte.font.atlas_pxs, "failed to allocate font atlas");
@@ -749,7 +778,7 @@ static void _sfte_font_load(void) {
     stbtt_InitFont(&_sfte.font.stb_bold_italic_info, _sfte.font.ttf_bold_italic_buf, 0);
 #endif  // SFTE_FONT_BOLD_ITALIC_PATH
 
-    _sfte.font.glyph_cap = 4096;
+    _sfte.font.glyph_cap = SFTE_FONT_GLYPH_CAP;
     _sfte.font.glyphs = (sfte_glyph *)calloc(_sfte.font.glyph_cap, sizeof(sfte_glyph));
     SFTE_ASSERT(_sfte.font.glyphs, "failed to allocate glyphs storage");
     stbtt_InitFont(&_sfte.font.stb_info, _sfte.font.ttf_buf, 0);
@@ -1129,25 +1158,58 @@ static void _sfte_wayland_render(void) {
     vis_cy += _sfte.term.sb_offset;
 #endif  // SFTE_SCROLLBACK_CAP
 
-    // if cursor moved, dirtyy the old cell to erase it, and dirty the new cell to draw it
+#if SFTE_WIDE_CHARS
+    if (vis_cx > 0)
+        if (_sfte_get_view_cell(vis_cx, vis_cy)->attr & ATTR_DUMMY) vis_cx--;
+#endif  // SFTE_WIDE_CHARS
+
+    // if cursor moved, dirty the old cell to erase it, and dirty the new cell to draw it
     if (_sfte.term.dirty_saved_x != vis_cx || _sfte.term.dirty_saved_y != vis_cy) {
-        _sfte.term.cells[_SFTE_IDX(_sfte.term.dirty_saved_x, _sfte.term.dirty_saved_y)].dirty = 1;
+        int old_idx = _SFTE_IDX(_sfte.term.dirty_saved_x, _sfte.term.dirty_saved_y);
+        _sfte.term.cells[old_idx].dirty = 1;
+
 #if SFTE_SCROLLBACK_CAP  // NOTE: this check is only needed if scrollback buffer is on
-        if (vis_cy >= 0 && vis_cy < _sfte.term.rows)
+        if (vis_cy >= 0 && vis_cy < _sfte.term.rows) {
 #endif  // SFTE_SCROLLBACK_CAP
-            _sfte.term.cells[_SFTE_IDX(vis_cx, vis_cy)].dirty = 1;
+
+            int new_idx = _SFTE_IDX(vis_cx, vis_cy);
+            _sfte.term.cells[new_idx].dirty = 1;
+
+#if SFTE_SCROLLBACK_CAP
+        }
+#endif  // SFTE_SCROLLBACK_CAP
+
         _sfte.term.dirty_saved_x = vis_cx;
         _sfte.term.dirty_saved_y = vis_cy;
     }
 
+    for (int i = _sfte.term.rows * _sfte.term.cols - 2; i >= 0; --i) {
+        if ((i + 1) % _sfte.term.cols == 0) continue;
+        // if right neighbor is dirty, redraw to fix font bleed
+        if (_sfte.term.cells[i + 1].dirty == 1 && _sfte.term.cells[i].dirty == 0)
+            _sfte.term.cells[i].dirty = 2;
+    }
+
+#if SFTE_WIDE_CHARS
+    for (int i = 0; i < _sfte.term.rows * _sfte.term.cols - 1; ++i) {
+        if ((i + 1) % _sfte.term.cols == 0) continue;
+        // lock wide characters
+        // if either half is dirty, both must redraw
+        if ((_sfte.term.cells[i].attr & ATTR_WIDE) &&
+            (_sfte.term.cells[i].dirty || _sfte.term.cells[i + 1].dirty)) {
+            _sfte.term.cells[i].dirty = 1;
+            _sfte.term.cells[i + 1].dirty = 1;
+        }
+    }
+#endif  // SFTE_WIDE_CHARS
+
+    for (int i = 0; i < _sfte.term.rows * _sfte.term.cols; ++i)
+        if (_sfte.term.cells[i].dirty == 2) _sfte.term.cells[i].dirty = 1;
+
     for (int r = 0; r < _sfte.term.rows; ++r) {
         for (int c = 0; c < _sfte.term.cols; ++c) {
             int idx = _SFTE_IDX(c, r);
-
-            int is_dirty = _sfte.term.cells[idx].dirty;
-            if (!is_dirty && c < _sfte.term.cols - 1 && _sfte.term.cells[idx + 1].dirty)
-                is_dirty = 1;
-            if (!is_dirty) continue;
+            if (!_sfte.term.cells[idx].dirty) continue;
 
             sfte_cell *vcell = _sfte_get_view_cell(c, r);
             uint32_t fg = vcell->fg ? vcell->fg : 0xFFFFFF;
@@ -1171,6 +1233,12 @@ static void _sfte_wayland_render(void) {
 
             int is_cursor = (c == vis_cx && r == vis_cy && !_sfte.term.hide_cursor);
 
+#if SFTE_WIDE_CHARS
+            if (!is_cursor && (attr & ATTR_DUMMY) && c > 0 && c - 1 == vis_cx && r == vis_cy &&
+                !_sfte.term.hide_cursor)
+                is_cursor = 1;
+#endif  // SFTE_WIDE_CHARS
+
 #if SFTE_CURSOR_BLINK
             if (!_sfte.term.blink_visible) is_cursor = 0;
 #endif  // SFTE_CURSOR_BLINK
@@ -1185,15 +1253,19 @@ static void _sfte_wayland_render(void) {
     for (int r = 0; r < _sfte.term.rows; ++r) {
         for (int c = 0; c < _sfte.term.cols; ++c) {
             int idx = _SFTE_IDX(c, r);
-
-            // certain nerd font symbols can have width greater than one cell. that's why if cell to
-            // our right is dirty, its bg got repainted, so we redraw our foreground.
-            int is_dirty = _sfte.term.cells[idx].dirty;
-            if (!is_dirty && c < _sfte.term.cols - 1 && _sfte.term.cells[idx + 1].dirty)
-                is_dirty = 1;
-            if (!is_dirty) continue;
+            if (!_sfte.term.cells[idx].dirty) continue;
 
             sfte_cell *vcell = _sfte_get_view_cell(c, r);
+#if SFTE_WIDE_CHARS
+            if (vcell->attr & ATTR_DUMMY) {
+                wl_surface_damage_buffer(_sfte.surface, c * _sfte.font.cell_width + SFTE_PAD_X,
+                                         r * _sfte.font.cell_height + SFTE_PAD_Y,
+                                         _sfte.font.cell_width, _sfte.font.cell_height);
+                _sfte.term.cells[idx].dirty = 0;
+                continue;
+            }
+#endif  // SFTE_WIDE_CHARS
+
             uint32_t rune = vcell->rune;
             if (rune == 0) rune = ' ';
 
@@ -1237,12 +1309,17 @@ static void _sfte_wayland_render(void) {
 
                 uint32_t underline_col = (draw_fg & 0x00FFFFFF) | (0xFF << 24);
 
+                int render_w = _sfte.font.cell_width;
+#if SFTE_WIDE_CHARS
+                render_w *= (attr & ATTR_WIDE) ? 2 : 1;
+#endif  // SFTE_WIDE_CHARS
+
                 int thickness = _sfte.font.cell_height / 10;
                 if (thickness < 1) thickness = 1;
 
                 for (int y = cy + _sfte.font.cell_height - thickness;
                      y < cy + _sfte.font.cell_height; ++y)
-                    for (int x = cx; x < cx + _sfte.font.cell_width; ++x)
+                    for (int x = cx; x < cx + render_w; ++x)
                         if (x < _sfte.width && y < _sfte.height)
                             _SFTE_RENDER_BUF[y * _sfte.width + x] = underline_col;
             }
@@ -1250,6 +1327,11 @@ static void _sfte_wayland_render(void) {
             if (is_cursor && _SFTE_CUR_STYLE != SFTE_CURSOR_BLOCK) {  // bar / underline
                 int cx = c * _sfte.font.cell_width + SFTE_PAD_X;
                 int cy = r * _sfte.font.cell_height + SFTE_PAD_Y;
+
+                int render_w = _sfte.font.cell_width;
+#if SFTE_WIDE_CHARS
+                render_w *= (attr & ATTR_WIDE) ? 2 : 1;
+#endif  // SFTE_WIDE_CHARS
 
                 uint32_t cur_col = (SFTE_CURSOR_COLOR & 0x00FFFFFF) | (0xFF << 24);
 
@@ -1259,7 +1341,7 @@ static void _sfte_wayland_render(void) {
 
                     for (int y = cy + _sfte.font.cell_height - thickness;
                          y < cy + _sfte.font.cell_height; ++y)
-                        for (int x = cx; x < cx + _sfte.font.cell_width; ++x)
+                        for (int x = cx; x < cx + render_w; ++x)
                             if (x < _sfte.width && y < _sfte.height)
                                 _SFTE_RENDER_BUF[y * _sfte.width + x] = cur_col;
                 } else if (_SFTE_CUR_STYLE == SFTE_CURSOR_BAR) {
@@ -1955,6 +2037,7 @@ static void _sfte_wayland_unload(void) {
     free(_sfte.font.ttf_italic_buf);
 #endif  // SFTE_FONT_ITALIC_PATH
     free(_sfte.font.atlas_pxs);
+    free(_sfte.font.glyphs);
     free(_sfte.term.cells);
 #if SFTE_ALT_SCREEN
     free(_sfte.term.alt_cells);
@@ -2055,7 +2138,8 @@ static void _sfte_state_load(void) {
 #endif  // SFTE_SCROLLBACK_CAP
 
     _sfte.term.tab_stops = (uint8_t *)malloc(_sfte.term.cols);
-    for (int i = 0; i < _sfte.term.cols; ++i) _sfte.term.tab_stops[i] = (i > 0 && i % 8 == 0);
+    for (int i = 0; i < _sfte.term.cols; ++i)
+        _sfte.term.tab_stops[i] = (i > 0 && i % SFTE_TAB_WIDTH == 0);
 
 #if SFTE_CURSOR_BLINK
     _sfte.term.blink_enabled = 1;
@@ -2326,7 +2410,7 @@ static void _sfte_term_resize(int new_cols, int new_rows) {
         if (i < _sfte.term.cols)
             new_tabs[i] = _sfte.term.tab_stops[i];
         else
-            new_tabs[i] = (i % 8 == 0);
+            new_tabs[i] = (i % SFTE_TAB_WIDTH == 0);
     free(_sfte.term.tab_stops);
     _sfte.term.tab_stops = new_tabs;
 
@@ -2372,7 +2456,7 @@ static void _sfte_term_resize(int new_cols, int new_rows) {
         if (i < _sfte.term.cols)
             new_tabs[i] = _sfte.term.tab_stops[i];
         else
-            new_tabs[i] = (i % 8 == 0);
+            new_tabs[i] = (i % SFTE_TAB_WIDTH == 0);
     free(_sfte.term.tab_stops);
     _sfte.term.tab_stops = new_tabs;
 
@@ -3137,6 +3221,13 @@ typedef enum {
     VT_DCS         // P / _ / ^
 } sfte_vt_state;
 
+#if SFTE_WIDE_CHARS
+#include <wchar.h>
+#define _SFTE_CHAR_WIDTH(rune) wcwidth(rune)
+#else
+#define _SFTE_CHAR_WIDTH(rune) 1
+#endif
+
 static void _sfte_parse_byte(uint8_t b) {
     switch (_sfte.term.vt_state) {
     case VT_GROUND:
@@ -3182,17 +3273,78 @@ static void _sfte_parse_byte(uint8_t b) {
             // only write to grid when multibyte sequence is ready
             if (_sfte.term.utf8_bytes_left != 0) break;
 
+            int w = _SFTE_CHAR_WIDTH(_sfte.term.utf8_rune);
+            if (w < 0) w = 1;
+
+            if (w == 0) {
+#if SFTE_WIDE_CHARS
+                if (_sfte.term.cursor_x > 0) {
+                    int prev_idx = _SFTE_IDX(_sfte.term.cursor_x - 1, _sfte.term.cursor_y);
+                    sfte_cell *prev = &_sfte.term.cells[prev_idx];
+
+                    if (prev->attr & ATTR_DUMMY && _sfte.term.cursor_x > 1) {
+                        prev_idx = _SFTE_IDX(_sfte.term.cursor_x - 2, _sfte.term.cursor_y);
+                        prev = &_sfte.term.cells[prev_idx];
+                    }
+
+                    if (prev->num_combining < SFTE_MAX_COMBINING) {
+                        prev->combining[prev->num_combining++] = _sfte.term.utf8_rune;
+                        prev->dirty = 1;
+                    }
+                }
+#endif  // SFTE_WIDE_CHARS
+                break;
+            }
+
             // evaluate line wrapping before drawing
             // ensures chars placed in the final col enter a pending wrap state
             // instead of immediately dropping to the next line
             _sfte_check_wrap();
-            int idx = _SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y);
-            _sfte.term.cells[idx].rune = _sfte.term.utf8_rune;
-            _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
-            _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
-            _sfte.term.cells[idx].attr = _sfte.term.cur_attr;
-            _sfte.term.cells[idx].dirty = 1;
-            _sfte.term.cursor_x++;
+
+#if SFTE_WIDE_CHARS
+            if (w == 2) {
+                // wide char cannot be split across lines,
+                // if in last column, leave it blank and wrap early
+                if (_sfte.term.cursor_x == _sfte.term.cols - 1) {
+                    int idx = _SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y);
+                    _sfte.term.cells[idx].rune = ' ';
+                    _sfte.term.cells[idx].fg = 0xFFFFFF;
+                    _sfte.term.cells[idx].bg = SFTE_BG_COLOR;
+                    _sfte.term.cells[idx].attr = 0;
+                    _sfte.term.cells[idx].dirty = 1;
+                    _sfte.term.cursor_x++;
+                    _sfte_check_wrap();
+                }
+
+                if (_sfte.term.cursor_x == _sfte.term.cols - 1) break;
+
+                int idx = _SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y);
+                _sfte.term.cells[idx].rune = _sfte.term.utf8_rune;
+                _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
+                _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
+                _sfte.term.cells[idx].attr = _sfte.term.cur_attr | ATTR_WIDE;
+                _sfte.term.cells[idx].dirty = 1;
+
+                int dummy_idx = _SFTE_IDX(_sfte.term.cursor_x + 1, _sfte.term.cursor_y);
+                _sfte.term.cells[dummy_idx].rune = ' ';
+                _sfte.term.cells[dummy_idx].fg = _sfte.term.cur_fg;
+                _sfte.term.cells[dummy_idx].bg = _sfte.term.cur_bg;
+                _sfte.term.cells[dummy_idx].attr = _sfte.term.cur_attr | ATTR_DUMMY;
+                _sfte.term.cells[dummy_idx].dirty = 1;
+
+                _sfte.term.cursor_x += 2;
+            } else
+#endif  // SFTE_WIDE_CHARS
+            {
+                int idx = _SFTE_IDX(_sfte.term.cursor_x, _sfte.term.cursor_y);
+                _sfte.term.cells[idx].rune = _sfte.term.utf8_rune;
+                _sfte.term.cells[idx].fg = _sfte.term.cur_fg;
+                _sfte.term.cells[idx].bg = _sfte.term.cur_bg;
+                _sfte.term.cells[idx].attr = _sfte.term.cur_attr;
+                _sfte.term.cells[idx].dirty = 1;
+
+                _sfte.term.cursor_x++;
+            }
         }
         break;
     case VT_ESCAPE:
@@ -3343,6 +3495,7 @@ static void _sfte_parse_byte(uint8_t b) {
 // >>loop
 static void _sfte_loop(void) {
     signal(SIGPIPE, SIG_IGN);
+    setlocale(LC_ALL, "");
 
     _sfte.repeat_timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
     int wl_fd = wl_display_get_fd(_sfte.display);
