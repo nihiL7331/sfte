@@ -347,6 +347,7 @@ void sfte_view_scroll(sfte_ctx *ctx, int delta);
 
 int sfte_run(void);
 
+#define SFTE_IMPL
 #ifdef SFTE_IMPL
 // =================================================================================================
 //  PRIVATE IMPLEMENTATION  ========================================================================
@@ -503,7 +504,8 @@ typedef struct {
     int vt_state;
     int vt_params[16];  // stores nums from esc sequences
     int vt_param_idx;
-    uint8_t vt_dec_priv;  // tracks if seq starts with ?
+    uint8_t vt_dec_priv;      // tracks if seq starts with ?
+    uint8_t bracketed_paste;  // tracks \033[?2004h
     // utf-8 state
     uint32_t utf8_rune;
     int utf8_bytes_left;
@@ -1781,9 +1783,13 @@ static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg) {
 
         wl_display_roundtrip(app->display);
 
+        if (app->ctx->term.bracketed_paste) write(app->pty_fd, "\033[200~", 6);
+
         char buf[SFTE_CLIPBOARD_BUF_SIZE];
         ssize_t n;
         while ((n = read(fds[0], buf, sizeof(buf))) > 0) write(app->pty_fd, buf, n);
+
+        if (app->ctx->term.bracketed_paste) write(app->pty_fd, "\033[201~", 6);
 
         close(fds[0]);
     }
@@ -2676,7 +2682,9 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         if (p[0] == 25) {
             ctx->term.hide_cursor = 0;
             ctx->term.cells[_SFTE_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
-        } else if (p[0] == 7)
+        } else if (p[0] == 2004)
+            ctx->term.bracketed_paste = 1;
+        else if (p[0] == 7)
             ctx->term.auto_wrap = 1;
         else if (p[0] == 6) {
             ctx->term.origin_mode = 1;
@@ -2731,7 +2739,9 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         if (p[0] == 25) {
             ctx->term.hide_cursor = 1;
             ctx->term.cells[_SFTE_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
-        } else if (p[0] == 7)
+        } else if (p[0] == 2004)
+            ctx->term.bracketed_paste = 0;
+        else if (p[0] == 7)
             ctx->term.auto_wrap = 0;
         else if (p[0] == 6) {
             ctx->term.origin_mode = 0;
