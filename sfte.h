@@ -40,12 +40,9 @@
         distribution.
 */
 
+#include "stb_truetype.h"
 #include <stddef.h>  // size_t
 #include <stdint.h>
-
-#define STB_TRUETYPE_IMPLEMENTATION
-#define STBTT_STATIC
-#include "stb_truetype.h"
 
 #ifndef SFTE_CUSTOM_BACKEND
 #ifndef SFTE_WAYLAND
@@ -363,6 +360,10 @@ int sfte_run(void);
 // =================================================================================================
 //  PRIVATE IMPLEMENTATION  ========================================================================
 // =================================================================================================
+
+#define STB_TRUETYPE_IMPLEMENTATION
+#define STBTT_STATIC
+#include "stb_truetype.h"
 
 #include <fcntl.h>
 #include <locale.h>  // LC_ALL
