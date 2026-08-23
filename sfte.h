@@ -1776,8 +1776,6 @@ static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
     sfte_get_selection(app->ctx, app->selection_text, needed_bytes);
     if (!app->selection_text) return;
 
-    _SFTE_INFO(app->ctx, UNHANDLED_OSC, app->selection_text);
-
     app->data_source = wl_data_device_manager_create_data_source(app->data_device_manager);
     wl_data_source_add_listener(app->data_source, &_sfte_wayland_data_source_listener, app);
     wl_data_source_offer(app->data_source, "text/plain;charset=utf-8");
