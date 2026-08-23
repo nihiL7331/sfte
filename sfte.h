@@ -40,12 +40,9 @@
         distribution.
 */
 
+#include "stb_truetype.h"
 #include <stddef.h>  // size_t
 #include <stdint.h>
-
-#define STB_TRUETYPE_IMPLEMENTATION
-#define STBTT_STATIC
-#include "stb_truetype.h"
 
 #ifndef SFTE_CUSTOM_BACKEND
 #ifndef SFTE_WAYLAND
@@ -307,8 +304,23 @@ typedef void (*sfte_write_cb)(void *user_data, const char *data, size_t len);
 sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data);
 void sfte_free(sfte_ctx *ctx);
 
-// loads fonts from the macro paths and bakes the initial atlas
-void sfte_font_load(sfte_ctx *ctx);
+#define SFTE_FONT_STYLE_REGULAR 0
+#ifdef SFTE_FONT_BOLD
+#define SFTE_FONT_STYLE_BOLD 1
+#endif  // SFTE_FONT_BOLD
+#ifdef SFTE_FONT_ITALIC
+#define SFTE_FONT_STYLE_ITALIC 2
+#endif  // SFTE_FONT_ITALIC
+#ifdef SFTE_FONT_BOLD_ITALIC
+#define SFTE_FONT_STYLE_BOLD_ITALIC 3
+#endif  // SFTE_FONT_BOLD_ITALIC
+
+// loads a TTF font from a raw memory buffer (e.g. compiled into the binary)
+// ttf_data must remain valid for the lifetime of the context
+void sfte_font_load_mem(sfte_ctx *ctx, int style, const uint8_t *ttf_data);
+
+// convenience function to load a TTF font from the disk (e.g. for runtime swaps)
+void sfte_font_load_file(sfte_ctx *ctx, int style, const char *path);
 
 #ifndef SFTE_NO_POSIX
 #include <unistd.h>
@@ -356,13 +368,28 @@ size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes);
 void sfte_view_scroll(sfte_ctx *ctx, int delta);
 #endif  // SFTE_SCROLLBACK_CAP
 
-int sfte_run(void);
+#if SFTE_WAYLAND
+typedef struct sfte_wayland_app sfte_wayland_app;
+
+// initializes wayland, pty and sfte_ctx
+sfte_wayland_app *sfte_wayland_init(void);
+
+// exposes the context for runtime configuration
+sfte_ctx *sfte_wayland_get_ctx(sfte_wayland_app *app);
+
+// enters the blocking event loop, run it last
+int sfte_wayland_run(sfte_wayland_app *app);
+#endif  // SFTE_WAYLAND
 
 #define SFTE_IMPL
 #ifdef SFTE_IMPL
 // =================================================================================================
 //  PRIVATE IMPLEMENTATION  ========================================================================
 // =================================================================================================
+
+#define STB_TRUETYPE_IMPLEMENTATION
+#define STBTT_STATIC
+#include "stb_truetype.h"
 
 #include <fcntl.h>
 #include <locale.h>  // LC_ALL
@@ -426,13 +453,6 @@ typedef struct {
 
 typedef struct {
     uint32_t rune;
-#if defined(SFTE_FONT_BOLD_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
-    uint8_t is_bold;
-#endif  // SFTE_FONT_BOLD_PATH || SFTE_FONT_BOLD_ITALIC_PATH
-#if defined(SFTE_FONT_ITALIC_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
-    uint8_t is_italic;
-#endif  // SFTE_FONT_ITALIC_PATH || SFTE_FONT_BOLD_ITALIC_PATH
-
     int x0, y0, x1, y1;  // atlas tex coords
     int xoff, yoff;      // render offsets
     int xadvance;
@@ -522,46 +542,34 @@ typedef struct {
 } sfte_term;
 
 typedef struct {
-    uint8_t *ttf_buf;
-#ifdef SFTE_FONT_BOLD_PATH
-    uint8_t *ttf_bold_buf;
-#endif  // SFTE_FONT_BOLD_PATH
-#ifdef SFTE_FONT_ITALIC_PATH
-    uint8_t *ttf_italic_buf;
-#endif  // SFTE_FONT_ITALIC_PATH
-#ifdef SFTE_FONT_BOLD_ITALIC_PATH
-    uint8_t *ttf_bold_italic_buf;
-#endif  // SFTE_FONT_BOLD_ITALIC_PATH
-
-    float cur_size;  // starts at SFTE_FONT_DEFAULT_SIZE
-
+    stbtt_fontinfo info;
     uint8_t *atlas_pxs;
-    int atlas_width;
-    int atlas_height;
-
-    stbtt_fontinfo stb_info;
-#ifdef SFTE_FONT_BOLD_PATH
-    stbtt_fontinfo stb_bold_info;
-#endif  // SFTE_FONT_BOLD_PATH
-#ifdef SFTE_FONT_ITALIC_PATH
-    stbtt_fontinfo stb_italic_info;
-#endif  // SFTE_FONT_ITALIC_PATH
-#ifdef SFTE_FONT_BOLD_ITALIC_PATH
-    stbtt_fontinfo stb_bold_italic_info;
-#endif  // SFTE_FONT_BOLD_ITALIC_PATH
-    float scale;
-
-    // hash map
     sfte_glyph *glyphs;
-    int glyph_cap;
-
-    // allocator
     int atlas_x;
     int atlas_y;
-    int atlas_bottom;
+    uint8_t *ttf_buf;
+    uint8_t owns_ttf_buf;  // 1 if sfte allocated it via fopen, 0 if user provided it
+} sfte_font_cache;
 
+typedef struct {
     int cell_width;   // width of a single mono char
     int cell_height;  // height of a single mono char
+    int ascent;       // distance from cell top to the baseline
+    int descent;      // distance from baseline to cell bottom
+    int line_gap;     // recommended empty space between lines
+    float cur_size;   // starts at SFTE_FONT_DEFAULT_SIZE
+    float scale;
+
+    sfte_font_cache regular;
+#ifdef SFTE_FONT_BOLD
+    sfte_font_cache bold;
+#endif  // SFTE_FONT_BOLD
+#ifdef SFTE_FONT_ITALIC
+    sfte_font_cache italic;
+#endif  // SFTE_FONT_ITALIC
+#ifdef SFTE_FONT_BOLD_ITALIC
+    sfte_font_cache bold_italic;
+#endif  // SFTE_FONT_BOLD_ITALIC
 } sfte_font;
 
 struct sfte_ctx {
@@ -681,98 +689,72 @@ static void _sfte_log(sfte_ctx *ctx, _sfte_log_item_t log_item, uint32_t log_lev
 // =================================================================================================
 // >>font
 // =================================================================================================
-static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, uint32_t rune
-#if defined(SFTE_FONT_BOLD_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
-                                        ,
-                                        uint8_t is_bold
-#endif  // SFTE_FONT_BOLD_PATH || SFTE_FONT_BOLD_ITALIC_PATH
-#if defined(SFTE_FONT_ITALIC_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
-                                        ,
-                                        uint8_t is_italic
-#endif  // SFTE_FONT_ITALIC_PATH || SFTE_FONT_BOLD_ITALIC_PATH
-) {
+static sfte_font_cache *_sfte_font_get_cache(sfte_ctx *ctx, int style) {
+    if (style == SFTE_FONT_STYLE_REGULAR) return &ctx->font.regular;
+#ifdef SFTE_FONT_BOLD
+    if (style == SFTE_FONT_STYLE_BOLD) return &ctx->font.bold;
+#endif  // SFTE_FONT_BOLD
+#ifdef SFTE_FONT_ITALIC
+    if (style == SFTE_FONT_STYLE_ITALIC) return &ctx->font.italic;
+#endif  // SFTE_FONT_ITALIC
+#ifdef SFTE_FONT_BOLD_ITALIC
+    if (style == SFTE_FONT_STYLE_BOLD_ITALIC) return &ctx->font.bold_italic;
+#endif  // SFTE_FONT_BOLD_ITALIC
+    return NULL;
+}
+
+static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache *cache, uint32_t rune) {
     if (rune == 0) rune = ' ';
 
     uint32_t h = rune;
-// offset hash if bold is requested to avoid collisions
-#ifdef SFTE_FONT_BOLD_PATH
-    if (is_bold) h += 0x9E3779B9;
-#endif  // SFTE_FONT_BOLD_PATH
-#ifdef SFTE_FONT_ITALIC_PATH
-    if (is_italic) h += 0x9E3779B9;
-#endif  // SFTE_FONT_ITALIC_PATH
-    h %= ctx->font.glyph_cap;
+    h %= SFTE_FONT_GLYPH_CAP;
 
     // hash map logic
-    for (int i = 0; i < ctx->font.glyph_cap; ++i) {
-        int idx = (h + i) % ctx->font.glyph_cap;
+    for (int i = 0; i < SFTE_FONT_GLYPH_CAP; ++i) {
+        int idx = (h + i) % SFTE_FONT_GLYPH_CAP;
 
-        if (ctx->font.glyphs[idx].rune == rune
-#if defined(SFTE_FONT_BOLD_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
-            && ctx->font.glyphs[idx].is_bold == is_bold
-#endif  // SFTE_FONT_BOLD_PATH || SFTE_FONT_BOLD_ITALIC_PATH
-#if defined(SFTE_FONT_ITALIC_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
-            && ctx->font.glyphs[idx].is_italic == is_italic
-#endif  // SFTE_FONT_ITALIC_PATH || SFTE_FONT_BOLD_ITALIC_PATH
-        )
-            return &ctx->font.glyphs[idx];
+        if (cache->glyphs[idx].rune == rune) return &cache->glyphs[idx];
 
-        if (ctx->font.glyphs[idx].rune != 0) continue;  // cache miss, taken, continue
-
-        stbtt_fontinfo *info = &ctx->font.stb_info;
+        if (cache->glyphs[idx].rune != 0) continue;  // cache miss, taken, continue
 
         // cache miss, free, take space
-        sfte_glyph *g = &ctx->font.glyphs[idx];
+        sfte_glyph *g = &cache->glyphs[idx];
         g->rune = rune;
-#ifdef SFTE_FONT_ITALIC_PATH
-        g->is_italic = is_italic;
-        if (is_italic) info = &ctx->font.stb_italic_info;
-#endif  // SFTE_FONT_ITALIC_PATH
-#ifdef SFTE_FONT_BOLD_PATH
-        g->is_bold = is_bold;
-        if (is_bold) info = &ctx->font.stb_bold_info;
-#endif  // SFTE_FONT_BOLD_PATH
-#ifdef SFTE_FONT_BOLD_ITALIC_PATH
-        g->is_italic = is_italic;
-        g->is_bold = is_bold;
-        if (is_bold && is_italic) info = &ctx->font.stb_bold_italic_info;
-#endif  // SFTE_FONT_BOLD_ITALIC_PATH
 
         int advance_width, left_side_bearing;
-        stbtt_GetCodepointHMetrics(info, rune, &advance_width, &left_side_bearing);
+        stbtt_GetCodepointHMetrics(&cache->info, rune, &advance_width, &left_side_bearing);
         g->xadvance = (int)(advance_width * ctx->font.scale + 0.5f);
 
         int x0, y0, x1, y1;
-        stbtt_GetCodepointBitmapBox(info, rune, ctx->font.scale, ctx->font.scale, &x0, &y0, &x1,
-                                    &y1);
+        stbtt_GetCodepointBitmapBox(&cache->info, rune, ctx->font.scale, ctx->font.scale, &x0, &y0,
+                                    &x1, &y1);
 
         int glyph_width = x1 - x0;
         int glyph_height = y1 - y0;
 
         // wrap to next row if out of horizontal space
-        if (ctx->font.atlas_x + glyph_width >= ctx->font.atlas_width) {
-            ctx->font.atlas_x = 0;
-            ctx->font.atlas_y = ctx->font.atlas_bottom;
+        if (cache->atlas_x + glyph_width >= SFTE_FONT_ATLAS_SIZE) {
+            cache->atlas_x = 0;
+            cache->atlas_y += glyph_height + 1;
         }
 
-        SFTE_ASSERT(ctx->font.atlas_y + glyph_height < ctx->font.atlas_height, "glyph atlas full");
+        SFTE_ASSERT(cache->atlas_y + glyph_height < SFTE_FONT_ATLAS_SIZE, "glyph atlas full");
 
-        g->x0 = ctx->font.atlas_x;
-        g->y0 = ctx->font.atlas_y;
+        g->x0 = cache->atlas_x;
+        g->y0 = cache->atlas_y;
         g->x1 = g->x0 + glyph_width;
         g->y1 = g->y0 + glyph_height;
         g->xoff = x0;
         g->yoff = y0;
 
         if (glyph_width > 0 && glyph_height > 0) {
-            int byte_off = g->y0 * ctx->font.atlas_width + g->x0;
-            stbtt_MakeCodepointBitmap(info, &ctx->font.atlas_pxs[byte_off], glyph_width,
-                                      glyph_height, ctx->font.atlas_width, ctx->font.scale,
+            int byte_off = g->y0 * SFTE_FONT_ATLAS_SIZE + g->x0;
+            stbtt_MakeCodepointBitmap(&cache->info, &cache->atlas_pxs[byte_off], glyph_width,
+                                      glyph_height, SFTE_FONT_ATLAS_SIZE, ctx->font.scale,
                                       ctx->font.scale, rune);
         }
 
-        ctx->font.atlas_x += glyph_width + 1;  // padding to prevent bleeding
-        if (g->y1 > ctx->font.atlas_bottom) ctx->font.atlas_bottom = g->y1;
+        cache->atlas_x += glyph_width + 1;  // padding to prevent bleeding
 
         return g;
     }
@@ -781,27 +763,44 @@ static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, uint32_t rune
 }
 
 static void _sfte_font_reset_cache(sfte_ctx *ctx) {
-    memset(ctx->font.atlas_pxs, 0, ctx->font.atlas_width * ctx->font.atlas_height);
-    memset(ctx->font.glyphs, 0, ctx->font.glyph_cap * sizeof(sfte_glyph));
-    ctx->font.atlas_x = 0;
-    ctx->font.atlas_y = 0;
-    ctx->font.atlas_bottom = 0;
+#define CLEAR_CACHE(type)                                                                          \
+    do {                                                                                           \
+        if (type.atlas_pxs)                                                                        \
+            memset(type.atlas_pxs, 0, SFTE_FONT_ATLAS_SIZE * SFTE_FONT_ATLAS_SIZE);                \
+        if (type.glyphs) memset(type.glyphs, 0, SFTE_FONT_GLYPH_CAP * sizeof(sfte_glyph));         \
+        type.atlas_x = 0;                                                                          \
+        type.atlas_y = 0;                                                                          \
+    } while (0)
 
-    ctx->font.scale = stbtt_ScaleForPixelHeight(&ctx->font.stb_info, ctx->font.cur_size);
+    CLEAR_CACHE(ctx->font.regular);
+#ifdef SFTE_FONT_BOLD
+    CLEAR_CACHE(ctx->font.bold);
+#endif  // SFTE_FONT_BOLD
+#ifdef SFTE_FONT_ITALIC
+    CLEAR_CACHE(ctx->font.italic);
+#endif  // SFTE_FONT_ITALIC
+#ifdef SFTE_FONT_BOLD_ITALIC
+    CLEAR_CACHE(ctx->font.bold_italic);
+#endif  // SFTE_FONT_BOLD_ITALIC
+
+#undef CLEAR_CACHE
+
+    ctx->font.scale = stbtt_ScaleForPixelHeight(&ctx->font.regular.info, ctx->font.cur_size);
+
+    int unscaled_ascent, unscaled_descent, unscaled_line_gap;
+    stbtt_GetFontVMetrics(&ctx->font.regular.info, &unscaled_ascent, &unscaled_descent,
+                          &unscaled_line_gap);
+
+    ctx->font.ascent = (int)(unscaled_ascent * ctx->font.scale + 0.5f);
+    ctx->font.descent = (int)(unscaled_descent * ctx->font.scale -
+                              0.5f);  // descent is usually negative
+    ctx->font.line_gap = (int)(unscaled_line_gap * ctx->font.scale + 0.5f);
+
+    ctx->font.cell_height = ctx->font.ascent - ctx->font.descent + ctx->font.line_gap;
 
     // monospace grid using standard 'M' glyph
-    sfte_glyph *m = _sfte_font_get_glyph(ctx, 'M'
-#if defined(SFTE_FONT_BOLD_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
-                                         ,
-                                         0
-#endif  // SFTE_FONT_BOLD_PATH || SFTE_FONT_BOLD_ITALIC_PATH
-#if defined(SFTE_FONT_ITALIC_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
-                                         ,
-                                         0
-#endif  // SFTE_FONT_ITALIC_PATH || SFTE_FONT_BOLD_ITALIC_PATH
-    );
+    sfte_glyph *m = _sfte_font_get_glyph(ctx, &ctx->font.regular, 'M');
     ctx->font.cell_width = m->xadvance;
-    ctx->font.cell_height = (int)(ctx->font.cur_size * 1.2f + 0.5f);
 }
 
 // =================================================================================================
@@ -827,28 +826,10 @@ static void _sfte_render_bg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, u
 }
 
 static void _sfte_render_fg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, uint32_t rune,
-                            uint32_t fg
-#if defined(SFTE_FONT_BOLD_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
-                            ,
-                            uint8_t is_bold
-#endif  // SFTE_FONT_BOLD_PATH || SFTE_FONT_BOLD_ITALIC_PATH
-#if defined(SFTE_FONT_ITALIC_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
-                            ,
-                            uint8_t is_italic
-#endif  // SFTE_FONT_ITALIC_PATH || SFTE_FONT_BOLD_ITALIC_PATH
-) {
+                            uint32_t fg, sfte_font_cache *target_cache) {
     if (rune == ' ') return;
 
-    sfte_glyph *g = _sfte_font_get_glyph(ctx, rune
-#if defined(SFTE_FONT_BOLD_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
-                                         ,
-                                         is_bold
-#endif  // SFTE_FONT_BOLD_PATH || SFTE_FONT_BOLD_ITALIC_PATH
-#if defined(SFTE_FONT_ITALIC_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
-                                         ,
-                                         is_italic
-#endif  // SFTE_FONT_ITALIC_PATH || SFTE_FONT_BOLD_ITALIC_PATH
-    );
+    sfte_glyph *g = _sfte_font_get_glyph(ctx, target_cache, rune);
     if (!g) return;
 
     int cx = col * ctx->font.cell_width + SFTE_PAD_X;
@@ -857,7 +838,7 @@ static void _sfte_render_fg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, u
     int glyph_width = g->x1 - g->x0;
     int glyph_height = g->y1 - g->y0;
 
-    int baseline = (int)(ctx->font.cell_height * 0.8f);
+    int baseline = ctx->font.ascent;
     int draw_x = cx + (int)g->xoff;
     int draw_y = cy + baseline + (int)g->yoff;
 
@@ -870,7 +851,8 @@ static void _sfte_render_fg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, u
             if (screen_x < 0 || screen_x >= ctx->width || screen_y < 0 || screen_y >= ctx->height)
                 continue;
 
-            uint8_t alpha = ctx->font.atlas_pxs[(g->y0 + y) * ctx->font.atlas_width + (g->x0 + x)];
+            uint8_t alpha = target_cache
+                                ->atlas_pxs[(g->y0 + y) * SFTE_FONT_ATLAS_SIZE + (g->x0 + x)];
             if (alpha == 0) continue;
 
             int px_idx = screen_y * ctx->width + screen_x;
@@ -1056,7 +1038,7 @@ static void _sfte_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf) {
 #include "xdg-shell.h"
 #include <wayland-client.h>
 
-typedef struct {
+struct sfte_wayland_app {
     sfte_ctx *ctx;
 
     struct wl_display *display;
@@ -1105,7 +1087,7 @@ typedef struct {
 
     int width, height;
     int pending_width, pending_height;
-} sfte_wayland_app;
+};
 
 static void _sfte_wayland_write_cb(void *user_data, const char *data, size_t len) {
     sfte_wayland_app *app = (sfte_wayland_app *)user_data;
@@ -1161,7 +1143,7 @@ static void _sfte_wayland_create_buffer(sfte_wayland_app *app) {
     SFTE_ASSERT(app->shm_data != MAP_FAILED, "failed to mmap shm data");
 
 #if SFTE_DOUBLE_BUFFER
-    if (app->back_buffer) free(app->back_buffer);
+    if (app->back_buffer) SFTE_FREE(app->back_buffer);
     app->back_buffer = (uint32_t *)SFTE_MALLOC(app->shm_size);
     SFTE_ASSERT(app->back_buffer, "failed to allocate back buffer");
 #endif  // SFTE_DOUBLE_BUFFER
@@ -1260,7 +1242,7 @@ static void _sfte_wayland_data_source_cancelled(void *data, struct wl_data_sourc
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     wl_data_source_destroy(src);
     if (app->selection_text) {
-        free(app->selection_text);
+        SFTE_FREE(app->selection_text);
         app->selection_text = NULL;
     }
     app->data_source = NULL;
@@ -1739,7 +1721,7 @@ static void _sfte_wayland_load(sfte_wayland_app *app) {
 
 static void _sfte_wayland_unload(sfte_wayland_app *app) {
 #if SFTE_DOUBLE_BUFFER
-    free(app->back_buffer);
+    SFTE_FREE(app->back_buffer);
 #endif  // SFTE_DOUBLE_BUFFER
 
     if (app->buffer) wl_buffer_destroy(app->buffer);
@@ -1770,7 +1752,7 @@ static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
         app->data_source = NULL;
     }
     if (app->selection_text) {
-        free(app->selection_text);
+        SFTE_FREE(app->selection_text);
         app->selection_text = NULL;
     }
 
@@ -1950,32 +1932,6 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
             app->needs_render = 0;
         }
     }
-}
-
-static int _sfte_wayland_run(void) {
-    sfte_wayland_app app = {0};
-    app.running = 1;
-
-    app.ctx = sfte_init(_sfte_wayland_write_cb, &app);
-
-    _sfte_wayland_pty_spawn(&app);
-    sfte_font_load(app.ctx);
-
-    int ideal_w, ideal_h;
-    sfte_get_ideal_size(app.ctx, 80, 24, &ideal_w, &ideal_h);
-    app.width = ideal_w;
-    app.height = ideal_h;
-
-    _sfte_wayland_load(&app);
-    sfte_resize(app.ctx, app.width, app.height);
-    if (!app.buffer) _sfte_wayland_create_buffer(&app);
-
-    _sfte_wayland_pty_update(&app);
-    _sfte_wayland_loop(&app);
-
-    _sfte_wayland_unload(&app);
-    sfte_free(app.ctx);
-    return 0;
 }
 #endif  // SFTE_WAYLAND
 // =================================================================================================
@@ -2250,11 +2206,11 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
     }
 #endif  // SFTE_ALT_SCREEN
 
-    free(ctx->term.cells);
-    free(temp_rows);
+    SFTE_FREE(ctx->term.cells);
+    SFTE_FREE(temp_rows);
 
 #if SFTE_ALT_SCREEN
-    if (ctx->term.alt_cells) free(ctx->term.alt_cells);
+    if (ctx->term.alt_cells) SFTE_FREE(ctx->term.alt_cells);
     ctx->term.cells = ctx->term.alt_active ? new_alt : new_main;
     ctx->term.alt_cells = ctx->term.alt_active ? new_main : NULL;
 #else
@@ -2262,7 +2218,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
 #endif  // !SFTE_ALT_SCREEN
 
 #if SFTE_SCROLLBACK_CAP
-    if (ctx->term.scrollback) free(ctx->term.scrollback);
+    if (ctx->term.scrollback) SFTE_FREE(ctx->term.scrollback);
     ctx->term.scrollback = new_sb;
     ctx->term.sb_head = sb_lines % ctx->term.sb_cap;
     ctx->term.sb_offset = 0;
@@ -2285,7 +2241,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
             new_tabs[i] = ctx->term.tab_stops[i];
         else
             new_tabs[i] = (i % SFTE_TAB_WIDTH == 0);
-    free(ctx->term.tab_stops);
+    SFTE_FREE(ctx->term.tab_stops);
     ctx->term.tab_stops = new_tabs;
 
     _SFTE_INFO(ctx, TERM_RESIZE, new_cols, new_rows);
@@ -2304,7 +2260,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
 #endif  // SFTE_ALT_SCREEN
 
 #if SFTE_SCROLLBACK_CAP
-    if (ctx->term.scrollback) free(ctx->term.scrollback);
+    if (ctx->term.scrollback) SFTE_FREE(ctx->term.scrollback);
     ctx->term.scrollback = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
     ctx->term.sb_head = 0;
     ctx->term.sb_offset = 0;
@@ -2318,7 +2274,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
             new_tabs[i] = ctx->term.tab_stops[i];
         else
             new_tabs[i] = (i % SFTE_TAB_WIDTH == 0);
-    free(ctx->term.tab_stops);
+    SFTE_FREE(ctx->term.tab_stops);
     ctx->term.tab_stops = new_tabs;
 
     int min_cols = new_cols < ctx->term.cols ? new_cols : ctx->term.cols;
@@ -2334,11 +2290,11 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
         }
     }
 
-    free(ctx->term.cells);
+    SFTE_FREE(ctx->term.cells);
     ctx->term.cells = new_cells;
 #if SFTE_ALT_SCREEN
     if (ctx->term.alt_cells) {
-        free(ctx->term.alt_cells);
+        SFTE_FREE(ctx->term.alt_cells);
         ctx->term.alt_cells = new_alt_cells;
     }
 #endif  // SFTE_ALT_SCREEN
@@ -3301,6 +3257,10 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
 // =================================================================================================
 //  PUBLIC IMPLEMENTATION  =========================================================================
 // =================================================================================================
+
+// =================================================================================================
+// >>core api
+// =================================================================================================
 void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect *out_dmg) {
     int dmg_x0 = w, dmg_y0 = h, dmg_x1 = 0, dmg_y1 = 0;
 
@@ -3481,7 +3441,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
             }
 
 #ifdef SFTE_BOLD_WHITE
-            if ((attr & ATTR_BOLD)) fg = 0xFFFFFF;
+            if (attr & ATTR_BOLD) fg = 0xFFFFFF;
 #endif  // SFTE_BOLD_WHITE
 
             int is_cursor = (c == vis_cx && r == vis_cy && !ctx->term.hide_cursor);
@@ -3493,16 +3453,19 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
             uint32_t draw_fg = fg;
             if (is_cursor && _SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_BLOCK) draw_fg = bg;
 
-            _sfte_render_fg(ctx, px_buf, c, r, rune, draw_fg
-#if defined(SFTE_FONT_BOLD_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
-                            ,
-                            attr & ATTR_BOLD
-#endif  // SFTE_FONT_BOLD_PATH || SFTE_FONT_BOLD_ITALIC_PATH
-#if defined(SFTE_FONT_ITALIC_PATH) || defined(SFTE_FONT_BOLD_ITALIC_PATH)
-                            ,
-                            attr & ATTR_ITALIC
-#endif  // SFTE_FONT_ITALIC_PATH || SFTE_FONT_BOLD_ITALIC_PATH
-            );
+            sfte_font_cache *target_cache = &ctx->font.regular;
+
+#ifdef SFTE_FONT_BOLD_ITALIC
+            if ((attr & ATTR_BOLD) && (attr & ATTR_ITALIC)) target_cache = &ctx->font.bold_italic;
+#endif  // SFTE_FONT_BOLD_ITALIC
+#ifdef SFTE_FONT_BOLD
+            if (attr & ATTR_BOLD) target_cache = &ctx->font.bold;
+#endif  // SFTE_FONT_BOLD
+#ifdef SFTE_FONT_ITALIC
+            if (attr & ATTR_ITALIC) target_cache = &ctx->font.italic;
+#endif  // SFTE_FONT_ITALIC
+
+            _sfte_render_fg(ctx, px_buf, c, r, rune, draw_fg, target_cache);
 
             _sfte_render_decorations(ctx, px_buf, c, r, attr, draw_fg, is_cursor, w, h);
 
@@ -3760,102 +3723,81 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
 void sfte_free(sfte_ctx *ctx) {
     if (!ctx) return;
 
-    free(ctx->term.tab_stops);
-    free(ctx->font.ttf_buf);
-#ifdef SFTE_FONT_BOLD_PATH
-    free(ctx->font.ttf_bold_buf);
-#endif  // SFTE_FONT_BOLD_PATH
-#ifdef SFTE_FONT_ITALIC_PATH
-    free(ctx->font.ttf_italic_buf);
-#endif  // SFTE_FONT_ITALIC_PATH
-    free(ctx->font.atlas_pxs);
-    free(ctx->font.glyphs);
-    free(ctx->term.cells);
+    SFTE_FREE(ctx->term.tab_stops);
+
+#define FREE_CACHE(type)                                                                           \
+    do {                                                                                           \
+        if (type.owns_ttf_buf) SFTE_FREE(type.ttf_buf);                                            \
+        SFTE_FREE(type.atlas_pxs);                                                                 \
+        SFTE_FREE(type.glyphs);                                                                    \
+    } while (0)
+
+    FREE_CACHE(ctx->font.regular);
+#ifdef SFTE_FONT_BOLD
+    FREE_CACHE(ctx->font.bold);
+#endif  // SFTE_FONT_BOLD
+#ifdef SFTE_FONT_ITALIC
+    FREE_CACHE(ctx->font.italic);
+#endif  // SFTE_FONT_ITALIC
+#ifdef SFTE_FONT_BOLD_ITALIC
+    FREE_CACHE(ctx->font.bold_italic);
+#endif  // SFTE_FONT_BOLD_ITALIC
+
+#undef FREE_CACHE
+
+    SFTE_FREE(ctx->term.cells);
 #if SFTE_ALT_SCREEN
-    free(ctx->term.alt_cells);
+    SFTE_FREE(ctx->term.alt_cells);
 #endif  // SFTE_ALT_SCREEN
 #if SFTE_SCROLLBACK_CAP
-    free(ctx->term.scrollback);
+    SFTE_FREE(ctx->term.scrollback);
 #endif  // SFTE_SCROLLBACK_CAP
 
-    free(ctx);
+    SFTE_FREE(ctx);
 }
 
-void sfte_font_load(sfte_ctx *ctx) {
-    ctx->font.cur_size = SFTE_FONT_DEFAULT_SIZE;
-    ctx->font.atlas_width = SFTE_FONT_ATLAS_SIZE;
-    ctx->font.atlas_height = SFTE_FONT_ATLAS_SIZE;
+void sfte_font_load_mem(sfte_ctx *ctx, int style, const uint8_t *ttf_data) {
+    sfte_font_cache *cache = _sfte_font_get_cache(ctx, style);
+    if (!cache || !ttf_data) return;
 
-    ctx->font.atlas_pxs = (uint8_t *)SFTE_MALLOC(ctx->font.atlas_width * ctx->font.atlas_height);
-    SFTE_ASSERT(ctx->font.atlas_pxs, "failed to allocate font atlas");
+    cache->ttf_buf = (uint8_t *)ttf_data;
+    cache->owns_ttf_buf = 0;
 
-    // NOTE: explicitly not in #if SFTE_FONT_PATH, so that it only compiles if config is correct
-    FILE *f = fopen(SFTE_FONT_PATH, "rb");
+    if (style == SFTE_FONT_STYLE_REGULAR) ctx->font.cur_size = SFTE_FONT_DEFAULT_SIZE;
+
+    if (!cache->atlas_pxs) {
+        cache->atlas_pxs = (uint8_t *)SFTE_MALLOC(SFTE_FONT_ATLAS_SIZE * SFTE_FONT_ATLAS_SIZE);
+        SFTE_ASSERT(cache->atlas_pxs, "failed to allocate font atlas");
+    }
+
+    if (!cache->glyphs) {
+        cache->glyphs = (sfte_glyph *)SFTE_CALLOC(SFTE_FONT_GLYPH_CAP, sizeof(sfte_glyph));
+        SFTE_ASSERT(cache->glyphs, "failed to allocate glyphs storage");
+    }
+
+    stbtt_InitFont(&cache->info, cache->ttf_buf, 0);
+    _sfte_font_reset_cache(ctx);
+
+    _SFTE_INFO(ctx, FONT_LOADED);
+}
+
+void sfte_font_load_file(sfte_ctx *ctx, int style, const char *path) {
+    sfte_font_cache *cache = _sfte_font_get_cache(ctx, style);
+    if (!cache) return;
+
+    FILE *f = fopen(path, "rb");
     SFTE_ASSERT(f, "failed to open font file");
+
     fseek(f, 0, SEEK_END);
     size_t size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    ctx->font.ttf_buf = (uint8_t *)SFTE_MALLOC(size);
-    SFTE_ASSERT(fread(ctx->font.ttf_buf, 1, size, f) == size, "failed to read font file");
+    uint8_t *buf = (uint8_t *)SFTE_MALLOC(size);
+    SFTE_ASSERT(fread(buf, 1, size, f) == size, "failed to read font file");
     fclose(f);
 
-#ifdef SFTE_FONT_BOLD_PATH
-    FILE *f_bold = fopen(SFTE_FONT_BOLD_PATH, "rb");
-    SFTE_ASSERT(f_bold, "failed to open bold font file");
-
-    fseek(f_bold, 0, SEEK_END);
-    size_t size_bold = ftell(f_bold);
-    fseek(f_bold, 0, SEEK_SET);
-
-    ctx->font.ttf_bold_buf = (uint8_t *)SFTE_MALLOC(size_bold);
-    SFTE_ASSERT(fread(ctx->font.ttf_bold_buf, 1, size_bold, f_bold) == size_bold,
-                "failed to read bold font file");
-    fclose(f_bold);
-
-    stbtt_InitFont(&ctx->font.stb_bold_info, ctx->font.ttf_bold_buf, 0);
-#endif  // SFTE_FONT_BOLD_PATH
-
-#ifdef SFTE_FONT_ITALIC_PATH
-    FILE *f_italic = fopen(SFTE_FONT_ITALIC_PATH, "rb");
-    SFTE_ASSERT(f_italic, "failed to open italic font file");
-
-    fseek(f_italic, 0, SEEK_END);
-    size_t size_italic = ftell(f_italic);
-    fseek(f_italic, 0, SEEK_SET);
-
-    ctx->font.ttf_italic_buf = (uint8_t *)SFTE_MALLOC(size_italic);
-    SFTE_ASSERT(fread(ctx->font.ttf_italic_buf, 1, size_italic, f_italic) == size_italic,
-                "failed to read italic font file");
-    fclose(f_italic);
-
-    stbtt_InitFont(&ctx->font.stb_italic_info, ctx->font.ttf_italic_buf, 0);
-#endif  // SFTE_FONT_ITALIC_PATH
-
-#ifdef SFTE_FONT_BOLD_ITALIC_PATH
-    FILE *f_bold_italic = fopen(SFTE_FONT_BOLD_ITALIC_PATH, "rb");
-    SFTE_ASSERT(f_bold_italic, "failed to open bold italic font file");
-
-    fseek(f_bold_italic, 0, SEEK_END);
-    size_t size_bold_italic = ftell(f_bold_italic);
-    fseek(f_bold_italic, 0, SEEK_SET);
-
-    ctx->font.ttf_bold_italic_buf = (uint8_t *)SFTE_MALLOC(size_bold_italic);
-    SFTE_ASSERT(fread(ctx->font.ttf_bold_italic_buf, 1, size_bold_italic, f_bold_italic) ==
-                    size_bold_italic,
-                "failed to read bold italic font file");
-    fclose(f_bold_italic);
-
-    stbtt_InitFont(&ctx->font.stb_bold_italic_info, ctx->font.ttf_bold_italic_buf, 0);
-#endif  // SFTE_FONT_BOLD_ITALIC_PATH
-
-    ctx->font.glyph_cap = SFTE_FONT_GLYPH_CAP;
-    ctx->font.glyphs = (sfte_glyph *)SFTE_CALLOC(ctx->font.glyph_cap, sizeof(sfte_glyph));
-    SFTE_ASSERT(ctx->font.glyphs, "failed to allocate glyphs storage");
-    stbtt_InitFont(&ctx->font.stb_info, ctx->font.ttf_buf, 0);
-    _sfte_font_reset_cache(ctx);
-
-    _SFTE_INFO(ctx, FONT_LOADED);
+    sfte_font_load_mem(ctx, style, buf);
+    ctx->font.regular.owns_ttf_buf = 1;
 }
 
 #ifndef SFTE_NO_POSIX
@@ -4059,11 +4001,56 @@ size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes) {
 }
 #endif  // SFTE_SELECTION
 
-int sfte_run(void) {
+// =================================================================================================
+// >>wayland api
+// =================================================================================================
 #if SFTE_WAYLAND
-    _sfte_wayland_run();
-#endif  // SFTE_WAYLAND
-    return 0;
+sfte_wayland_app *sfte_wayland_init(void) {
+    sfte_wayland_app *app = (sfte_wayland_app *)SFTE_CALLOC(1, sizeof(sfte_wayland_app));
+    app->running = 1;
+    app->ctx = sfte_init(_sfte_wayland_write_cb, app);
+
+    _sfte_wayland_pty_spawn(app);
+    _sfte_wayland_load(app);
+
+    return app;
 }
 
+sfte_ctx *sfte_wayland_get_ctx(sfte_wayland_app *app) {
+    return app->ctx;
+}
+
+int sfte_wayland_run(sfte_wayland_app *app) {
+#ifdef SFTE_FONT_BOLD
+    SFTE_ASSERT(
+        app->ctx->font.bold.glyphs && app->ctx->font.bold.atlas_pxs,
+        "if SFTE_FONT_BOLD is defined, a bold font must be provided using sfte_font_load_*");
+#endif  // SFTE_FONT_BOLD
+#ifdef SFTE_FONT_ITALIC
+    SFTE_ASSERT(
+        app->ctx->font.italic.glyphs && app->ctx->font.italic.atlas_pxs,
+        "if SFTE_FONT_ITALIC is defined, an italic font must be provided using sfte_font_load_*");
+#endif  // SFTE_FONT_ITALIC
+#ifdef SFTE_FONT_BOLD_ITALIC
+    SFTE_ASSERT(app->ctx->font.bold_italic.glyphs && app->ctx->font.bold_italic.atlas_pxs,
+                "if SFTE_FONT_BOLD_ITALIC is defined, a bold italic font must be provided using "
+                "sfte_font_load_*");
+#endif  // SFTE_FONT_BOLD_ITALIC
+
+    int ideal_w, ideal_h;
+    sfte_get_ideal_size(app->ctx, 80, 24, &ideal_w, &ideal_h);
+    app->width = ideal_w;
+    app->height = ideal_h;
+    sfte_resize(app->ctx, app->width, app->height);
+    if (!app->buffer) _sfte_wayland_create_buffer(app);
+    _sfte_wayland_pty_update(app);
+
+    _sfte_wayland_loop(app);
+
+    _sfte_wayland_unload(app);
+    sfte_free(app->ctx);
+    SFTE_FREE(app);
+    return 0;
+}
+#endif  // SFTE_WAYLAND
 #endif  // SFTE_IMPL
