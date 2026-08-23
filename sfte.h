@@ -3521,15 +3521,33 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
 
     if (!ctx->term.hide_cursor && ctx->term.is_trailing) {
         int vis_cx = ctx->term.cursor_x >= ctx->term.cols ? ctx->term.cols - 1 : ctx->term.cursor_x;
-        float target_rx = vis_cx * ctx->font.cell_width;
-        float target_ry = ctx->term.cursor_y * ctx->font.cell_height;
 
-        float min_x = target_rx < ctx->term.tail_rx ? target_rx : ctx->term.tail_rx;
-        float max_x = (target_rx > ctx->term.tail_rx ? target_rx : ctx->term.tail_rx) +
-                      ctx->font.cell_width;
-        float min_y = target_ry < ctx->term.tail_ry ? target_ry : ctx->term.tail_ry;
-        float max_y = (target_ry > ctx->term.tail_ry ? target_ry : ctx->term.tail_ry) +
-                      ctx->font.cell_height;
+        float target_cell_x = vis_cx * ctx->font.cell_width;
+        float target_cell_y = ctx->term.cursor_y * ctx->font.cell_height;
+
+        float trail_w = ctx->font.cell_width;
+        float trail_h = ctx->font.cell_height;
+        float trail_off_x = 0;
+        float trail_off_y = 0;
+
+        if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_UNDERLINE) {
+            trail_h = ctx->font.cell_height * SFTE_CURSOR_THICK_RATIO;
+            if (trail_h < 1.0f) trail_h = 1.0f;
+            trail_off_y = ctx->font.cell_height - trail_h;
+        } else if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_BAR) {
+            trail_w = ctx->font.cell_width * SFTE_CURSOR_THICK_RATIO;
+            if (trail_w < 1.0f) trail_w = 1.0f;
+        }
+
+        float t_rx = target_cell_x + trail_off_x;
+        float t_ry = target_cell_y + trail_off_y;
+        float tl_rx = ctx->term.tail_rx + trail_off_x;
+        float tl_ry = ctx->term.tail_ry + trail_off_y;
+
+        float min_x = t_rx < tl_rx ? t_rx : tl_rx;
+        float max_x = (t_rx > tl_rx ? t_rx : tl_rx) + trail_w;
+        float min_y = t_ry < tl_ry ? t_ry : tl_ry;
+        float max_y = (t_ry > tl_ry ? t_ry : tl_ry) + trail_h;
 
         int px_min_x = (int)min_x + SFTE_PAD_X;
         int px_max_x = (int)max_x + SFTE_PAD_X;
@@ -3540,10 +3558,10 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
         uint8_t cg = (SFTE_CURSOR_COLOR >> 8) & 0xFF;
         uint8_t cb = SFTE_CURSOR_COLOR & 0xFF;
 
-        float cx0 = ctx->term.tail_rx + ctx->font.cell_width * 0.5f;
-        float cy0 = ctx->term.tail_ry + ctx->font.cell_height * 0.5f;
-        float cx1 = target_rx + ctx->font.cell_width * 0.5f;
-        float cy1 = target_ry + ctx->font.cell_height * 0.5f;
+        float cx0 = tl_rx + trail_w * 0.5f;
+        float cy0 = tl_ry + trail_h * 0.5f;
+        float cx1 = t_rx + trail_w * 0.5f;
+        float cy1 = t_ry + trail_h * 0.5f;
 
         float ab_x = cx1 - cx0;
         float ab_y = cy1 - cy0;
@@ -3553,11 +3571,9 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
             for (int x = px_min_x; x < px_max_x; ++x) {
                 if (x < 0 || x >= w || y < 0 || y >= h) continue;
 
-                int hx = (int)target_rx + SFTE_PAD_X;
-                int hy = (int)target_ry + SFTE_PAD_Y;
-                if (x >= hx && x < hx + ctx->font.cell_width && y >= hy &&
-                    y < hy + ctx->font.cell_height)
-                    continue;
+                int hx = (int)t_rx + SFTE_PAD_X;
+                int hy = (int)t_ry + SFTE_PAD_Y;
+                if (x >= hx && x < hx + trail_w && y >= hy && y < hy + trail_h) continue;
 
                 float ap_x = (float)(x - SFTE_PAD_X) - cx0 + 0.5f;
                 float ap_y = (float)(y - SFTE_PAD_Y) - cy0 + 0.5f;
@@ -3577,8 +3593,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
                 if (dist_x < 0) dist_x = -dist_x;
                 if (dist_y < 0) dist_y = -dist_y;
 
-                if (dist_x <= ctx->font.cell_width * 0.5f &&
-                    dist_y <= ctx->font.cell_height * 0.5f) {
+                if (dist_x <= trail_w * 0.5f && dist_y <= trail_h * 0.5f) {
                     int alpha = (int)(128.0f * t);
                     if (alpha == 0) continue;
                     int inv_alpha = 255 - alpha;
