@@ -2481,7 +2481,16 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
             _sfte_grid_clear_cells(ctx, 0, _SFTE_IDX(ctx, cx, ctx->term.cursor_y) + 1);
         else if (p[0] == 2)
             _sfte_grid_clear_cells(ctx, 0, ctx->term.rows * ctx->term.cols);
-        // TODO: n = 3
+        else if (p[0] == 3) {
+            _sfte_grid_clear_cells(ctx, 0, ctx->term.rows * ctx->term.cols);
+#if SFTE_SCROLLBACK_CAP
+            ctx->term.sb_len = 0;
+            ctx->term.sb_head = 0;
+            ctx->term.sb_offset = 0;
+#endif  // SFTE_SCROLLBACK_CAP
+            ctx->term.cursor_x = 0;
+            ctx->term.cursor_y = 0;
+        }
         break;
     }
     case 'K':  // EL / Erase in Line
