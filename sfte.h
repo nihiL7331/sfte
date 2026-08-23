@@ -573,6 +573,7 @@ struct sfte_ctx {
     uint8_t padding_dirty;
 
     sfte_write_cb write_cb;
+    void (*bell_cb)(void *user_data);
     void *user_data;
 
     int damage_min_x;
@@ -3120,6 +3121,8 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
     case VT_GROUND:
         if (b == '\033' || b == '\x1b') {
             ctx->term.vt_state = VT_ESCAPE;
+        } else if (b == '\a' || b == '\x07') {
+            if (ctx->bell_cb) ctx->bell_cb(ctx->user_data);
         } else if (b == '\n') {
             if (ctx->term.cursor_y == ctx->term.scroll_bottom)
                 _sfte_grid_scroll(ctx, 1);  // at bot margin, scroll text up
