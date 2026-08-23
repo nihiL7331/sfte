@@ -1434,6 +1434,13 @@ static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
 
     if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !app->xkb_state) return;
 
+    // clear selection on key press
+    if (app->ctx->term.sel_active) {
+        app->ctx->term.sel_active = 0;
+        _sfte_dirty_range(app->ctx, 0, app->ctx->term.cols * app->ctx->term.rows);
+        app->needs_render = 1;
+    }
+
     if (app->repeat_rate > 0 && app->repeating_key != key) {
         struct itimerspec its;
         its.it_value.tv_sec = app->repeat_delay / 1000;
