@@ -213,7 +213,6 @@
 #define SFTE_SCROLL_STEP 3
 #endif  // SFTE_SCROLL_STEP
 
-// NOTE: SFTE_CLIPBOARD implicity enables SFTE_SELECTION and SFTE_MOUSE
 #ifndef SFTE_CLIPBOARD
 #define SFTE_CLIPBOARD 1
 #endif  // SFTE_CLIPBOARD
@@ -221,10 +220,6 @@
 #ifndef SFTE_CLIPBOARD_BUF_SIZE
 #define SFTE_CLIPBOARD_BUF_SIZE 4096
 #endif  // SFTE_CLIPBOARD_BUF_SIZE
-
-#if SFTE_CLIPBOARD
-#define SFTE_SELECTION 1
-#endif  // SFTE_CLIPBOARD
 
 #if SFTE_SELECTION
 #define SFTE_MOUSE 1
@@ -277,16 +272,24 @@ static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // !SFTE_SCROLLBACK_CAP || !SFTE_WAYLAND
 
 #if SFTE_CLIPBOARD && SFTE_WAYLAND
-#define _SFTE_WAYLAND_CLIPBOARD_BINDS                                                              \
-    {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_C, _sfte_wayland_clipboard_copy, {.v = NULL}},        \
-        {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_V, _sfte_wayland_clipboard_paste, {.v = NULL}},
+#if SFTE_SELECTION
+#define _SFTE_WAYLAND_COPY_BIND                                                                    \
+    {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_C, _sfte_wayland_clipboard_copy, {.v = NULL}},
+#endif  // SFTE_SELECTION
+#define _SFTE_WAYLAND_PASTE_BIND                                                                   \
+    {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_V, _sfte_wayland_clipboard_paste, {.v = NULL}},
 #else
-#define _SFTE_WAYLAND_CLIPBOARD_BINDS
+#define _SFTE_WAYLAND_PASTE_BIND
 #endif  // !SFTE_CLIPBOARD || !SFTE_WAYLAND
+
+#if !SFTE_CLIPBOARD || !SFTE_WAYLAND || !SFTE_SELECTION
+#define _SFTE_WAYLAND_COPY_BIND
+#endif  // !SFTE_CLIPBOARD || !SFTE_WAYLAND || !SFTE_SELECTION
 
 #ifndef SFTE_SHORTCUTS
 #define SFTE_SHORTCUTS                                                                             \
-    {_SFTE_WAYLAND_ZOOM_BINDS _SFTE_WAYLAND_SCROLL_BINDS _SFTE_WAYLAND_CLIPBOARD_BINDS}
+    {_SFTE_WAYLAND_ZOOM_BINDS _SFTE_WAYLAND_SCROLL_BINDS _SFTE_WAYLAND_COPY_BIND                   \
+         _SFTE_WAYLAND_PASTE_BIND}
 #endif  // SFTE_SHORTCUTS
 
 // =================================================================================================
@@ -1067,7 +1070,6 @@ typedef struct {
     struct xkb_state *xkb_state;
 #if SFTE_SELECTION
     struct wl_pointer *pointer;
-    uint32_t serial;
 #endif  // SFTE_SELECTION
 #if SFTE_CLIPBOARD
     struct wl_data_device_manager *data_device_manager;
@@ -1076,6 +1078,9 @@ typedef struct {
     struct wl_data_offer *data_offer;
     char *selection_text;
 #endif  // SFTE_CLIPBOARD
+#if SFTE_SELECTION || SFTE_CLIPBOARD
+    uint32_t serial;
+#endif  // SFTE_SELECTION || SFTE_CLIPBOARD
     struct xdg_wm_base *xdg_wm_base;
     struct wl_surface *surface;
     struct xdg_surface *xdg_surface;
@@ -1571,18 +1576,19 @@ static void _sfte_wayland_seat_capabilities(void *data, struct wl_seat *seat,
         app->pointer = wl_seat_get_pointer(seat);
         wl_pointer_add_listener(app->pointer, &_sfte_wayland_pointer_listener, app);
 
-#if SFTE_CLIPBOARD
-        if (app->data_device_manager && !app->data_device) {
-            app->data_device = (struct wl_data_device *)wl_data_device_manager_get_data_device(
-                app->data_device_manager, seat);
-            wl_data_device_add_listener(app->data_device, &_sfte_wayland_data_device_listener, app);
-        }
-#endif  // SFTE_CLIPBOARD
     } else if (!(capabilities & WL_SEAT_CAPABILITY_POINTER) && app->pointer) {
         wl_pointer_release(app->pointer);
         app->pointer = NULL;
     }
 #endif  // SFTE_SELECTION
+
+#if SFTE_CLIPBOARD
+    if (app->data_device_manager && !app->data_device) {
+        app->data_device = (struct wl_data_device *)wl_data_device_manager_get_data_device(
+            app->data_device_manager, seat);
+        wl_data_device_add_listener(app->data_device, &_sfte_wayland_data_device_listener, app);
+    }
+#endif  // SFTE_CLIPBOARD
 }
 
 static void _sfte_wayland_seat_name(void *data, struct wl_seat *seat, const char *name) {
@@ -1747,6 +1753,7 @@ static void _sfte_wayland_unload(sfte_wayland_app *app) {
 }
 
 #if SFTE_CLIPBOARD
+#if SFTE_SELECTION
 static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
@@ -1777,6 +1784,7 @@ static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
     wl_data_source_offer(app->data_source, "text/plain");
     wl_data_device_set_selection(app->data_device, app->data_source, app->serial);
 }
+#endif  // SFTE_SELECTION
 
 static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
