@@ -58,6 +58,14 @@
 // =================================================================================================
 // >>config
 // =================================================================================================
+
+#ifndef SFTE_MALLOC
+#include <stdlib.h>
+#define SFTE_MALLOC(sz) malloc(sz)
+#define SFTE_CALLOC(n, sz) calloc(n, sz)
+#define SFTE_FREE(p) free(p)
+#endif  // !SFTE_MALLOC
+
 #ifndef SFTE_LOG_LEVEL
 #define SFTE_LOG_LEVEL 0
 #endif  // SFTE_LOG_LEVEL
@@ -205,7 +213,6 @@
 #define SFTE_SCROLL_STEP 3
 #endif  // SFTE_SCROLL_STEP
 
-// NOTE: SFTE_CLIPBOARD implicity enables SFTE_SELECTION and SFTE_MOUSE
 #ifndef SFTE_CLIPBOARD
 #define SFTE_CLIPBOARD 1
 #endif  // SFTE_CLIPBOARD
@@ -213,10 +220,6 @@
 #ifndef SFTE_CLIPBOARD_BUF_SIZE
 #define SFTE_CLIPBOARD_BUF_SIZE 4096
 #endif  // SFTE_CLIPBOARD_BUF_SIZE
-
-#if SFTE_CLIPBOARD
-#define SFTE_SELECTION 1
-#endif  // SFTE_CLIPBOARD
 
 #if SFTE_SELECTION
 #define SFTE_MOUSE 1
@@ -269,16 +272,24 @@ static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // !SFTE_SCROLLBACK_CAP || !SFTE_WAYLAND
 
 #if SFTE_CLIPBOARD && SFTE_WAYLAND
-#define _SFTE_WAYLAND_CLIPBOARD_BINDS                                                              \
-    {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_C, _sfte_wayland_clipboard_copy, {.v = NULL}},        \
-        {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_V, _sfte_wayland_clipboard_paste, {.v = NULL}},
+#if SFTE_SELECTION
+#define _SFTE_WAYLAND_COPY_BIND                                                                    \
+    {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_C, _sfte_wayland_clipboard_copy, {.v = NULL}},
+#endif  // SFTE_SELECTION
+#define _SFTE_WAYLAND_PASTE_BIND                                                                   \
+    {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_V, _sfte_wayland_clipboard_paste, {.v = NULL}},
 #else
-#define _SFTE_WAYLAND_CLIPBOARD_BINDS
+#define _SFTE_WAYLAND_PASTE_BIND
 #endif  // !SFTE_CLIPBOARD || !SFTE_WAYLAND
+
+#if !SFTE_CLIPBOARD || !SFTE_WAYLAND || !SFTE_SELECTION
+#define _SFTE_WAYLAND_COPY_BIND
+#endif  // !SFTE_CLIPBOARD || !SFTE_WAYLAND || !SFTE_SELECTION
 
 #ifndef SFTE_SHORTCUTS
 #define SFTE_SHORTCUTS                                                                             \
-    {_SFTE_WAYLAND_ZOOM_BINDS _SFTE_WAYLAND_SCROLL_BINDS _SFTE_WAYLAND_CLIPBOARD_BINDS}
+    {_SFTE_WAYLAND_ZOOM_BINDS _SFTE_WAYLAND_SCROLL_BINDS _SFTE_WAYLAND_COPY_BIND                   \
+         _SFTE_WAYLAND_PASTE_BIND}
 #endif  // SFTE_SHORTCUTS
 
 // =================================================================================================
@@ -360,7 +371,6 @@ int sfte_run(void);
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
-#include <stdlib.h>  // getenv/setenv/malloc
 #include <string.h>  // memset
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -566,6 +576,7 @@ struct sfte_ctx {
     uint8_t padding_dirty;
 
     sfte_write_cb write_cb;
+    void (*bell_cb)(void *user_data);
     void *user_data;
 
     int damage_min_x;
@@ -1059,7 +1070,6 @@ typedef struct {
     struct xkb_state *xkb_state;
 #if SFTE_SELECTION
     struct wl_pointer *pointer;
-    uint32_t serial;
 #endif  // SFTE_SELECTION
 #if SFTE_CLIPBOARD
     struct wl_data_device_manager *data_device_manager;
@@ -1068,6 +1078,9 @@ typedef struct {
     struct wl_data_offer *data_offer;
     char *selection_text;
 #endif  // SFTE_CLIPBOARD
+#if SFTE_SELECTION || SFTE_CLIPBOARD
+    uint32_t serial;
+#endif  // SFTE_SELECTION || SFTE_CLIPBOARD
     struct xdg_wm_base *xdg_wm_base;
     struct wl_surface *surface;
     struct xdg_surface *xdg_surface;
@@ -1149,7 +1162,7 @@ static void _sfte_wayland_create_buffer(sfte_wayland_app *app) {
 
 #if SFTE_DOUBLE_BUFFER
     if (app->back_buffer) free(app->back_buffer);
-    app->back_buffer = (uint32_t *)malloc(app->shm_size);
+    app->back_buffer = (uint32_t *)SFTE_MALLOC(app->shm_size);
     SFTE_ASSERT(app->back_buffer, "failed to allocate back buffer");
 #endif  // SFTE_DOUBLE_BUFFER
 
@@ -1421,6 +1434,13 @@ static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
 
     if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !app->xkb_state) return;
 
+    // clear selection on key press
+    if (app->ctx->term.sel_active) {
+        app->ctx->term.sel_active = 0;
+        _sfte_dirty_range(app->ctx, 0, app->ctx->term.cols * app->ctx->term.rows);
+        app->needs_render = 1;
+    }
+
     if (app->repeat_rate > 0 && app->repeating_key != key) {
         struct itimerspec its;
         its.it_value.tv_sec = app->repeat_delay / 1000;
@@ -1563,18 +1583,19 @@ static void _sfte_wayland_seat_capabilities(void *data, struct wl_seat *seat,
         app->pointer = wl_seat_get_pointer(seat);
         wl_pointer_add_listener(app->pointer, &_sfte_wayland_pointer_listener, app);
 
-#if SFTE_CLIPBOARD
-        if (app->data_device_manager && !app->data_device) {
-            app->data_device = (struct wl_data_device *)wl_data_device_manager_get_data_device(
-                app->data_device_manager, seat);
-            wl_data_device_add_listener(app->data_device, &_sfte_wayland_data_device_listener, app);
-        }
-#endif  // SFTE_CLIPBOARD
     } else if (!(capabilities & WL_SEAT_CAPABILITY_POINTER) && app->pointer) {
         wl_pointer_release(app->pointer);
         app->pointer = NULL;
     }
 #endif  // SFTE_SELECTION
+
+#if SFTE_CLIPBOARD
+    if (app->data_device_manager && !app->data_device) {
+        app->data_device = (struct wl_data_device *)wl_data_device_manager_get_data_device(
+            app->data_device_manager, seat);
+        wl_data_device_add_listener(app->data_device, &_sfte_wayland_data_device_listener, app);
+    }
+#endif  // SFTE_CLIPBOARD
 }
 
 static void _sfte_wayland_seat_name(void *data, struct wl_seat *seat, const char *name) {
@@ -1739,6 +1760,7 @@ static void _sfte_wayland_unload(sfte_wayland_app *app) {
 }
 
 #if SFTE_CLIPBOARD
+#if SFTE_SELECTION
 static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
@@ -1757,11 +1779,9 @@ static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
     size_t needed_bytes = sfte_get_selection(app->ctx, NULL, 0);
     if (needed_bytes == 0) return;
 
-    app->selection_text = (char *)malloc(needed_bytes);
+    app->selection_text = (char *)SFTE_MALLOC(needed_bytes);
     sfte_get_selection(app->ctx, app->selection_text, needed_bytes);
     if (!app->selection_text) return;
-
-    _SFTE_INFO(app->ctx, UNHANDLED_OSC, app->selection_text);
 
     app->data_source = wl_data_device_manager_create_data_source(app->data_device_manager);
     wl_data_source_add_listener(app->data_source, &_sfte_wayland_data_source_listener, app);
@@ -1769,6 +1789,7 @@ static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
     wl_data_source_offer(app->data_source, "text/plain");
     wl_data_device_set_selection(app->data_device, app->data_source, app->serial);
 }
+#endif  // SFTE_SELECTION
 
 static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
@@ -2153,7 +2174,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
                             ctx->term.rows) *
                         (ctx->term.cols / new_cols + 2);
     if (max_temp_rows < new_rows) max_temp_rows = new_rows;
-    sfte_cell *temp_rows = (sfte_cell *)calloc(max_temp_rows * new_cols, sizeof(sfte_cell));
+    sfte_cell *temp_rows = (sfte_cell *)SFTE_CALLOC(max_temp_rows * new_cols, sizeof(sfte_cell));
     SFTE_ASSERT(temp_rows, "failed to allocate temporary row data");
 
     sfte_reflow_state st = {.temp_rows = temp_rows,
@@ -2171,7 +2192,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
     int total_lines = st.tr + (st.tc > 0 ? 1 : 0);
 
     // map into new layout arrays
-    sfte_cell *new_main = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
+    sfte_cell *new_main = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
     SFTE_ASSERT(new_main, "failed to allocate resized terminal grid");
 
     int screen_top = total_lines - new_rows;
@@ -2179,7 +2200,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
     screen_top = _SFTE_CLAMP(screen_top, 0, st.new_cy);
 
 #if SFTE_SCROLLBACK_CAP
-    sfte_cell *new_sb = (sfte_cell *)calloc(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
+    sfte_cell *new_sb = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
     SFTE_ASSERT(new_sb, "failed to allocate resized scrollback");
 
     int sb_lines = screen_top;
@@ -2215,7 +2236,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
     // NOTE: alt grid gets no reflow, it destroys visuals of alt-screen based interfaces
     sfte_cell *new_alt = NULL;
     if (alt_old) {
-        new_alt = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
+        new_alt = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
         SFTE_ASSERT(new_alt, "failed to allocate resized alt grid");
 
         int min_cols = new_cols < ctx->term.cols ? new_cols : ctx->term.cols;
@@ -2257,7 +2278,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
 
     _sfte_dirty_range(ctx, 0, new_cols * new_rows);
 
-    uint8_t *new_tabs = (uint8_t *)malloc(new_cols);
+    uint8_t *new_tabs = (uint8_t *)SFTE_MALLOC(new_cols);
     SFTE_ASSERT(new_tabs, "failed to allocate new tab stops");
     for (int i = 0; i < new_cols; ++i)
         if (i < old_cols)
@@ -2271,26 +2292,26 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
 }
 #else  // !SFTE_REFLOW
 static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
-    sfte_cell *new_cells = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
+    sfte_cell *new_cells = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
     SFTE_ASSERT(new_cells, "failed to allocate resized terminal grid");
 
     sfte_cell *new_alt_cells = NULL;
 #if SFTE_ALT_SCREEN
     if (ctx->term.alt_cells) {
-        new_alt_cells = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
+        new_alt_cells = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
         SFTE_ASSERT(new_alt_cells, "failed to allocate resized alt grid");
     }
 #endif  // SFTE_ALT_SCREEN
 
 #if SFTE_SCROLLBACK_CAP
     if (ctx->term.scrollback) free(ctx->term.scrollback);
-    ctx->term.scrollback = (sfte_cell *)calloc(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
+    ctx->term.scrollback = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
     ctx->term.sb_head = 0;
     ctx->term.sb_offset = 0;
     ctx->term.sb_len = 0;
 #endif  // SFTE_SCROLLBACK_CAP
 
-    uint8_t *new_tabs = (uint8_t *)malloc(new_cols);
+    uint8_t *new_tabs = (uint8_t *)SFTE_MALLOC(new_cols);
     SFTE_ASSERT(new_tabs, "failed to allocate new tab stops");
     for (int i = 0; i < new_cols; ++i)
         if (i < ctx->term.cols)
@@ -2474,7 +2495,16 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
             _sfte_grid_clear_cells(ctx, 0, _SFTE_IDX(ctx, cx, ctx->term.cursor_y) + 1);
         else if (p[0] == 2)
             _sfte_grid_clear_cells(ctx, 0, ctx->term.rows * ctx->term.cols);
-        // TODO: n = 3
+        else if (p[0] == 3) {
+            _sfte_grid_clear_cells(ctx, 0, ctx->term.rows * ctx->term.cols);
+#if SFTE_SCROLLBACK_CAP
+            ctx->term.sb_len = 0;
+            ctx->term.sb_head = 0;
+            ctx->term.sb_offset = 0;
+#endif  // SFTE_SCROLLBACK_CAP
+            ctx->term.cursor_x = 0;
+            ctx->term.cursor_y = 0;
+        }
         break;
     }
     case 'K':  // EL / Erase in Line
@@ -2709,8 +2739,8 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
 #endif  // SFTE_CURSOR_TRAIL
 
                 if (!ctx->term.alt_cells)
-                    ctx->term.alt_cells = (sfte_cell *)calloc(ctx->term.cols * ctx->term.rows,
-                                                              sizeof(sfte_cell));
+                    ctx->term.alt_cells = (sfte_cell *)SFTE_CALLOC(ctx->term.cols * ctx->term.rows,
+                                                                   sizeof(sfte_cell));
 
                 sfte_cell *tmp = ctx->term.cells;
                 ctx->term.cells = ctx->term.alt_cells;
@@ -3104,6 +3134,8 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
     case VT_GROUND:
         if (b == '\033' || b == '\x1b') {
             ctx->term.vt_state = VT_ESCAPE;
+        } else if (b == '\a' || b == '\x07') {
+            if (ctx->bell_cb) ctx->bell_cb(ctx->user_data);
         } else if (b == '\n') {
             if (ctx->term.cursor_y == ctx->term.scroll_bottom)
                 _sfte_grid_scroll(ctx, 1);  // at bot margin, scroll text up
@@ -3489,15 +3521,33 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
 
     if (!ctx->term.hide_cursor && ctx->term.is_trailing) {
         int vis_cx = ctx->term.cursor_x >= ctx->term.cols ? ctx->term.cols - 1 : ctx->term.cursor_x;
-        float target_rx = vis_cx * ctx->font.cell_width;
-        float target_ry = ctx->term.cursor_y * ctx->font.cell_height;
 
-        float min_x = target_rx < ctx->term.tail_rx ? target_rx : ctx->term.tail_rx;
-        float max_x = (target_rx > ctx->term.tail_rx ? target_rx : ctx->term.tail_rx) +
-                      ctx->font.cell_width;
-        float min_y = target_ry < ctx->term.tail_ry ? target_ry : ctx->term.tail_ry;
-        float max_y = (target_ry > ctx->term.tail_ry ? target_ry : ctx->term.tail_ry) +
-                      ctx->font.cell_height;
+        float target_cell_x = vis_cx * ctx->font.cell_width;
+        float target_cell_y = ctx->term.cursor_y * ctx->font.cell_height;
+
+        float trail_w = ctx->font.cell_width;
+        float trail_h = ctx->font.cell_height;
+        float trail_off_x = 0;
+        float trail_off_y = 0;
+
+        if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_UNDERLINE) {
+            trail_h = ctx->font.cell_height * SFTE_CURSOR_THICK_RATIO;
+            if (trail_h < 1.0f) trail_h = 1.0f;
+            trail_off_y = ctx->font.cell_height - trail_h;
+        } else if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_BAR) {
+            trail_w = ctx->font.cell_width * SFTE_CURSOR_THICK_RATIO;
+            if (trail_w < 1.0f) trail_w = 1.0f;
+        }
+
+        float t_rx = target_cell_x + trail_off_x;
+        float t_ry = target_cell_y + trail_off_y;
+        float tl_rx = ctx->term.tail_rx + trail_off_x;
+        float tl_ry = ctx->term.tail_ry + trail_off_y;
+
+        float min_x = t_rx < tl_rx ? t_rx : tl_rx;
+        float max_x = (t_rx > tl_rx ? t_rx : tl_rx) + trail_w;
+        float min_y = t_ry < tl_ry ? t_ry : tl_ry;
+        float max_y = (t_ry > tl_ry ? t_ry : tl_ry) + trail_h;
 
         int px_min_x = (int)min_x + SFTE_PAD_X;
         int px_max_x = (int)max_x + SFTE_PAD_X;
@@ -3508,10 +3558,10 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
         uint8_t cg = (SFTE_CURSOR_COLOR >> 8) & 0xFF;
         uint8_t cb = SFTE_CURSOR_COLOR & 0xFF;
 
-        float cx0 = ctx->term.tail_rx + ctx->font.cell_width * 0.5f;
-        float cy0 = ctx->term.tail_ry + ctx->font.cell_height * 0.5f;
-        float cx1 = target_rx + ctx->font.cell_width * 0.5f;
-        float cy1 = target_ry + ctx->font.cell_height * 0.5f;
+        float cx0 = tl_rx + trail_w * 0.5f;
+        float cy0 = tl_ry + trail_h * 0.5f;
+        float cx1 = t_rx + trail_w * 0.5f;
+        float cy1 = t_ry + trail_h * 0.5f;
 
         float ab_x = cx1 - cx0;
         float ab_y = cy1 - cy0;
@@ -3521,11 +3571,9 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
             for (int x = px_min_x; x < px_max_x; ++x) {
                 if (x < 0 || x >= w || y < 0 || y >= h) continue;
 
-                int hx = (int)target_rx + SFTE_PAD_X;
-                int hy = (int)target_ry + SFTE_PAD_Y;
-                if (x >= hx && x < hx + ctx->font.cell_width && y >= hy &&
-                    y < hy + ctx->font.cell_height)
-                    continue;
+                int hx = (int)t_rx + SFTE_PAD_X;
+                int hy = (int)t_ry + SFTE_PAD_Y;
+                if (x >= hx && x < hx + trail_w && y >= hy && y < hy + trail_h) continue;
 
                 float ap_x = (float)(x - SFTE_PAD_X) - cx0 + 0.5f;
                 float ap_y = (float)(y - SFTE_PAD_Y) - cy0 + 0.5f;
@@ -3545,8 +3593,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
                 if (dist_x < 0) dist_x = -dist_x;
                 if (dist_y < 0) dist_y = -dist_y;
 
-                if (dist_x <= ctx->font.cell_width * 0.5f &&
-                    dist_y <= ctx->font.cell_height * 0.5f) {
+                if (dist_x <= trail_w * 0.5f && dist_y <= trail_h * 0.5f) {
                     int alpha = (int)(128.0f * t);
                     if (alpha == 0) continue;
                     int inv_alpha = 255 - alpha;
@@ -3656,7 +3703,7 @@ void sfte_parse(sfte_ctx *ctx, const uint8_t *data, size_t len) {
 }
 
 sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
-    sfte_ctx *ctx = (sfte_ctx *)calloc(1, sizeof(sfte_ctx));
+    sfte_ctx *ctx = (sfte_ctx *)SFTE_CALLOC(1, sizeof(sfte_ctx));
     SFTE_ASSERT(ctx, "failed to allocate core context");
 
     ctx->write_cb = write_fn;
@@ -3672,11 +3719,11 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
 
 #if SFTE_SCROLLBACK_CAP
     ctx->term.sb_cap = SFTE_SCROLLBACK_CAP;
-    ctx->term.scrollback = (sfte_cell *)calloc(ctx->term.sb_cap * ctx->term.cols,
-                                               sizeof(sfte_cell));
+    ctx->term.scrollback = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * ctx->term.cols,
+                                                    sizeof(sfte_cell));
 #endif  // SFTE_SCROLLBACK_CAP
 
-    ctx->term.tab_stops = (uint8_t *)malloc(ctx->term.cols);
+    ctx->term.tab_stops = (uint8_t *)SFTE_MALLOC(ctx->term.cols);
     for (int i = 0; i < ctx->term.cols; ++i)
         ctx->term.tab_stops[i] = (i > 0 && i % SFTE_TAB_WIDTH == 0);
 
@@ -3703,7 +3750,7 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
     ctx->term.scroll_top = 0;
     ctx->term.scroll_bottom = ctx->term.rows - 1;
 
-    ctx->term.cells = (sfte_cell *)malloc(ctx->term.cols * ctx->term.rows * sizeof(sfte_cell));
+    ctx->term.cells = (sfte_cell *)SFTE_MALLOC(ctx->term.cols * ctx->term.rows * sizeof(sfte_cell));
     SFTE_ASSERT(ctx->term.cells, "failed to allocate term grid");
     memset(ctx->term.cells, 0, ctx->term.cols * ctx->term.rows * sizeof(sfte_cell));
 
@@ -3739,7 +3786,7 @@ void sfte_font_load(sfte_ctx *ctx) {
     ctx->font.atlas_width = SFTE_FONT_ATLAS_SIZE;
     ctx->font.atlas_height = SFTE_FONT_ATLAS_SIZE;
 
-    ctx->font.atlas_pxs = (uint8_t *)malloc(ctx->font.atlas_width * ctx->font.atlas_height);
+    ctx->font.atlas_pxs = (uint8_t *)SFTE_MALLOC(ctx->font.atlas_width * ctx->font.atlas_height);
     SFTE_ASSERT(ctx->font.atlas_pxs, "failed to allocate font atlas");
 
     // NOTE: explicitly not in #if SFTE_FONT_PATH, so that it only compiles if config is correct
@@ -3749,7 +3796,7 @@ void sfte_font_load(sfte_ctx *ctx) {
     size_t size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    ctx->font.ttf_buf = (uint8_t *)malloc(size);
+    ctx->font.ttf_buf = (uint8_t *)SFTE_MALLOC(size);
     SFTE_ASSERT(fread(ctx->font.ttf_buf, 1, size, f) == size, "failed to read font file");
     fclose(f);
 
@@ -3761,7 +3808,7 @@ void sfte_font_load(sfte_ctx *ctx) {
     size_t size_bold = ftell(f_bold);
     fseek(f_bold, 0, SEEK_SET);
 
-    ctx->font.ttf_bold_buf = (uint8_t *)malloc(size_bold);
+    ctx->font.ttf_bold_buf = (uint8_t *)SFTE_MALLOC(size_bold);
     SFTE_ASSERT(fread(ctx->font.ttf_bold_buf, 1, size_bold, f_bold) == size_bold,
                 "failed to read bold font file");
     fclose(f_bold);
@@ -3777,7 +3824,7 @@ void sfte_font_load(sfte_ctx *ctx) {
     size_t size_italic = ftell(f_italic);
     fseek(f_italic, 0, SEEK_SET);
 
-    ctx->font.ttf_italic_buf = (uint8_t *)malloc(size_italic);
+    ctx->font.ttf_italic_buf = (uint8_t *)SFTE_MALLOC(size_italic);
     SFTE_ASSERT(fread(ctx->font.ttf_italic_buf, 1, size_italic, f_italic) == size_italic,
                 "failed to read italic font file");
     fclose(f_italic);
@@ -3793,7 +3840,7 @@ void sfte_font_load(sfte_ctx *ctx) {
     size_t size_bold_italic = ftell(f_bold_italic);
     fseek(f_bold_italic, 0, SEEK_SET);
 
-    ctx->font.ttf_bold_italic_buf = (uint8_t *)malloc(size_bold_italic);
+    ctx->font.ttf_bold_italic_buf = (uint8_t *)SFTE_MALLOC(size_bold_italic);
     SFTE_ASSERT(fread(ctx->font.ttf_bold_italic_buf, 1, size_bold_italic, f_bold_italic) ==
                     size_bold_italic,
                 "failed to read bold italic font file");
@@ -3803,7 +3850,7 @@ void sfte_font_load(sfte_ctx *ctx) {
 #endif  // SFTE_FONT_BOLD_ITALIC_PATH
 
     ctx->font.glyph_cap = SFTE_FONT_GLYPH_CAP;
-    ctx->font.glyphs = (sfte_glyph *)calloc(ctx->font.glyph_cap, sizeof(sfte_glyph));
+    ctx->font.glyphs = (sfte_glyph *)SFTE_CALLOC(ctx->font.glyph_cap, sizeof(sfte_glyph));
     SFTE_ASSERT(ctx->font.glyphs, "failed to allocate glyphs storage");
     stbtt_InitFont(&ctx->font.stb_info, ctx->font.ttf_buf, 0);
     _sfte_font_reset_cache(ctx);
