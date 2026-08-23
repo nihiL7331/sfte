@@ -1173,7 +1173,7 @@ static void _sfte_wayland_create_buffer(sfte_wayland_app *app) {
     SFTE_ASSERT(app->shm_data != MAP_FAILED, "failed to mmap shm data");
 
 #if SFTE_DOUBLE_BUFFER
-    if (app->back_buffer) free(app->back_buffer);
+    if (app->back_buffer) SFTE_FREE(app->back_buffer);
     app->back_buffer = (uint32_t *)SFTE_MALLOC(app->shm_size);
     SFTE_ASSERT(app->back_buffer, "failed to allocate back buffer");
 #endif  // SFTE_DOUBLE_BUFFER
@@ -1272,7 +1272,7 @@ static void _sfte_wayland_data_source_cancelled(void *data, struct wl_data_sourc
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     wl_data_source_destroy(src);
     if (app->selection_text) {
-        free(app->selection_text);
+        SFTE_FREE(app->selection_text);
         app->selection_text = NULL;
     }
     app->data_source = NULL;
@@ -1751,7 +1751,7 @@ static void _sfte_wayland_load(sfte_wayland_app *app) {
 
 static void _sfte_wayland_unload(sfte_wayland_app *app) {
 #if SFTE_DOUBLE_BUFFER
-    free(app->back_buffer);
+    SFTE_FREE(app->back_buffer);
 #endif  // SFTE_DOUBLE_BUFFER
 
     if (app->buffer) wl_buffer_destroy(app->buffer);
@@ -1782,7 +1782,7 @@ static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
         app->data_source = NULL;
     }
     if (app->selection_text) {
-        free(app->selection_text);
+        SFTE_FREE(app->selection_text);
         app->selection_text = NULL;
     }
 
@@ -2236,11 +2236,11 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
     }
 #endif  // SFTE_ALT_SCREEN
 
-    free(ctx->term.cells);
-    free(temp_rows);
+    SFTE_FREE(ctx->term.cells);
+    SFTE_FREE(temp_rows);
 
 #if SFTE_ALT_SCREEN
-    if (ctx->term.alt_cells) free(ctx->term.alt_cells);
+    if (ctx->term.alt_cells) SFTE_FREE(ctx->term.alt_cells);
     ctx->term.cells = ctx->term.alt_active ? new_alt : new_main;
     ctx->term.alt_cells = ctx->term.alt_active ? new_main : NULL;
 #else
@@ -2248,7 +2248,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
 #endif  // !SFTE_ALT_SCREEN
 
 #if SFTE_SCROLLBACK_CAP
-    if (ctx->term.scrollback) free(ctx->term.scrollback);
+    if (ctx->term.scrollback) SFTE_FREE(ctx->term.scrollback);
     ctx->term.scrollback = new_sb;
     ctx->term.sb_head = sb_lines % ctx->term.sb_cap;
     ctx->term.sb_offset = 0;
@@ -2271,7 +2271,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
             new_tabs[i] = ctx->term.tab_stops[i];
         else
             new_tabs[i] = (i % SFTE_TAB_WIDTH == 0);
-    free(ctx->term.tab_stops);
+    SFTE_FREE(ctx->term.tab_stops);
     ctx->term.tab_stops = new_tabs;
 
     _SFTE_INFO(ctx, TERM_RESIZE, new_cols, new_rows);
@@ -2290,7 +2290,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
 #endif  // SFTE_ALT_SCREEN
 
 #if SFTE_SCROLLBACK_CAP
-    if (ctx->term.scrollback) free(ctx->term.scrollback);
+    if (ctx->term.scrollback) SFTE_FREE(ctx->term.scrollback);
     ctx->term.scrollback = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
     ctx->term.sb_head = 0;
     ctx->term.sb_offset = 0;
@@ -2304,7 +2304,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
             new_tabs[i] = ctx->term.tab_stops[i];
         else
             new_tabs[i] = (i % SFTE_TAB_WIDTH == 0);
-    free(ctx->term.tab_stops);
+    SFTE_FREE(ctx->term.tab_stops);
     ctx->term.tab_stops = new_tabs;
 
     int min_cols = new_cols < ctx->term.cols ? new_cols : ctx->term.cols;
@@ -2320,11 +2320,11 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
         }
     }
 
-    free(ctx->term.cells);
+    SFTE_FREE(ctx->term.cells);
     ctx->term.cells = new_cells;
 #if SFTE_ALT_SCREEN
     if (ctx->term.alt_cells) {
-        free(ctx->term.alt_cells);
+        SFTE_FREE(ctx->term.alt_cells);
         ctx->term.alt_cells = new_alt_cells;
     }
 #endif  // SFTE_ALT_SCREEN
@@ -3471,7 +3471,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
             }
 
 #ifdef SFTE_BOLD_WHITE
-            if ((attr & ATTR_BOLD)) fg = 0xFFFFFF;
+            if (attr & ATTR_BOLD) fg = 0xFFFFFF;
 #endif  // SFTE_BOLD_WHITE
 
             int is_cursor = (c == vis_cx && r == vis_cy && !ctx->term.hide_cursor);
@@ -3750,7 +3750,7 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
 void sfte_free(sfte_ctx *ctx) {
     if (!ctx) return;
 
-    free(ctx->term.tab_stops);
+    SFTE_FREE(ctx->term.tab_stops);
     free(ctx->font.ttf_buf);
 #ifdef SFTE_FONT_BOLD_PATH
     free(ctx->font.ttf_bold_buf);
@@ -3760,15 +3760,15 @@ void sfte_free(sfte_ctx *ctx) {
 #endif  // SFTE_FONT_ITALIC_PATH
     free(ctx->font.atlas_pxs);
     free(ctx->font.glyphs);
-    free(ctx->term.cells);
+    SFTE_FREE(ctx->term.cells);
 #if SFTE_ALT_SCREEN
-    free(ctx->term.alt_cells);
+    SFTE_FREE(ctx->term.alt_cells);
 #endif  // SFTE_ALT_SCREEN
 #if SFTE_SCROLLBACK_CAP
-    free(ctx->term.scrollback);
+    SFTE_FREE(ctx->term.scrollback);
 #endif  // SFTE_SCROLLBACK_CAP
 
-    free(ctx);
+    SFTE_FREE(ctx);
 }
 
 void sfte_font_load(sfte_ctx *ctx) {
