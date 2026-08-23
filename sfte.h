@@ -58,6 +58,14 @@
 // =================================================================================================
 // >>config
 // =================================================================================================
+
+#ifndef SFTE_MALLOC
+#include <stdlib.h>
+#define SFTE_MALLOC(sz) malloc(sz)
+#define SFTE_CALLOC(n, sz) calloc(n, sz)
+#define SFTE_FREE(p) free(p)
+#endif  // !SFTE_MALLOC
+
 #ifndef SFTE_LOG_LEVEL
 #define SFTE_LOG_LEVEL 0
 #endif  // SFTE_LOG_LEVEL
@@ -360,7 +368,6 @@ int sfte_run(void);
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
-#include <stdlib.h>  // getenv/setenv/malloc
 #include <string.h>  // memset
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -1149,7 +1156,7 @@ static void _sfte_wayland_create_buffer(sfte_wayland_app *app) {
 
 #if SFTE_DOUBLE_BUFFER
     if (app->back_buffer) free(app->back_buffer);
-    app->back_buffer = (uint32_t *)malloc(app->shm_size);
+    app->back_buffer = (uint32_t *)SFTE_MALLOC(app->shm_size);
     SFTE_ASSERT(app->back_buffer, "failed to allocate back buffer");
 #endif  // SFTE_DOUBLE_BUFFER
 
@@ -1757,7 +1764,7 @@ static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
     size_t needed_bytes = sfte_get_selection(app->ctx, NULL, 0);
     if (needed_bytes == 0) return;
 
-    app->selection_text = (char *)malloc(needed_bytes);
+    app->selection_text = (char *)SFTE_MALLOC(needed_bytes);
     sfte_get_selection(app->ctx, app->selection_text, needed_bytes);
     if (!app->selection_text) return;
 
@@ -2153,7 +2160,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
                             ctx->term.rows) *
                         (ctx->term.cols / new_cols + 2);
     if (max_temp_rows < new_rows) max_temp_rows = new_rows;
-    sfte_cell *temp_rows = (sfte_cell *)calloc(max_temp_rows * new_cols, sizeof(sfte_cell));
+    sfte_cell *temp_rows = (sfte_cell *)SFTE_CALLOC(max_temp_rows * new_cols, sizeof(sfte_cell));
     SFTE_ASSERT(temp_rows, "failed to allocate temporary row data");
 
     sfte_reflow_state st = {.temp_rows = temp_rows,
@@ -2171,7 +2178,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
     int total_lines = st.tr + (st.tc > 0 ? 1 : 0);
 
     // map into new layout arrays
-    sfte_cell *new_main = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
+    sfte_cell *new_main = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
     SFTE_ASSERT(new_main, "failed to allocate resized terminal grid");
 
     int screen_top = total_lines - new_rows;
@@ -2179,7 +2186,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
     screen_top = _SFTE_CLAMP(screen_top, 0, st.new_cy);
 
 #if SFTE_SCROLLBACK_CAP
-    sfte_cell *new_sb = (sfte_cell *)calloc(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
+    sfte_cell *new_sb = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
     SFTE_ASSERT(new_sb, "failed to allocate resized scrollback");
 
     int sb_lines = screen_top;
@@ -2215,7 +2222,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
     // NOTE: alt grid gets no reflow, it destroys visuals of alt-screen based interfaces
     sfte_cell *new_alt = NULL;
     if (alt_old) {
-        new_alt = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
+        new_alt = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
         SFTE_ASSERT(new_alt, "failed to allocate resized alt grid");
 
         int min_cols = new_cols < ctx->term.cols ? new_cols : ctx->term.cols;
@@ -2257,7 +2264,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
 
     _sfte_dirty_range(ctx, 0, new_cols * new_rows);
 
-    uint8_t *new_tabs = (uint8_t *)malloc(new_cols);
+    uint8_t *new_tabs = (uint8_t *)SFTE_MALLOC(new_cols);
     SFTE_ASSERT(new_tabs, "failed to allocate new tab stops");
     for (int i = 0; i < new_cols; ++i)
         if (i < old_cols)
@@ -2271,26 +2278,26 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
 }
 #else  // !SFTE_REFLOW
 static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
-    sfte_cell *new_cells = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
+    sfte_cell *new_cells = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
     SFTE_ASSERT(new_cells, "failed to allocate resized terminal grid");
 
     sfte_cell *new_alt_cells = NULL;
 #if SFTE_ALT_SCREEN
     if (ctx->term.alt_cells) {
-        new_alt_cells = (sfte_cell *)calloc(new_cols * new_rows, sizeof(sfte_cell));
+        new_alt_cells = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
         SFTE_ASSERT(new_alt_cells, "failed to allocate resized alt grid");
     }
 #endif  // SFTE_ALT_SCREEN
 
 #if SFTE_SCROLLBACK_CAP
     if (ctx->term.scrollback) free(ctx->term.scrollback);
-    ctx->term.scrollback = (sfte_cell *)calloc(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
+    ctx->term.scrollback = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
     ctx->term.sb_head = 0;
     ctx->term.sb_offset = 0;
     ctx->term.sb_len = 0;
 #endif  // SFTE_SCROLLBACK_CAP
 
-    uint8_t *new_tabs = (uint8_t *)malloc(new_cols);
+    uint8_t *new_tabs = (uint8_t *)SFTE_MALLOC(new_cols);
     SFTE_ASSERT(new_tabs, "failed to allocate new tab stops");
     for (int i = 0; i < new_cols; ++i)
         if (i < ctx->term.cols)
@@ -2709,8 +2716,8 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
 #endif  // SFTE_CURSOR_TRAIL
 
                 if (!ctx->term.alt_cells)
-                    ctx->term.alt_cells = (sfte_cell *)calloc(ctx->term.cols * ctx->term.rows,
-                                                              sizeof(sfte_cell));
+                    ctx->term.alt_cells = (sfte_cell *)SFTE_CALLOC(ctx->term.cols * ctx->term.rows,
+                                                                   sizeof(sfte_cell));
 
                 sfte_cell *tmp = ctx->term.cells;
                 ctx->term.cells = ctx->term.alt_cells;
@@ -3656,7 +3663,7 @@ void sfte_parse(sfte_ctx *ctx, const uint8_t *data, size_t len) {
 }
 
 sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
-    sfte_ctx *ctx = (sfte_ctx *)calloc(1, sizeof(sfte_ctx));
+    sfte_ctx *ctx = (sfte_ctx *)SFTE_CALLOC(1, sizeof(sfte_ctx));
     SFTE_ASSERT(ctx, "failed to allocate core context");
 
     ctx->write_cb = write_fn;
@@ -3672,11 +3679,11 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
 
 #if SFTE_SCROLLBACK_CAP
     ctx->term.sb_cap = SFTE_SCROLLBACK_CAP;
-    ctx->term.scrollback = (sfte_cell *)calloc(ctx->term.sb_cap * ctx->term.cols,
-                                               sizeof(sfte_cell));
+    ctx->term.scrollback = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * ctx->term.cols,
+                                                    sizeof(sfte_cell));
 #endif  // SFTE_SCROLLBACK_CAP
 
-    ctx->term.tab_stops = (uint8_t *)malloc(ctx->term.cols);
+    ctx->term.tab_stops = (uint8_t *)SFTE_MALLOC(ctx->term.cols);
     for (int i = 0; i < ctx->term.cols; ++i)
         ctx->term.tab_stops[i] = (i > 0 && i % SFTE_TAB_WIDTH == 0);
 
@@ -3703,7 +3710,7 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
     ctx->term.scroll_top = 0;
     ctx->term.scroll_bottom = ctx->term.rows - 1;
 
-    ctx->term.cells = (sfte_cell *)malloc(ctx->term.cols * ctx->term.rows * sizeof(sfte_cell));
+    ctx->term.cells = (sfte_cell *)SFTE_MALLOC(ctx->term.cols * ctx->term.rows * sizeof(sfte_cell));
     SFTE_ASSERT(ctx->term.cells, "failed to allocate term grid");
     memset(ctx->term.cells, 0, ctx->term.cols * ctx->term.rows * sizeof(sfte_cell));
 
@@ -3739,7 +3746,7 @@ void sfte_font_load(sfte_ctx *ctx) {
     ctx->font.atlas_width = SFTE_FONT_ATLAS_SIZE;
     ctx->font.atlas_height = SFTE_FONT_ATLAS_SIZE;
 
-    ctx->font.atlas_pxs = (uint8_t *)malloc(ctx->font.atlas_width * ctx->font.atlas_height);
+    ctx->font.atlas_pxs = (uint8_t *)SFTE_MALLOC(ctx->font.atlas_width * ctx->font.atlas_height);
     SFTE_ASSERT(ctx->font.atlas_pxs, "failed to allocate font atlas");
 
     // NOTE: explicitly not in #if SFTE_FONT_PATH, so that it only compiles if config is correct
@@ -3749,7 +3756,7 @@ void sfte_font_load(sfte_ctx *ctx) {
     size_t size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    ctx->font.ttf_buf = (uint8_t *)malloc(size);
+    ctx->font.ttf_buf = (uint8_t *)SFTE_MALLOC(size);
     SFTE_ASSERT(fread(ctx->font.ttf_buf, 1, size, f) == size, "failed to read font file");
     fclose(f);
 
@@ -3761,7 +3768,7 @@ void sfte_font_load(sfte_ctx *ctx) {
     size_t size_bold = ftell(f_bold);
     fseek(f_bold, 0, SEEK_SET);
 
-    ctx->font.ttf_bold_buf = (uint8_t *)malloc(size_bold);
+    ctx->font.ttf_bold_buf = (uint8_t *)SFTE_MALLOC(size_bold);
     SFTE_ASSERT(fread(ctx->font.ttf_bold_buf, 1, size_bold, f_bold) == size_bold,
                 "failed to read bold font file");
     fclose(f_bold);
@@ -3777,7 +3784,7 @@ void sfte_font_load(sfte_ctx *ctx) {
     size_t size_italic = ftell(f_italic);
     fseek(f_italic, 0, SEEK_SET);
 
-    ctx->font.ttf_italic_buf = (uint8_t *)malloc(size_italic);
+    ctx->font.ttf_italic_buf = (uint8_t *)SFTE_MALLOC(size_italic);
     SFTE_ASSERT(fread(ctx->font.ttf_italic_buf, 1, size_italic, f_italic) == size_italic,
                 "failed to read italic font file");
     fclose(f_italic);
@@ -3793,7 +3800,7 @@ void sfte_font_load(sfte_ctx *ctx) {
     size_t size_bold_italic = ftell(f_bold_italic);
     fseek(f_bold_italic, 0, SEEK_SET);
 
-    ctx->font.ttf_bold_italic_buf = (uint8_t *)malloc(size_bold_italic);
+    ctx->font.ttf_bold_italic_buf = (uint8_t *)SFTE_MALLOC(size_bold_italic);
     SFTE_ASSERT(fread(ctx->font.ttf_bold_italic_buf, 1, size_bold_italic, f_bold_italic) ==
                     size_bold_italic,
                 "failed to read bold italic font file");
@@ -3803,7 +3810,7 @@ void sfte_font_load(sfte_ctx *ctx) {
 #endif  // SFTE_FONT_BOLD_ITALIC_PATH
 
     ctx->font.glyph_cap = SFTE_FONT_GLYPH_CAP;
-    ctx->font.glyphs = (sfte_glyph *)calloc(ctx->font.glyph_cap, sizeof(sfte_glyph));
+    ctx->font.glyphs = (sfte_glyph *)SFTE_CALLOC(ctx->font.glyph_cap, sizeof(sfte_glyph));
     SFTE_ASSERT(ctx->font.glyphs, "failed to allocate glyphs storage");
     stbtt_InitFont(&ctx->font.stb_info, ctx->font.ttf_buf, 0);
     _sfte_font_reset_cache(ctx);
