@@ -353,7 +353,18 @@ size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes);
 void sfte_view_scroll(sfte_ctx *ctx, int delta);
 #endif  // SFTE_SCROLLBACK_CAP
 
-int sfte_run(void);
+#if SFTE_WAYLAND
+typedef struct sfte_wayland_app sfte_wayland_app;
+
+// initializes wayland, pty and sfte_ctx
+sfte_wayland_app *sfte_wayland_init(void);
+
+// exposes the context for runtime configuration
+sfte_ctx *sfte_wayland_get_ctx(sfte_wayland_app *app);
+
+// enters the blocking event loop, run it last
+int sfte_wayland_run(sfte_wayland_app *app);
+#endif  // SFTE_WAYLAND
 
 #define SFTE_IMPL
 #ifdef SFTE_IMPL
@@ -1057,7 +1068,7 @@ static void _sfte_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf) {
 #include "xdg-shell.h"
 #include <wayland-client.h>
 
-typedef struct {
+struct sfte_wayland_app {
     sfte_ctx *ctx;
 
     struct wl_display *display;
@@ -1106,7 +1117,7 @@ typedef struct {
 
     int width, height;
     int pending_width, pending_height;
-} sfte_wayland_app;
+};
 
 static void _sfte_wayland_write_cb(void *user_data, const char *data, size_t len) {
     sfte_wayland_app *app = (sfte_wayland_app *)user_data;
@@ -1951,32 +1962,6 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
             app->needs_render = 0;
         }
     }
-}
-
-static int _sfte_wayland_run(void) {
-    sfte_wayland_app app = {0};
-    app.running = 1;
-
-    app.ctx = sfte_init(_sfte_wayland_write_cb, &app);
-
-    _sfte_wayland_pty_spawn(&app);
-    sfte_font_load(app.ctx);
-
-    int ideal_w, ideal_h;
-    sfte_get_ideal_size(app.ctx, 80, 24, &ideal_w, &ideal_h);
-    app.width = ideal_w;
-    app.height = ideal_h;
-
-    _sfte_wayland_load(&app);
-    sfte_resize(app.ctx, app.width, app.height);
-    if (!app.buffer) _sfte_wayland_create_buffer(&app);
-
-    _sfte_wayland_pty_update(&app);
-    _sfte_wayland_loop(&app);
-
-    _sfte_wayland_unload(&app);
-    sfte_free(app.ctx);
-    return 0;
 }
 #endif  // SFTE_WAYLAND
 // =================================================================================================
@@ -3302,6 +3287,10 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
 // =================================================================================================
 //  PUBLIC IMPLEMENTATION  =========================================================================
 // =================================================================================================
+
+// =================================================================================================
+// >>core api
+// =================================================================================================
 void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect *out_dmg) {
     int dmg_x0 = w, dmg_y0 = h, dmg_x1 = 0, dmg_y1 = 0;
 
@@ -4060,11 +4049,40 @@ size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes) {
 }
 #endif  // SFTE_SELECTION
 
-int sfte_run(void) {
+// =================================================================================================
+// >>wayland api
+// =================================================================================================
 #if SFTE_WAYLAND
-    _sfte_wayland_run();
-#endif  // SFTE_WAYLAND
-    return 0;
+sfte_wayland_app *sfte_wayland_init(void) {
+    sfte_wayland_app *app = (sfte_wayland_app *)SFTE_CALLOC(1, sizeof(sfte_wayland_app));
+    app->running = 1;
+    app->ctx = sfte_init(_sfte_wayland_write_cb, app);
+
+    _sfte_wayland_pty_spawn(app);
+    _sfte_wayland_load(app);
+
+    return app;
 }
 
+sfte_ctx *sfte_wayland_get_ctx(sfte_wayland_app *app) {
+    return app->ctx;
+}
+
+int sfte_wayland_run(sfte_wayland_app *app) {
+    int ideal_w, ideal_h;
+    sfte_get_ideal_size(app->ctx, 80, 24, &ideal_w, &ideal_h);
+    app->width = ideal_w;
+    app->height = ideal_h;
+    sfte_resize(app->ctx, app->width, app->height);
+    if (!app->buffer) _sfte_wayland_create_buffer(app);
+    _sfte_wayland_pty_update(app);
+
+    _sfte_wayland_loop(app);
+
+    _sfte_wayland_unload(app);
+    sfte_free(app->ctx);
+    SFTE_FREE(app);
+    return 0;
+}
+#endif  // SFTE_WAYLAND
 #endif  // SFTE_IMPL
