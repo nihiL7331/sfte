@@ -99,6 +99,14 @@
 #define SFTE_FONT_GLYPH_CAP 4096
 #endif  // SFTE_FONT_GLYPH_CAP
 
+#ifndef SFTE_FONT_MAX_COUNT
+#define SFTE_FONT_MAX_COUNT 4
+#endif  // SFTE_FONT_MAX_COUNT
+
+#ifndef SFTE_FONT_SCALES
+#define SFTE_FONT_SCALES {1.0f, 1.0f, 1.0f, 1.0f}
+#endif  // SFTE_FONT_SCALES
+
 #ifndef SFTE_FONT_ZOOM
 #define SFTE_FONT_ZOOM 1
 #endif  // SFTE_FONT_ZOOM
@@ -381,7 +389,6 @@ sfte_ctx *sfte_wayland_get_ctx(sfte_wayland_app *app);
 int sfte_wayland_run(sfte_wayland_app *app);
 #endif  // SFTE_WAYLAND
 
-#define SFTE_IMPL
 #ifdef SFTE_IMPL
 // =================================================================================================
 //  PRIVATE IMPLEMENTATION  ========================================================================
@@ -542,13 +549,18 @@ typedef struct {
 } sfte_term;
 
 typedef struct {
-    stbtt_fontinfo info;
+    stbtt_fontinfo info[SFTE_FONT_MAX_COUNT];
+    uint8_t *ttf_buf[SFTE_FONT_MAX_COUNT];
+    uint8_t owns_ttf_buf[SFTE_FONT_MAX_COUNT];  // 1 if sfte allocated it via fopen, 0 if user
+                                                // provided it
+    float scales[SFTE_FONT_MAX_COUNT];
+    int num_fonts;
+
     uint8_t *atlas_pxs;
     sfte_glyph *glyphs;
     int atlas_x;
     int atlas_y;
-    uint8_t *ttf_buf;
-    uint8_t owns_ttf_buf;  // 1 if sfte allocated it via fopen, 0 if user provided it
+    int atlas_row_h;
 } sfte_font_cache;
 
 typedef struct {
@@ -558,7 +570,6 @@ typedef struct {
     int descent;      // distance from baseline to cell bottom
     int line_gap;     // recommended empty space between lines
     float cur_size;   // starts at SFTE_FONT_DEFAULT_SIZE
-    float scale;
 
     sfte_font_cache regular;
 #ifdef SFTE_FONT_BOLD
@@ -595,6 +606,7 @@ struct sfte_ctx {
 
 static const sfte_shortcut _sfte_shortcuts[] = SFTE_SHORTCUTS;
 static const uint32_t _sfte_ansi_palette[] = SFTE_ANSI_PALETTE;
+static const float _sfte_font_scales[SFTE_FONT_MAX_COUNT] = SFTE_FONT_SCALES;
 
 // =================================================================================================
 // >>memory
@@ -717,17 +729,39 @@ static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache *cache, u
 
         if (cache->glyphs[idx].rune != 0) continue;  // cache miss, taken, continue
 
+        // fallback check
+        int font_idx = 0;
+        int glyph_idx = 0;
+
+        // start in primary font [0]
+        // then, look through fallback fonts [1-SFTE_FONTS_MAX_COUNT]
+        for (int i = 0; i < cache->num_fonts; ++i) {
+            glyph_idx = stbtt_FindGlyphIndex(&cache->info[i], rune);
+            if (glyph_idx != 0) {
+                font_idx = i;
+                break;
+            }
+        }
+
+        // if glyph was not found and cache isn't regular, look in regular
+        // this is useful e.g. when a certain app tries to draw nerd symbols
+        // in bold/italic/bold italic instead of regular.
+        if (glyph_idx == 0 && cache != &ctx->font.regular)
+            return _sfte_font_get_glyph(ctx, &ctx->font.regular, rune);
+
+        stbtt_fontinfo *info = &cache->info[font_idx];
+        float font_scale = cache->scales[font_idx];
+
         // cache miss, free, take space
         sfte_glyph *g = &cache->glyphs[idx];
         g->rune = rune;
 
         int advance_width, left_side_bearing;
-        stbtt_GetCodepointHMetrics(&cache->info, rune, &advance_width, &left_side_bearing);
-        g->xadvance = (int)(advance_width * ctx->font.scale + 0.5f);
+        stbtt_GetGlyphHMetrics(info, glyph_idx, &advance_width, &left_side_bearing);
+        g->xadvance = (int)(advance_width * font_scale + 0.5f);
 
         int x0, y0, x1, y1;
-        stbtt_GetCodepointBitmapBox(&cache->info, rune, ctx->font.scale, ctx->font.scale, &x0, &y0,
-                                    &x1, &y1);
+        stbtt_GetCodepointBitmapBox(info, rune, font_scale, font_scale, &x0, &y0, &x1, &y1);
 
         int glyph_width = x1 - x0;
         int glyph_height = y1 - y0;
@@ -735,10 +769,13 @@ static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache *cache, u
         // wrap to next row if out of horizontal space
         if (cache->atlas_x + glyph_width >= SFTE_FONT_ATLAS_SIZE) {
             cache->atlas_x = 0;
-            cache->atlas_y += glyph_height + 1;
+            cache->atlas_y += cache->atlas_row_h + 1;
+            cache->atlas_row_h = 0;
         }
 
         SFTE_ASSERT(cache->atlas_y + glyph_height < SFTE_FONT_ATLAS_SIZE, "glyph atlas full");
+
+        if (glyph_height > cache->atlas_row_h) cache->atlas_row_h = glyph_height;
 
         g->x0 = cache->atlas_x;
         g->y0 = cache->atlas_y;
@@ -749,9 +786,8 @@ static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache *cache, u
 
         if (glyph_width > 0 && glyph_height > 0) {
             int byte_off = g->y0 * SFTE_FONT_ATLAS_SIZE + g->x0;
-            stbtt_MakeCodepointBitmap(&cache->info, &cache->atlas_pxs[byte_off], glyph_width,
-                                      glyph_height, SFTE_FONT_ATLAS_SIZE, ctx->font.scale,
-                                      ctx->font.scale, rune);
+            stbtt_MakeGlyphBitmap(info, &cache->atlas_pxs[byte_off], glyph_width, glyph_height,
+                                  SFTE_FONT_ATLAS_SIZE, font_scale, font_scale, glyph_idx);
         }
 
         cache->atlas_x += glyph_width + 1;  // padding to prevent bleeding
@@ -770,6 +806,7 @@ static void _sfte_font_reset_cache(sfte_ctx *ctx) {
         if (type.glyphs) memset(type.glyphs, 0, SFTE_FONT_GLYPH_CAP * sizeof(sfte_glyph));         \
         type.atlas_x = 0;                                                                          \
         type.atlas_y = 0;                                                                          \
+        type.atlas_row_h = 0;                                                                      \
     } while (0)
 
     CLEAR_CACHE(ctx->font.regular);
@@ -785,16 +822,35 @@ static void _sfte_font_reset_cache(sfte_ctx *ctx) {
 
 #undef CLEAR_CACHE
 
-    ctx->font.scale = stbtt_ScaleForPixelHeight(&ctx->font.regular.info, ctx->font.cur_size);
+#define SET_SCALES(type)                                                                           \
+    for (int i = 0; i < type.num_fonts; ++i) {                                                     \
+        float tweak = _sfte_font_scales[i];                                                        \
+        if (tweak <= 0.0f) tweak = 1.0f;                                                           \
+        type.scales[i] = stbtt_ScaleForPixelHeight(&type.info[i], ctx->font.cur_size * tweak);     \
+    }
+
+    SET_SCALES(ctx->font.regular);
+#ifdef SFTE_FONT_BOLD
+    SET_SCALES(ctx->font.bold);
+#endif  // SFTE_FONT_BOLD
+#ifdef SFTE_FONT_ITALIC
+    SET_SCALES(ctx->font.italic);
+#endif  // SFTE_FONT_ITALIC
+#ifdef SFTE_FONT_BOLD_ITALIC
+    SET_SCALES(ctx->font.bold_italic);
+#endif  // SFTE_FONT_BOLD_ITALIC
+
+#undef SET_SCALES
 
     int unscaled_ascent, unscaled_descent, unscaled_line_gap;
-    stbtt_GetFontVMetrics(&ctx->font.regular.info, &unscaled_ascent, &unscaled_descent,
+    stbtt_GetFontVMetrics(&ctx->font.regular.info[0], &unscaled_ascent, &unscaled_descent,
                           &unscaled_line_gap);
 
-    ctx->font.ascent = (int)(unscaled_ascent * ctx->font.scale + 0.5f);
-    ctx->font.descent = (int)(unscaled_descent * ctx->font.scale -
+    float primary_scale = ctx->font.regular.scales[0];
+    ctx->font.ascent = (int)(unscaled_ascent * primary_scale + 0.5f);
+    ctx->font.descent = (int)(unscaled_descent * primary_scale -
                               0.5f);  // descent is usually negative
-    ctx->font.line_gap = (int)(unscaled_line_gap * ctx->font.scale + 0.5f);
+    ctx->font.line_gap = (int)(unscaled_line_gap * primary_scale + 0.5f);
 
     ctx->font.cell_height = ctx->font.ascent - ctx->font.descent + ctx->font.line_gap;
 
@@ -3727,7 +3783,8 @@ void sfte_free(sfte_ctx *ctx) {
 
 #define FREE_CACHE(type)                                                                           \
     do {                                                                                           \
-        if (type.owns_ttf_buf) SFTE_FREE(type.ttf_buf);                                            \
+        for (int i = 0; i < type.num_fonts; ++i)                                                   \
+            if (type.owns_ttf_buf[i]) SFTE_FREE(type.ttf_buf[i]);                                  \
         SFTE_FREE(type.atlas_pxs);                                                                 \
         SFTE_FREE(type.glyphs);                                                                    \
     } while (0)
@@ -3758,25 +3815,32 @@ void sfte_free(sfte_ctx *ctx) {
 
 void sfte_font_load_mem(sfte_ctx *ctx, int style, const uint8_t *ttf_data) {
     sfte_font_cache *cache = _sfte_font_get_cache(ctx, style);
-    if (!cache || !ttf_data) return;
+    if (!cache || !ttf_data || cache->num_fonts >= SFTE_FONT_MAX_COUNT) return;
 
-    cache->ttf_buf = (uint8_t *)ttf_data;
-    cache->owns_ttf_buf = 0;
+    int idx = cache->num_fonts++;
+    cache->ttf_buf[idx] = (uint8_t *)ttf_data;
+    cache->owns_ttf_buf[idx] = 0;
 
-    if (style == SFTE_FONT_STYLE_REGULAR) ctx->font.cur_size = SFTE_FONT_DEFAULT_SIZE;
+    if (idx == 0) {
+        if (style == SFTE_FONT_STYLE_REGULAR) ctx->font.cur_size = SFTE_FONT_DEFAULT_SIZE;
 
-    if (!cache->atlas_pxs) {
-        cache->atlas_pxs = (uint8_t *)SFTE_MALLOC(SFTE_FONT_ATLAS_SIZE * SFTE_FONT_ATLAS_SIZE);
-        SFTE_ASSERT(cache->atlas_pxs, "failed to allocate font atlas");
+        if (!cache->atlas_pxs) {
+            cache->atlas_pxs = (uint8_t *)SFTE_MALLOC(SFTE_FONT_ATLAS_SIZE * SFTE_FONT_ATLAS_SIZE);
+            SFTE_ASSERT(cache->atlas_pxs, "failed to allocate font atlas");
+        }
+
+        if (!cache->glyphs) {
+            cache->glyphs = (sfte_glyph *)SFTE_CALLOC(SFTE_FONT_GLYPH_CAP, sizeof(sfte_glyph));
+            SFTE_ASSERT(cache->glyphs, "failed to allocate glyphs storage");
+        }
     }
 
-    if (!cache->glyphs) {
-        cache->glyphs = (sfte_glyph *)SFTE_CALLOC(SFTE_FONT_GLYPH_CAP, sizeof(sfte_glyph));
-        SFTE_ASSERT(cache->glyphs, "failed to allocate glyphs storage");
-    }
+    stbtt_InitFont(&cache->info[idx], cache->ttf_buf[idx], 0);
 
-    stbtt_InitFont(&cache->info, cache->ttf_buf, 0);
-    _sfte_font_reset_cache(ctx);
+    if (style == SFTE_FONT_STYLE_REGULAR)
+        _sfte_font_reset_cache(ctx);
+    else
+        cache->scales[idx] = stbtt_ScaleForPixelHeight(&cache->info[idx], ctx->font.cur_size);
 
     _SFTE_INFO(ctx, FONT_LOADED);
 }
@@ -3797,7 +3861,7 @@ void sfte_font_load_file(sfte_ctx *ctx, int style, const char *path) {
     fclose(f);
 
     sfte_font_load_mem(ctx, style, buf);
-    ctx->font.regular.owns_ttf_buf = 1;
+    cache->owns_ttf_buf[cache->num_fonts - 1] = 1;
 }
 
 #ifndef SFTE_NO_POSIX
