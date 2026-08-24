@@ -332,6 +332,7 @@ void sfte_font_load_mem(sfte_ctx *ctx, int style, const uint8_t *ttf_data);
 void sfte_font_load_file(sfte_ctx *ctx, int style, const char *path);
 
 #ifndef SFTE_NO_POSIX
+#include <errno.h>
 #include <unistd.h>
 
 // spawns a shell, returns the PID and populates out_fd with the master PTY descriptor
@@ -650,11 +651,14 @@ static void _sfte_logger_default(const char *tag, uint32_t log_level, const char
     _SFTE_LOGITEM_XMACRO(OK, "ok")                                                                 \
     _SFTE_LOGITEM_XMACRO(FONT_LOADED, "font loaded and baked to atlas")                            \
     _SFTE_LOGITEM_XMACRO(PTY_SPAWN, "master/slave pair successfully spawned")                      \
-    _SFTE_LOGITEM_XMACRO(UNHANDLED_CSI, "unhandled CSI command: '%c'")                             \
+    _SFTE_LOGITEM_XMACRO(PTY_FORK_FAIL, "forkpty failed with errno: '%d'")                         \
+    _SFTE_LOGITEM_XMACRO(UNHANDLED_CSI, "unhandled CSI command: '%c' with '%d' parms")             \
     _SFTE_LOGITEM_XMACRO(UNHANDLED_OSC, "unhandled OSC payload: '%s'")                             \
     _SFTE_LOGITEM_XMACRO(TERM_RESIZE, "resized grid to '%dx%d'")                                   \
     _SFTE_LOGITEM_XMACRO(WAYLAND_REGISTRY_BOUND, "wayland globals bound")                          \
-    _SFTE_LOGITEM_XMACRO(KEYMAP_LOADED, "xkb keymap loaded from compositor")
+    _SFTE_LOGITEM_XMACRO(KEYMAP_LOADED, "xkb keymap loaded from compositor")                       \
+    _SFTE_LOGITEM_XMACRO(SHELL_FALLBACK, "SHELL env var unset, falling back to /bin/sh")           \
+    _SFTE_LOGITEM_XMACRO(CLIPBOARD_EMPTY, "clipboard call requested but buffer is empty")
 
 #define _SFTE_LOGITEM_XMACRO(item, msg) item,
 typedef enum { _SFTE_LOG_ITEMS } _sfte_log_item_t;
@@ -1862,7 +1866,10 @@ static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
     if (!app->ctx->term.mouse_sel_active || !app->data_device_manager || !app->data_device) return;
 
     size_t needed_bytes = sfte_get_selection(app->ctx, NULL, 0);
-    if (needed_bytes == 0) return;
+    if (needed_bytes == 0) {
+        _SFTE_INFO(ctx, CLIPBOARD_EMPTY);
+        return;
+    }
 
     app->selection_text = (char *)SFTE_MALLOC(needed_bytes);
     sfte_get_selection(app->ctx, app->selection_text, needed_bytes);
@@ -3072,7 +3079,7 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         ctx->term.cur_attr = ctx->term.ansi_saved_attr;
         break;
     }
-    default: _SFTE_WARN(ctx, UNHANDLED_CSI, cmd); break;
+    default: _SFTE_WARN(ctx, UNHANDLED_CSI, cmd, cnt); break;
     }
 }
 
@@ -3944,12 +3951,18 @@ pid_t sfte_posix_pty_spawn(sfte_ctx *ctx, int *out_fd, int px_w, int px_h) {
     };
 
     pid_t pid = forkpty(out_fd, NULL, NULL, &ws);
-    if (pid == -1) return -1;
+    if (pid == -1) {
+        _SFTE_ERROR(ctx, PTY_FORK_FAIL, errno);
+        return -1;
+    }
 
     if (pid == 0) {
         setenv("TERM", SFTE_TERM_ENV, 1);
         char *shell = getenv("SHELL");
-        if (!shell) shell = (char *)"/bin/sh";
+        if (!shell) {
+            shell = (char *)"/bin/sh";
+            _SFTE_WARN(ctx, SHELL_FALLBACK);
+        }
         execlp(shell, shell, NULL);
         abort();  // if execlp returns, it failed to exec the shell
     }
