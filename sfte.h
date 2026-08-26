@@ -125,6 +125,14 @@
 #define SFTE_WIDE_CHARS 1
 #endif  // SFTE_WIDE_CHARS
 
+#ifndef SFTE_EXT_UNDERLINES
+#define SFTE_EXT_UNDERLINES 1
+#endif  // SFTE_EXT_UNDERLINES
+
+#ifndef SFTE_COLOR_UNDERLINE
+#define SFTE_COLOR_UNDERLINE 1
+#endif  // SFTE_COLOR_UNDERLINE
+
 #ifndef SFTE_MAX_COMBINING
 #define SFTE_MAX_COMBINING 2
 #endif  // SFTE_MAX_COMBINING
@@ -452,10 +460,16 @@ typedef struct {
     uint32_t combining[SFTE_MAX_COMBINING];
     uint8_t num_combining;
 #endif  // SFTE_WIDE_CHARS
+#if SFTE_COLOR_UNDERLINE
+    uint32_t ul_color;
+#endif  // SFTE_COLOR_UNDERLINE
     uint32_t fg;
     uint32_t bg;
     uint16_t attr;  // bitmask of sfte_attr
-    uint8_t dirty;  // 1 if this cell changed
+#if SFTE_EXT_UNDERLINES
+    uint8_t ul_style;  // 1=straight, 2=double, 3=curl, 4=dotted, 5=dashed
+#endif                 // SFTE_EXT_UNDERLINES
+    uint8_t dirty;     // 1 if this cell changed
 #if SFTE_REFLOW
     uint8_t wrapped;  // 1 if this cell caused a soft line-wrap
 #endif                // SFTE_REFLOW
@@ -543,6 +557,12 @@ typedef struct {
     uint32_t cur_fg;
     uint32_t cur_bg;
     uint16_t cur_attr;
+#if SFTE_EXT_UNDERLINES
+    uint8_t cur_ul_style;
+#endif  // SFTE_EXT_UNDERLINES
+#if SFTE_COLOR_UNDERLINE
+    uint32_t cur_ul_color;
+#endif  // SFTE_COLOR_UNDERLINE
     // parser
     int vt_state;
     int vt_params[16];  // stores nums from esc sequences
@@ -940,8 +960,11 @@ static void _sfte_render_fg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, u
     }
 }
 
-static void _sfte_render_decorations(sfte_ctx *ctx, uint32_t *px_buf, int c, int r, uint16_t attr,
-                                     uint32_t fg, int is_cursor, int w, int h) {
+static void _sfte_render_decorations(sfte_ctx *ctx, uint32_t *px_buf, int c, int r,
+                                     sfte_cell *vcell, int is_cursor, int w, int h) {
+    uint16_t attr = vcell->attr;
+    uint32_t text_fg = vcell->fg;
+
     int cx = c * ctx->font.cell_width + SFTE_PAD_X;
     int cy = r * ctx->font.cell_height + SFTE_PAD_Y;
 
@@ -951,13 +974,63 @@ static void _sfte_render_decorations(sfte_ctx *ctx, uint32_t *px_buf, int c, int
 #endif  // SFTE_WIDE_CHARS
 
     if (attr & ATTR_UNDERLINE) {
-        uint32_t underline_col = (fg & 0x00FFFFFF) | (0xFF << 24);
+        uint32_t base_ul_col = text_fg;
+#if SFTE_COLOR_UNDERLINE
+        if (vcell->ul_color != 0xFFFFFFFF) base_ul_col = vcell->ul_color;
+#endif
+        uint32_t underline_col = (base_ul_col & 0x00FFFFFF) | (0xFF << 24);
+
         int thickness = (int)(ctx->font.cell_height * SFTE_UNDERLINE_THICK_RATIO);
         if (thickness < 1) thickness = 1;
 
-        for (int y = cy + ctx->font.cell_height - thickness; y < cy + ctx->font.cell_height; ++y)
-            for (int x = cx; x < cx + render_w; ++x)
-                if (x < w && y < h) px_buf[y * w + x] = underline_col;
+        int style = 1;  // default straight line
+#if SFTE_EXT_UNDERLINES
+        style = vcell->ul_style;
+        style = _SFTE_CLAMP(style, 1, 5);
+#endif
+
+        int base_y = cy + ctx->font.ascent + 2;
+        if (base_y + thickness > cy + ctx->font.cell_height)
+            base_y = cy + ctx->font.cell_height - thickness;
+
+        for (int x = cx; x < cx + render_w; ++x) {
+            if (x >= w) break;
+
+            int grid_x = x - SFTE_PAD_X;
+            int local_x = grid_x % ctx->font.cell_width;
+
+            if (style == 4 && ((grid_x / thickness) % 2) != 0) continue;  // dotted
+
+            if (style == 5 && ((grid_x / thickness) % 5) >= 3) continue;  // dashed
+
+            if (style == 3) {  // undercurl
+                int half_w = ctx->font.cell_width / 2;
+                if (half_w == 0) half_w = 1;
+
+                int amp = thickness + 1;
+                int dist = local_x > half_w ? local_x - half_w : half_w - local_x;
+                int y_off = (dist * amp) / half_w - (amp / 2);
+
+                for (int dy = 0; dy < thickness; ++dy) {
+                    int py = base_y + y_off + dy;
+                    if (py >= 0 && py < h) px_buf[py * w + x] = underline_col;
+                }
+            } else if (style == 2) {  // double underline
+                int thin = thickness / 2;
+                if (thin < 1) thin = 1;
+                for (int dy = 0; dy < thin; ++dy) {
+                    int py1 = base_y - thin + dy;
+                    int py2 = base_y + thin + dy + 1;
+                    if (py1 >= 0 && py1 < h) px_buf[py1 * w + x] = underline_col;
+                    if (py2 >= 0 && py2 < h) px_buf[py2 * w + x] = underline_col;
+                }
+            } else {  // straight underline
+                for (int dy = 0; dy < thickness; ++dy) {
+                    int py = base_y + dy;
+                    if (py >= 0 && py < h) px_buf[py * w + x] = underline_col;
+                }
+            }
+        }
     }
 
     if (is_cursor && _SFTE_CUR_STYLE(ctx) != SFTE_CURSOR_BLOCK) {
@@ -2144,6 +2217,12 @@ static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt)
         ctx->term.cells[start_idx + i].fg = ctx->term.cur_fg;
         ctx->term.cells[start_idx + i].bg = ctx->term.cur_bg;
         ctx->term.cells[start_idx + i].attr = 0;
+#if SFTE_EXT_UNDERLINES
+        ctx->term.cells[start_idx + i].ul_style = 0;
+#endif  // SFTE_EXT_UNDERLINES
+#if SFTE_COLOR_UNDERLINE
+        ctx->term.cells[start_idx + i].ul_color = 0xFFFFFFFF;
+#endif  // SFTE_COLOR_UNDERLINE
         ctx->term.cells[start_idx + i].dirty = 1;
 #if SFTE_REFLOW
         ctx->term.cells[start_idx + i].wrapped = 0;
@@ -2892,21 +2971,37 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
                 ctx->term.cur_fg = 0xFFFFFF;
                 ctx->term.cur_bg = SFTE_BG_COLOR;
                 ctx->term.cur_attr = 0;
+#if SFTE_COLOR_UNDERLINE
+                ctx->term.cur_ul_color = 0xFFFFFFFF;
+#endif  // SFTE_COLOR_UNDERLINE
+#if SFTE_EXT_UNDERLINES
+                ctx->term.cur_ul_style = 0;
+#endif  // SFTE_EXT_UNDERLINES
             } else if (p[i] == 1)
                 ctx->term.cur_attr |= ATTR_BOLD;
             else if (p[i] == 3)
                 ctx->term.cur_attr |= ATTR_ITALIC;
-            else if (p[i] == 4)
+            else if (p[i] == 4) {
                 ctx->term.cur_attr |= ATTR_UNDERLINE;
-            else if (p[i] == 7)
+#if SFTE_EXT_UNDERLINES
+                if (i + 1 < cnt && (p[i + 1] >= 1 && p[i + 1] <= 5)) {
+                    ctx->term.cur_ul_style = p[i + 1];
+                    i++;  // skip sub-param
+                } else
+                    ctx->term.cur_ul_style = 1 /* standard straight line */;
+#endif  // SFTE_EXT_UNDERLINES
+            } else if (p[i] == 7)
                 ctx->term.cur_attr |= ATTR_REVERSE;
             else if (p[i] == 22)
                 ctx->term.cur_attr &= ~ATTR_BOLD;
             else if (p[i] == 23)
                 ctx->term.cur_attr &= ~ATTR_ITALIC;
-            else if (p[i] == 24)
+            else if (p[i] == 24) {
                 ctx->term.cur_attr &= ~ATTR_UNDERLINE;
-            else if (p[i] == 27)
+#if SFTE_EXT_UNDERLINES
+                ctx->term.cur_ul_style = 0;
+#endif  // SFTE_EXT_UNDERLINES
+            } else if (p[i] == 27)
                 ctx->term.cur_attr &= ~ATTR_REVERSE;
             else if (p[i] >= 30 && p[i] <= 37)
                 ctx->term.cur_fg = _sfte_ansi_palette[p[i] - 30];
@@ -2927,6 +3022,13 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
 #endif  // SFTE_TRUE_COLOR
                 i += 4;
             }
+#if SFTE_COLOR_UNDERLINE
+            else if (p[i] == 58 && i + 4 < cnt && p[i + 1] == 2) {
+                ctx->term.cur_ul_color = _sfte_csi_parse_truecolor(p, i);
+                i += 4;
+            } else if (p[i] == 59)
+                ctx->term.cur_ul_color = 0xFFFFFFFF;
+#endif  // SFTE_COLOR_UNDERLINE
         }
         break;
     }
@@ -2965,6 +3067,12 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
 #if SFTE_CURSOR_DYNAMIC
         ctx->term.cursor_style = SFTE_CURSOR_STYLE;
 #endif  // SFTE_CURSOR_DYNAMIC
+#if SFTE_COLOR_UNDERLINE
+        ctx->term.cur_ul_color = 0xFFFFFFFF;
+#endif  // SFTE_COLOR_UNDERLINE
+#if SFTE_EXT_UNDERLINES
+        ctx->term.cur_ul_style = 0;
+#endif  // SFTE_EXT_UNDERLINES
         ctx->term.scroll_top = 0;
         ctx->term.scroll_bottom = ctx->term.rows - 1;
         ctx->term.cur_fg = 0xFFFFFF;
@@ -3175,6 +3283,12 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
         ctx->term.cells[idx].fg = ctx->term.cur_fg;
         ctx->term.cells[idx].bg = ctx->term.cur_bg;
         ctx->term.cells[idx].attr = ctx->term.cur_attr | ATTR_WIDE;
+#if SFTE_EXT_UNDERLINES
+        ctx->term.cells[idx].ul_style = ctx->term.cur_ul_style;
+#endif  // SFTE_EXT_UNDERLINES
+#if SFTE_COLOR_UNDERLINE
+        ctx->term.cells[idx].ul_color = ctx->term.cur_ul_color;
+#endif  // SFTE_COLOR_UNDERLINE
         ctx->term.cells[idx].dirty = 1;
 
         int dummy_idx = _SFTE_IDX(ctx, ctx->term.cursor_x + 1, ctx->term.cursor_y);
@@ -3193,6 +3307,12 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
         ctx->term.cells[idx].fg = ctx->term.cur_fg;
         ctx->term.cells[idx].bg = ctx->term.cur_bg;
         ctx->term.cells[idx].attr = ctx->term.cur_attr;
+#if SFTE_EXT_UNDERLINES
+        ctx->term.cells[idx].ul_style = ctx->term.cur_ul_style;
+#endif  // SFTE_EXT_UNDERLINES
+#if SFTE_COLOR_UNDERLINE
+        ctx->term.cells[idx].ul_color = ctx->term.cur_ul_color;
+#endif  // SFTE_COLOR_UNDERLINE
         ctx->term.cells[idx].dirty = 1;
 
         ctx->term.cursor_x++;
@@ -3373,7 +3493,7 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
 
             ctx->term.vt_params[ctx->term.vt_param_idx] *= 10;
             ctx->term.vt_params[ctx->term.vt_param_idx] += (b - '0');
-        } else if (b == ';')
+        } else if (b == ';' || b == ':')
             ctx->term.vt_param_idx++;  // move to next param
         else if (b >= 0x40 && b <= 0x7E) {
             _sfte_csi_dispatch(ctx, b);
@@ -3595,7 +3715,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
 
             _sfte_render_fg(ctx, px_buf, c, r, rune, draw_fg, target_cache);
 
-            _sfte_render_decorations(ctx, px_buf, c, r, attr, draw_fg, is_cursor, w, h);
+            _sfte_render_decorations(ctx, px_buf, c, r, vcell, is_cursor, w, h);
 
             // submit localized damage to compositor
             DAMAGE_ADD(c * ctx->font.cell_width + SFTE_PAD_X,
@@ -3842,6 +3962,12 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
 #if SFTE_CURSOR_DYNAMIC
     ctx->term.cursor_style = SFTE_CURSOR_STYLE;
 #endif  // SFTE_CURSOR_DYNAMIC
+#if SFTE_COLOR_UNDERLINE
+    ctx->term.cur_ul_color = 0xFFFFFFFF;
+#endif  // SFTE_COLOR_UNDERLINE
+#if SFTE_EXT_UNDERLINES
+    ctx->term.cur_ul_style = 0;
+#endif  // SFTE_EXT_UNDERLINES
     ctx->term.scroll_top = 0;
     ctx->term.scroll_bottom = ctx->term.rows - 1;
 
