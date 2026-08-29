@@ -2346,9 +2346,13 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
     sfte_cell *new_main = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
     SFTE_ASSERT(new_main, "failed to allocate resized terminal grid");
 
-    int screen_top = total_lines - new_rows;
-    if (st.new_cy >= screen_top + new_rows) screen_top = st.new_cy - new_rows + 1;
-    screen_top = _SFTE_CLAMP(screen_top, 0, st.new_cy);
+    int screen_top = st.new_cy - target_cy;
+    if (screen_top < 0) screen_top = 0;
+
+    if (screen_top + new_rows > total_lines) {
+        screen_top = total_lines - new_rows;
+        if (screen_top < 0) screen_top = 0;
+    }
 
 #if SFTE_SCROLLBACK_CAP
     sfte_cell *new_sb = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
