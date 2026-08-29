@@ -3601,26 +3601,45 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
         ctx->term.dirty_saved_y = vis_cy;
     }
 
-    for (int i = ctx->term.rows * ctx->term.cols - 2; i >= 0; --i) {
-        if ((i + 1) % ctx->term.cols == 0) continue;
-        // if right neighbor is dirty, redraw to fix font bleed
-        if (ctx->term.cells[i + 1].dirty == 1 && ctx->term.cells[i].dirty == 0)
-            ctx->term.cells[i].dirty = 2;
-    }
+    int total_cells = ctx->term.rows * ctx->term.cols;
+
+    // dirty propagation:
+    // - dirties other half of wide char
+    // - dirties neighbors
+    for (int i = 0; i < total_cells; ++i) {
+        // only trigger on original dirty cells (=1)
+        // never on expanded bleeds (>1)
+        if (ctx->term.cells[i].dirty != 1) continue;
+
+        int c = i % ctx->term.cols;
+        int r = i / ctx->term.cols;
 
 #if SFTE_WIDE_CHARS
-    for (int i = 0; i < ctx->term.rows * ctx->term.cols - 1; ++i) {
-        if ((i + 1) % ctx->term.cols == 0) continue;
-        // lock wide characters
-        // if either half is dirty, both must redraw
-        if ((ctx->term.cells[i].attr & ATTR_WIDE) &&
-            (ctx->term.cells[i].dirty || ctx->term.cells[i + 1].dirty)) {
-            ctx->term.cells[i].dirty = 1;
+        // lock wide halves together
+        if ((ctx->term.cells[i].attr & ATTR_WIDE) && c < ctx->term.cols - 1)
             ctx->term.cells[i + 1].dirty = 1;
+        else if ((ctx->term.cells[i].attr & ATTR_DUMMY) && c > 0 &&
+                 ctx->term.cells[i - 1].dirty != 1) {
+            ctx->term.cells[i - 1].dirty = 1;
+
+            // backfill the skipped left/top bleeds for the left half
+            if (c > 1 && !ctx->term.cells[i - 2].dirty) ctx->term.cells[i - 2].dirty = 2;
+            if (r > 0 && !ctx->term.cells[i - 1 - ctx->term.cols].dirty)
+                ctx->term.cells[i - 1 - ctx->term.cols].dirty = 2;
         }
-    }
 #endif  // SFTE_WIDE_CHARS
 
+        // dirty neighbors
+        if (c > 0 && !ctx->term.cells[i - 1].dirty) ctx->term.cells[i - 1].dirty = 2;
+        if (c < ctx->term.cols - 1 && !ctx->term.cells[i + 1].dirty)
+            ctx->term.cells[i + 1].dirty = 2;
+        if (r > 0 && !ctx->term.cells[i - ctx->term.cols].dirty)
+            ctx->term.cells[i - ctx->term.cols].dirty = 2;
+        if (r < ctx->term.rows - 1 && !ctx->term.cells[i + ctx->term.cols].dirty)
+            ctx->term.cells[i + ctx->term.cols].dirty = 2;
+    }
+
+    // dirty normalization pass
     for (int i = 0; i < ctx->term.rows * ctx->term.cols; ++i)
         if (ctx->term.cells[i].dirty == 2) ctx->term.cells[i].dirty = 1;
 
