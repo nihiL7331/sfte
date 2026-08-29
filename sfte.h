@@ -111,6 +111,10 @@
 #define SFTE_FONT_ZOOM 1
 #endif  // SFTE_FONT_ZOOM
 
+#ifndef SFTE_FONT_BLEED
+#define SFTE_FONT_BLEED 1
+#endif  // SFTE_FONT_BLEED
+
 #ifndef SFTE_ANSI_PALETTE
 #define SFTE_ANSI_PALETTE                                                                          \
     {0x181818, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0xA89984,               \
@@ -3601,8 +3605,8 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
         ctx->term.dirty_saved_y = vis_cy;
     }
 
+#if SFTE_FONT_BLEED
     int total_cells = ctx->term.rows * ctx->term.cols;
-
     // dirty propagation:
     // - dirties other half of wide char
     // - dirties neighbors
@@ -3642,6 +3646,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
     // dirty normalization pass
     for (int i = 0; i < ctx->term.rows * ctx->term.cols; ++i)
         if (ctx->term.cells[i].dirty == 2) ctx->term.cells[i].dirty = 1;
+#endif  // SFTE_FONT_BLEED
 
     for (int r = 0; r < ctx->term.rows; ++r) {
         for (int c = 0; c < ctx->term.cols; ++c) {
