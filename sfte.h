@@ -744,7 +744,9 @@ static sfte_font_cache *_sfte_font_get_cache(sfte_ctx *ctx, int style) {
     return NULL;
 }
 
-static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache *cache, uint32_t rune) {
+static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_ptr, uint32_t rune) {
+    sfte_font_cache *cache = *cache_ptr;
+
     if (rune == 0) rune = ' ';
 
     uint32_t h = rune;
@@ -775,8 +777,10 @@ static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache *cache, u
         // if glyph was not found and cache isn't regular, look in regular
         // this is useful e.g. when a certain app tries to draw nerd symbols
         // in bold/italic/bold italic instead of regular.
-        if (glyph_idx == 0 && cache != &ctx->font.regular)
-            return _sfte_font_get_glyph(ctx, &ctx->font.regular, rune);
+        if (glyph_idx == 0 && cache != &ctx->font.regular) {
+            *cache_ptr = &ctx->font.regular;
+            return _sfte_font_get_glyph(ctx, cache_ptr, rune);
+        }
 
         stbtt_fontinfo *info = &cache->info[font_idx];
         float font_scale = cache->scales[font_idx];
@@ -790,7 +794,7 @@ static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache *cache, u
         g->xadvance = (int)(advance_width * font_scale + 0.5f);
 
         int x0, y0, x1, y1;
-        stbtt_GetCodepointBitmapBox(info, rune, font_scale, font_scale, &x0, &y0, &x1, &y1);
+        stbtt_GetGlyphBitmapBox(info, glyph_idx, font_scale, font_scale, &x0, &y0, &x1, &y1);
 
         int glyph_width = x1 - x0;
         int glyph_height = y1 - y0;
@@ -884,7 +888,8 @@ static void _sfte_font_reset_cache(sfte_ctx *ctx) {
     ctx->font.cell_height = ctx->font.ascent - ctx->font.descent + ctx->font.line_gap;
 
     // monospace grid using standard 'M' glyph
-    sfte_glyph *m = _sfte_font_get_glyph(ctx, &ctx->font.regular, 'M');
+    sfte_font_cache *dummy = &ctx->font.regular;
+    sfte_glyph *m = _sfte_font_get_glyph(ctx, &dummy, 'M');
     ctx->font.cell_width = m->xadvance;
 }
 
@@ -914,7 +919,8 @@ static void _sfte_render_fg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, u
                             uint32_t fg, sfte_font_cache *target_cache) {
     if (rune == ' ') return;
 
-    sfte_glyph *g = _sfte_font_get_glyph(ctx, target_cache, rune);
+    sfte_font_cache *actual_cache = target_cache;
+    sfte_glyph *g = _sfte_font_get_glyph(ctx, &actual_cache, rune);
     if (!g) return;
 
     int cx = col * ctx->font.cell_width + SFTE_PAD_X;
@@ -936,7 +942,7 @@ static void _sfte_render_fg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, u
             if (screen_x < 0 || screen_x >= ctx->width || screen_y < 0 || screen_y >= ctx->height)
                 continue;
 
-            uint8_t alpha = target_cache
+            uint8_t alpha = actual_cache
                                 ->atlas_pxs[(g->y0 + y) * SFTE_FONT_ATLAS_SIZE + (g->x0 + x)];
             if (alpha == 0) continue;
 
