@@ -3904,39 +3904,25 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
 #if SFTE_FONT_BLEED
     int total_cells = ctx->term.rows * ctx->term.cols;
     // dirty propagation:
-    // - dirties other half of wide char
-    // - dirties neighbors
-    for (int i = 0; i < total_cells; ++i) {
-        // only trigger on original dirty cells (=1)
-        // never on expanded bleeds (>1)
-        if (ctx->term.cells[i].dirty != 1) continue;
+    // if a row has any damage, dirty the whole row
+    // and the row above and below it.
+    for (int r = 0; r < ctx->term.rows; ++r) {
+        int row_has_damage = 0;
+        for (int c = 0; c < ctx->term.cols; ++c)
+            if (ctx->term.cells[_SFTE_IDX(ctx, c, r)].dirty) {
+                row_has_damage = 1;
+                break;
+            }
 
-        int c = i % ctx->term.cols;
-        int r = i / ctx->term.cols;
+        if (row_has_damage) {
+            int r_min = r > 0 ? r - 1 : 0;
+            int r_max = r < ctx->term.rows - 1 ? r + 1 : ctx->term.rows - 1;
 
-#if SFTE_WIDE_CHARS
-        // lock wide halves together
-        if ((ctx->term.cells[i].attr & ATTR_WIDE) && c < ctx->term.cols - 1)
-            ctx->term.cells[i + 1].dirty = 1;
-        else if ((ctx->term.cells[i].attr & ATTR_DUMMY) && c > 0 &&
-                 ctx->term.cells[i - 1].dirty != 1) {
-            ctx->term.cells[i - 1].dirty = 1;
-
-            // backfill the skipped left/top bleeds for the left half
-            if (c > 1 && !ctx->term.cells[i - 2].dirty) ctx->term.cells[i - 2].dirty = 2;
-            if (r > 0 && !ctx->term.cells[i - 1 - ctx->term.cols].dirty)
-                ctx->term.cells[i - 1 - ctx->term.cols].dirty = 2;
+            for (int y = r_min; y <= r_max; ++y)
+                for (int x = 0; x < ctx->term.cols; ++x)
+                    if (!ctx->term.cells[_SFTE_IDX(ctx, x, y)].dirty)
+                        ctx->term.cells[_SFTE_IDX(ctx, x, y)].dirty = 2;
         }
-#endif  // SFTE_WIDE_CHARS
-
-        // dirty neighbors
-        if (c > 0 && !ctx->term.cells[i - 1].dirty) ctx->term.cells[i - 1].dirty = 2;
-        if (c < ctx->term.cols - 1 && !ctx->term.cells[i + 1].dirty)
-            ctx->term.cells[i + 1].dirty = 2;
-        if (r > 0 && !ctx->term.cells[i - ctx->term.cols].dirty)
-            ctx->term.cells[i - ctx->term.cols].dirty = 2;
-        if (r < ctx->term.rows - 1 && !ctx->term.cells[i + ctx->term.cols].dirty)
-            ctx->term.cells[i + ctx->term.cols].dirty = 2;
     }
 
     // dirty normalization pass
@@ -4048,9 +4034,15 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
             _sfte_render_decorations(ctx, px_buf, c, r, vcell, is_cursor, w, h);
 
             // submit localized damage to compositor
-            DAMAGE_ADD(c * ctx->font.cell_width + SFTE_PAD_X,
-                       r * ctx->font.cell_height + SFTE_PAD_Y, ctx->font.cell_width,
-                       ctx->font.cell_height);
+            int dmg_cy = r * ctx->font.cell_height + SFTE_PAD_Y;
+            int dmg_ch = ctx->font.cell_height;
+
+            if (r == 0) {
+                dmg_cy = 0;
+                dmg_ch += SFTE_PAD_Y;
+            } else if (r == ctx->term.rows - 1)
+                dmg_ch += ctx->height - (dmg_cy + dmg_ch);
+            DAMAGE_ADD(0, dmg_cy, ctx->width, dmg_ch);
             ctx->term.cells[idx].dirty = 0;
         }
     }
