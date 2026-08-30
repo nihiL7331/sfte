@@ -3216,6 +3216,14 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
                 ctx->term.cur_bg = ctx->term.ansi_saved_bg;
                 ctx->term.cur_attr = ctx->term.ansi_saved_attr;
                 ctx->term.cells[_SFTE_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y)].dirty = 1;
+
+#if SFTE_CURSOR_TRAIL
+                ctx->term.last_move_ms = 0;
+                ctx->term.is_trailing = 0;
+                ctx->term.tail_rx = ctx->term.cursor_x * ctx->font.cell_width;
+                ctx->term.tail_ry = ctx->term.cursor_y * ctx->font.cell_height;
+                ctx->term.trail_damage_w = 0;
+#endif  // SFTE_CURSOR_TRAIL
             }
         }
 #if SFTE_MOUSE
@@ -4204,8 +4212,16 @@ void sfte_resize(sfte_ctx *ctx, int w, int h) {
     int new_rows = (h - (2 * SFTE_PAD_Y)) / ctx->font.cell_height;
     if (new_rows < 1) new_rows = 1;
 
-    if (new_cols != ctx->term.cols || new_rows != ctx->term.rows)
+    if (new_cols != ctx->term.cols || new_rows != ctx->term.rows) {
         _sfte_grid_resize(ctx, new_cols, new_rows);
+
+#if SFTE_CURSOR_TRAIL
+        ctx->term.tail_rx = ctx->term.cursor_x * ctx->font.cell_width;
+        ctx->term.tail_ry = ctx->term.cursor_y * ctx->font.cell_height;
+        ctx->term.is_trailing = 0;
+        ctx->term.trail_damage_w = 0;
+#endif  // SFTE_CURSOR_TRAIL
+    }
 
 #if SFTE_SIXEL
     _sfte_sixel_resize_img_layer(ctx);
