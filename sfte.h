@@ -3851,20 +3851,20 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
 
 #if SFTE_CURSOR_TRAIL
     if (ctx->term.trail_damage_w > 0) {
-        uint32_t bg_col = (SFTE_BG_COLOR & 0x00FFFFFF) | (SFTE_BG_OPACITY << 24);
-        int tx_start = ctx->term.trail_damage_x;
-        int ty_start = ctx->term.trail_damage_y;
-        int tx_end = tx_start + ctx->term.trail_damage_w;
-        int ty_end = ty_start + ctx->term.trail_damage_h;
-
-        for (int y = ty_start; y < ty_end; ++y)
-            for (int x = tx_start; x < tx_end; ++x)
-                if (x >= 0 && x < w && y >= 0 && y < h) px_buf[y * w + x] = bg_col;
-
-        int start_c = tx_start < SFTE_PAD_X ? 0 : (tx_start - SFTE_PAD_X) / ctx->font.cell_width;
-        int start_r = ty_start < SFTE_PAD_Y ? 0 : (ty_start - SFTE_PAD_Y) / ctx->font.cell_height;
-        int end_c = tx_end < SFTE_PAD_X ? 0 : (tx_end - SFTE_PAD_X) / ctx->font.cell_width;
-        int end_r = ty_end < SFTE_PAD_Y ? 0 : (ty_end - SFTE_PAD_Y) / ctx->font.cell_height;
+        int start_c = ctx->term.trail_damage_x < SFTE_PAD_X
+                          ? 0
+                          : (ctx->term.trail_damage_x - SFTE_PAD_X) / ctx->font.cell_width;
+        int start_r = ctx->term.trail_damage_y < SFTE_PAD_Y
+                          ? 0
+                          : (ctx->term.trail_damage_y - SFTE_PAD_Y) / ctx->font.cell_height;
+        int end_c = (ctx->term.trail_damage_x + ctx->term.trail_damage_w) < SFTE_PAD_X
+                        ? 0
+                        : (ctx->term.trail_damage_x + ctx->term.trail_damage_w - SFTE_PAD_X) /
+                              ctx->font.cell_width;
+        int end_r = (ctx->term.trail_damage_y + ctx->term.trail_damage_h) < SFTE_PAD_Y
+                        ? 0
+                        : (ctx->term.trail_damage_y + ctx->term.trail_damage_h - SFTE_PAD_Y) /
+                              ctx->font.cell_height;
 
         start_c = _SFTE_CLAMP(start_c, 0, ctx->term.cols - 1);
         start_r = _SFTE_CLAMP(start_r, 0, ctx->term.rows - 1);
