@@ -2358,9 +2358,12 @@ static inline void _sfte_grid_check_wrap(sfte_ctx *ctx) {
             ctx->term.cells[_SFTE_IDX(ctx, ctx->term.cols - 1, ctx->term.cursor_y)].wrapped = 1;
 #endif  // SFTE_REFLOW
             ctx->term.cursor_x = 0;
-            if (ctx->term.cursor_y == ctx->term.scroll_bottom)
+            if (ctx->term.cursor_y == ctx->term.scroll_bottom) {
+                uint32_t saved_bg = ctx->term.cur_bg;
+                ctx->term.cur_bg = SFTE_BG_COLOR;
                 _sfte_grid_scroll(ctx, 1);
-            else if (ctx->term.cursor_y < ctx->term.rows - 1)
+                ctx->term.cur_bg = saved_bg;
+            } else if (ctx->term.cursor_y < ctx->term.rows - 1)
                 ctx->term.cursor_y++;
         } else
             ctx->term.cursor_x = ctx->term.cols - 1;
@@ -3393,7 +3396,6 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
         ctx->term.cursor_x++;
     }
 }
-
 // =================================================================================================
 // >>parser
 // =================================================================================================
