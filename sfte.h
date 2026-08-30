@@ -2603,6 +2603,8 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
     int screen_top = st.new_cy - target_cy;
     if (screen_top < 0) screen_top = 0;
 
+    if (st.new_cy >= screen_top + new_rows) screen_top = st.new_cy - new_rows + 1;
+
     if (screen_top + new_rows > total_lines) {
         screen_top = total_lines - new_rows;
         if (screen_top < 0) screen_top = 0;
