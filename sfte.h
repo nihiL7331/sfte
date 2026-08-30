@@ -2202,6 +2202,21 @@ typedef struct {
 } sfte_reflow_state;
 
 static void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell c, int is_cursor) {
+#if SFTE_WIDE_CHARS
+    // if we're pushing a wide char and we're at last column, wrap early
+    if ((c.attr & ATTR_WIDE) && st->tc == st->new_cols - 1) {
+        sfte_cell space = c;
+        space.rune = ' ';
+        space.fg = 0xFFFFFF;
+        space.bg = SFTE_BG_COLOR;
+        space.attr = 0;
+        space.wrapped = 1;
+        st->temp_rows[st->tr * st->new_cols + st->tc] = space;
+        st->tc = 0;
+        st->tr++;
+    }
+#endif  // SFTE_WIDE_CHARS
+
     if (st->tc == st->new_cols) {
         st->temp_rows[st->tr * st->new_cols + st->new_cols - 1].wrapped = 1;
         st->tc = 0;
