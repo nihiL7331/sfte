@@ -531,12 +531,12 @@ typedef struct {
     uint8_t auto_wrap;
     uint8_t origin_mode;
     uint8_t *tab_stops;
-    // ansi save state
-    int ansi_saved_x;
-    int ansi_saved_y;
-    uint32_t ansi_saved_fg;
-    uint32_t ansi_saved_bg;
-    uint32_t ansi_saved_attr;
+    // save state (0=main, 1=alt)
+    int saved_x[2];
+    int saved_y[2];
+    uint32_t saved_fg[2];
+    uint32_t saved_bg[2];
+    uint32_t saved_attr[2];
     // dirty state
     int dirty_saved_x;
     int dirty_saved_y;
@@ -2562,8 +2562,8 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
     sfte_cell *main_old = ctx->term.alt_active ? ctx->term.alt_cells : ctx->term.cells;
     sfte_cell *alt_old = ctx->term.alt_active ? ctx->term.cells : NULL;
 
-    int target_cx = ctx->term.alt_active ? ctx->term.ansi_saved_x : ctx->term.cursor_x;
-    int target_cy = ctx->term.alt_active ? ctx->term.ansi_saved_y : ctx->term.cursor_y;
+    int target_cx = ctx->term.alt_active ? ctx->term.saved_x[0] : ctx->term.cursor_x;
+    int target_cy = ctx->term.alt_active ? ctx->term.saved_y[0] : ctx->term.cursor_y;
 #else
     sfte_cell *main_old = ctx->term.cells;
     sfte_cell *alt_old = NULL;
@@ -2632,8 +2632,8 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
 // anchor cursors
 #if SFTE_ALT_SCREEN
     if (ctx->term.alt_active) {
-        ctx->term.ansi_saved_x = st.new_cx;
-        ctx->term.ansi_saved_y = _SFTE_CLAMP(st.new_cy - screen_top, 0, new_rows - 1);
+        ctx->term.saved_x[0] = st.new_cx;
+        ctx->term.saved_y[0] = _SFTE_CLAMP(st.new_cy - screen_top, 0, new_rows - 1);
     } else {
 #endif  // SFTE_ALT_SCREEN
         ctx->term.cursor_x = st.new_cx;
@@ -3418,11 +3418,12 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
           Saves the current cursor position and attributes.
          */
         if (p[0] != 0) break;  // avoid kitty support command
-        ctx->term.ansi_saved_x = ctx->term.cursor_x;
-        ctx->term.ansi_saved_y = ctx->term.cursor_y;
-        ctx->term.ansi_saved_fg = ctx->term.cur_fg;
-        ctx->term.ansi_saved_bg = ctx->term.cur_bg;
-        ctx->term.ansi_saved_attr = ctx->term.cur_attr;
+        int s_idx = ctx->term.alt_active ? 1 : 0;
+        ctx->term.saved_x[s_idx] = ctx->term.cursor_x;
+        ctx->term.saved_y[s_idx] = ctx->term.cursor_y;
+        ctx->term.saved_fg[s_idx] = ctx->term.cur_fg;
+        ctx->term.saved_bg[s_idx] = ctx->term.cur_bg;
+        ctx->term.saved_attr[s_idx] = ctx->term.cur_attr;
         break;
     }
     case 't':  // XTWINOPS / Window Manipulation
@@ -3454,11 +3455,12 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
           Restores the previously saved cursor position and attributes.
          */
         if (p[0] != 0) break;  // avoid kitty support command
-        ctx->term.cursor_x = _SFTE_CLAMP(ctx->term.ansi_saved_x, 0, ctx->term.cols - 1);
-        ctx->term.cursor_y = _SFTE_CLAMP(ctx->term.ansi_saved_y, 0, ctx->term.rows - 1);
-        ctx->term.cur_fg = ctx->term.ansi_saved_fg;
-        ctx->term.cur_bg = ctx->term.ansi_saved_bg;
-        ctx->term.cur_attr = ctx->term.ansi_saved_attr;
+        int s_idx = ctx->term.alt_active ? 1 : 0;
+        ctx->term.cursor_x = _SFTE_CLAMP(ctx->term.saved_x[s_idx], 0, ctx->term.cols - 1);
+        ctx->term.cursor_y = _SFTE_CLAMP(ctx->term.saved_y[s_idx], 0, ctx->term.rows - 1);
+        ctx->term.cur_fg = ctx->term.saved_fg[s_idx];
+        ctx->term.cur_bg = ctx->term.saved_bg[s_idx];
+        ctx->term.cur_attr = ctx->term.saved_attr[s_idx];
         break;
     }
     default: _SFTE_WARN(ctx, UNHANDLED_CSI, cmd, cnt); break;
@@ -3654,18 +3656,20 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
         } else if (b == '(' || b == ')')
             ctx->term.vt_state = VT_CHARSET;
         else if (b == '7') {  // save cursor
-            ctx->term.ansi_saved_x = ctx->term.cursor_x;
-            ctx->term.ansi_saved_y = ctx->term.cursor_y;
-            ctx->term.ansi_saved_fg = ctx->term.cur_fg;
-            ctx->term.ansi_saved_bg = ctx->term.cur_bg;
-            ctx->term.ansi_saved_attr = ctx->term.cur_attr;
+            int s_idx = ctx->term.alt_active ? 1 : 0;
+            ctx->term.saved_x[s_idx] = ctx->term.cursor_x;
+            ctx->term.saved_y[s_idx] = ctx->term.cursor_y;
+            ctx->term.saved_fg[s_idx] = ctx->term.cur_fg;
+            ctx->term.saved_bg[s_idx] = ctx->term.cur_bg;
+            ctx->term.saved_attr[s_idx] = ctx->term.cur_attr;
             ctx->term.vt_state = VT_GROUND;
         } else if (b == '8') {  // restore cursor
-            ctx->term.cursor_x = _SFTE_CLAMP(ctx->term.ansi_saved_x, 0, ctx->term.cols - 1);
-            ctx->term.cursor_y = _SFTE_CLAMP(ctx->term.ansi_saved_y, 0, ctx->term.rows - 1);
-            ctx->term.cur_fg = ctx->term.ansi_saved_fg;
-            ctx->term.cur_bg = ctx->term.ansi_saved_bg;
-            ctx->term.cur_attr = ctx->term.ansi_saved_attr;
+            int s_idx = ctx->term.alt_active ? 1 : 0;
+            ctx->term.cursor_x = _SFTE_CLAMP(ctx->term.saved_x[s_idx], 0, ctx->term.cols - 1);
+            ctx->term.cursor_y = _SFTE_CLAMP(ctx->term.saved_y[s_idx], 0, ctx->term.rows - 1);
+            ctx->term.cur_fg = ctx->term.saved_fg[s_idx];
+            ctx->term.cur_bg = ctx->term.saved_bg[s_idx];
+            ctx->term.cur_attr = ctx->term.saved_attr[s_idx];
             ctx->term.vt_state = VT_GROUND;
         } else if (b == '#')
             ctx->term.vt_state = VT_HASH;
@@ -3902,7 +3906,6 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
     }
 
 #if SFTE_FONT_BLEED
-    int total_cells = ctx->term.rows * ctx->term.cols;
     // dirty propagation:
     // if a row has any damage, dirty the whole row
     // and the row above and below it.
