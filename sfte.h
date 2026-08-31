@@ -3612,26 +3612,40 @@ typedef enum {
 } sfte_vt_state;
 
 static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
+    // LF, VT, FF trigger a linefeed
+    if (b == '\n' || b == '\x0B' || b == '\x0C') {
+        if (ctx->term.cursor_y == ctx->term.scroll_bottom)
+            _sfte_grid_scroll(ctx, 1);
+        else if (ctx->term.cursor_y == ctx->term.rows - 1) {
+            int old_t = ctx->term.scroll_top;
+            int old_b = ctx->term.scroll_bottom;
+            ctx->term.scroll_top = 0;
+            ctx->term.scroll_bottom = ctx->term.rows - 1;
+            _sfte_grid_scroll(ctx, 1);
+            ctx->term.scroll_top = old_t;
+            ctx->term.scroll_bottom = old_b;
+        } else if (ctx->term.cursor_y < ctx->term.rows - 1)
+            ctx->term.cursor_y++;
+        return;
+    } else if (b == '\r') {
+        ctx->term.cursor_x = 0;
+        return;
+    } else if (b == '\t') {
+        while (ctx->term.cursor_x < ctx->term.cols - 1)
+            if (ctx->term.tab_stops[ctx->term.cursor_x++]) break;
+        return;
+    } else if (b == '\b' || b == '\x7f') {
+        if (ctx->term.cursor_x > 0) ctx->term.cursor_x--;
+        return;
+    } else if (b == '\a' || b == '\x07') {
+        if (ctx->bell_cb) ctx->bell_cb(ctx->user_data);
+        return;
+    }
+
     switch (ctx->term.vt_state) {
     case VT_GROUND:
-        if (b == '\033' || b == '\x1b') {
+        if (b == '\033' || b == '\x1b')
             ctx->term.vt_state = VT_ESCAPE;
-        } else if (b == '\a' || b == '\x07') {
-            if (ctx->bell_cb) ctx->bell_cb(ctx->user_data);
-        } else if (b == '\n') {
-            if (ctx->term.cursor_y == ctx->term.scroll_bottom)
-                _sfte_grid_scroll(ctx, 1);  // at bot margin, scroll text up
-            else if (ctx->term.cursor_y < ctx->term.rows - 1)
-                ctx->term.cursor_y++;  // not at bot, move cursor down
-        } else if (b == '\r')
-            ctx->term.cursor_x = 0;
-        else if (b == '\t') {
-            while (ctx->term.cursor_x < ctx->term.cols - 1) {
-                ctx->term.cursor_x++;
-                if (ctx->term.tab_stops[ctx->term.cursor_x]) break;
-            }
-        } else if ((b == '\b' || b == '\x7f') && ctx->term.cursor_x > 0)
-            ctx->term.cursor_x--;
         else if (b >= 0x20)
             if (_sfte_utf8_decode(ctx, b)) _sfte_utf8_insert_rune(ctx, ctx->term.utf8_rune);
         break;
