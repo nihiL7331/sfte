@@ -251,6 +251,10 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #define SFTE_MOUSE 1
 #endif  // SFTE_MOUSE
 
+#ifndef SFTE_SIXEL
+#define SFTE_SIXEL 1
+#endif  // SFTE_SIXEL
+
 // NOTE: SFTE_SELECTION implicitly enables SFTE_MOUSE
 #ifndef SFTE_SELECTION
 #define SFTE_SELECTION 1
@@ -527,12 +531,12 @@ typedef struct {
     uint8_t auto_wrap;
     uint8_t origin_mode;
     uint8_t *tab_stops;
-    // ansi save state
-    int ansi_saved_x;
-    int ansi_saved_y;
-    uint32_t ansi_saved_fg;
-    uint32_t ansi_saved_bg;
-    uint32_t ansi_saved_attr;
+    // save state (0=main, 1=alt)
+    int saved_x[2];
+    int saved_y[2];
+    uint32_t saved_fg[2];
+    uint32_t saved_bg[2];
+    uint32_t saved_attr[2];
     // dirty state
     int dirty_saved_x;
     int dirty_saved_y;
@@ -645,12 +649,42 @@ typedef struct {
 #endif  // SFTE_FONT_BOLD_ITALIC
 } sfte_font;
 
+#if SFTE_SIXEL
+typedef enum {
+    SIXEL_GROUND,
+    SIXEL_REPEAT,       // !
+    SIXEL_COLOR_INTRO,  // #
+    SIXEL_COLOR_PARAM   // col definition
+} sfte_sixel_state_enum;
+
+typedef struct {
+    uint8_t active;
+    sfte_sixel_state_enum state;
+    int x, y;     // in pxs
+    int start_x;  // tracks init cursor indent
+    uint8_t col_idx;
+    uint32_t palette[256];
+    int repeat_cnt;
+
+    // color def
+    int params[5];
+    uint8_t param_idx;
+} sfte_sixel_state;
+#endif  // SFTE_SIXEL
+
 struct sfte_ctx {
     sfte_term term;
     sfte_font font;
 #ifndef SFTE_NO_LOGGING
     sfte_logger logger;
 #endif  // !SFTE_NO_LOGGING
+#if SFTE_SIXEL
+    sfte_sixel_state sixel;
+    // NOTE: definitions below will go in #if SFTE_SIXEL && SFTE_KITTY when kitty gets implemented
+    uint32_t *img_layer;
+    int px_wid;
+    int px_hei;
+#endif  // SFTE_SIXEL
 
     int width;
     int height;
@@ -763,6 +797,105 @@ static void _sfte_log(sfte_ctx *ctx, _sfte_log_item_t log_item, uint32_t log_lev
 
 #endif  // !SFTE_NO_LOGGING
 
+// =================================================================================================
+// >>sixel
+// =================================================================================================
+#if SFTE_SIXEL
+static void _sfte_sixel_resize_img_layer(sfte_ctx *ctx) {
+    int new_pw = ctx->term.cols * ctx->font.cell_width;
+    int new_ph = ctx->term.rows * ctx->font.cell_height;
+
+    if (ctx->px_wid == new_pw && ctx->px_hei == new_ph) return;
+
+    ctx->px_wid = new_pw;
+    ctx->px_hei = new_ph;
+
+    if (ctx->img_layer) SFTE_FREE(ctx->img_layer);
+    ctx->img_layer = (uint32_t *)SFTE_MALLOC(new_pw * new_ph * sizeof(uint32_t));
+    memset(ctx->img_layer, 0, new_pw * new_ph * sizeof(uint32_t));
+}
+
+static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b) {
+    switch (ctx->sixel.state) {
+    case SIXEL_GROUND:
+        if (b >= '?' && b <= '~') {
+            int pattern = b - '?';  // ASCII 63-126 to 0-63
+            int repeats = ctx->sixel.repeat_cnt > 0 ? ctx->sixel.repeat_cnt : 1;
+            uint32_t col = ctx->sixel.palette[ctx->sixel.col_idx];
+
+            for (int dx = 0; dx < repeats; ++dx) {
+                int px_x = ctx->sixel.x + dx;
+
+                if (px_x >= ctx->px_wid) continue;
+
+                for (int bit = 0; bit < 6; ++bit)
+                    if (pattern & (1 << bit)) {
+                        int px_y = ctx->sixel.y + bit;
+                        if (px_y >= ctx->px_hei) continue;
+
+                        ctx->img_layer[px_y * ctx->px_wid + px_x] = col;
+                    }
+            }
+
+            ctx->sixel.x += repeats;
+            ctx->sixel.repeat_cnt = 0;
+        } else if (b == '$')  // carriage return
+            ctx->sixel.x = ctx->sixel.start_x;
+        else if (b == '-') {  // move down one band
+            ctx->sixel.x = ctx->sixel.start_x;
+            ctx->sixel.y += 6;
+        } else if (b == '!') {  // start repeat
+            ctx->sixel.state = SIXEL_REPEAT;
+            ctx->sixel.repeat_cnt = 0;
+        } else if (b == '#') {  // col def
+            ctx->sixel.state = SIXEL_COLOR_PARAM;
+            ctx->sixel.param_idx = 0;
+            memset(ctx->sixel.params, 0, sizeof(ctx->sixel.params));
+        }
+        break;
+    case SIXEL_REPEAT:
+        if (b >= '0' && b <= '9')
+            ctx->sixel.repeat_cnt = ctx->sixel.repeat_cnt * 10 + (b - '0');
+        else {  // done parsing repeat cnt, process the actual char
+            ctx->sixel.state = SIXEL_GROUND;
+            _sfte_sixel_parse_byte(ctx, b);  // re-eval in ground state
+        }
+        break;
+    case SIXEL_COLOR_INTRO:
+    case SIXEL_COLOR_PARAM:
+        if (b >= '0' && b <= '9')
+            ctx->sixel.params[ctx->sixel.param_idx] = ctx->sixel.params[ctx->sixel.param_idx] * 10 +
+                                                      (b - '0');
+        else if (b == ';') {  // move to next param with cap
+            if (ctx->sixel.param_idx < 4) ctx->sixel.param_idx++;
+        } else {
+            // color seq is terminated by any non-digit/semicolon byte
+            if (ctx->sixel.param_idx == 0 && ctx->sixel.params[0] < 256)  // 1 param - select color
+                ctx->sixel.col_idx = ctx->sixel.params[0];
+            else if (ctx->sixel.param_idx == 4) {  // 5 param - define color
+                int idx = ctx->sixel.params[0];
+                int space = ctx->sixel.params[1];
+
+                if (idx >= 0 && idx < 256) {
+                    if (space == 1) {  // HLS
+
+                    } else if (space == 2) {  // RGB
+                        uint8_t r = (ctx->sixel.params[2] * 255) / 100;
+                        uint8_t g = (ctx->sixel.params[3] * 255) / 100;
+                        uint8_t b = (ctx->sixel.params[4] * 255) / 100;
+
+                        ctx->sixel.palette[idx] = 0xFF000000 | (r << 16) | (g << 8) | b;
+                    }
+                }
+            }
+
+            ctx->sixel.state = SIXEL_GROUND;
+            _sfte_sixel_parse_byte(ctx, b);
+        }
+        break;
+    }
+}
+#endif  // SFTE_SIXEL
 // =================================================================================================
 // >>font
 // =================================================================================================
@@ -956,6 +1089,10 @@ static void _sfte_font_reset_cache(sfte_ctx *ctx) {
     sfte_font_cache *dummy = &ctx->font.regular;
     sfte_glyph *m = _sfte_font_get_glyph(ctx, &dummy, 'M');
     ctx->font.cell_width = m->xadvance;
+
+#if SFTE_SIXEL
+    _sfte_sixel_resize_img_layer(ctx);
+#endif  // SFTE_SIXEL
 }
 
 // =================================================================================================
@@ -966,6 +1103,29 @@ static void _sfte_font_reset_cache(sfte_ctx *ctx) {
 #else
 #define _SFTE_CUR_STYLE(ctx) (SFTE_CURSOR_STYLE)
 #endif  // !SFTE_CURSOR_DYNAMIC
+
+static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, uint8_t src_a) {
+    if (src_a == 0) return dst;                                    // no trail
+    if (src_a == 255) return (0xFF << 24) | (src_col & 0xFFFFFF);  // solid trail
+
+    // unpack dest
+    uint8_t da = (dst >> 24) & 0xFF;
+    uint8_t dr = (dst >> 16) & 0xFF;
+    uint8_t dg = (dst >> 8) & 0xFF;
+    uint8_t db = dst & 0xFF;
+
+    // unpack src
+    uint8_t sr = (src_col >> 16) & 0xFF;
+    uint8_t sg = (src_col >> 8) & 0xFF;
+    uint8_t sb = src_col & 0xFF;
+
+    uint8_t out_r = (sr * src_a + dr * (255 - src_a)) >> 8;
+    uint8_t out_g = (sg * src_a + dg * (255 - src_a)) >> 8;
+    uint8_t out_b = (sb * src_a + db * (255 - src_a)) >> 8;
+    uint8_t out_a = da + ((src_a * (255 - da)) >> 8);
+
+    return (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
+}
 
 static void _sfte_render_bg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, uint32_t bg) {
     int cx = col * ctx->font.cell_width + SFTE_PAD_X;
@@ -2202,6 +2362,21 @@ typedef struct {
 } sfte_reflow_state;
 
 static void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell c, int is_cursor) {
+#if SFTE_WIDE_CHARS
+    // if we're pushing a wide char and we're at last column, wrap early
+    if ((c.attr & ATTR_WIDE) && st->tc == st->new_cols - 1) {
+        sfte_cell space = c;
+        space.rune = ' ';
+        space.fg = 0xFFFFFF;
+        space.bg = SFTE_BG_COLOR;
+        space.attr = 0;
+        space.wrapped = 1;
+        st->temp_rows[st->tr * st->new_cols + st->tc] = space;
+        st->tc = 0;
+        st->tr++;
+    }
+#endif  // SFTE_WIDE_CHARS
+
     if (st->tc == st->new_cols) {
         st->temp_rows[st->tr * st->new_cols + st->new_cols - 1].wrapped = 1;
         st->tc = 0;
@@ -2310,6 +2485,23 @@ static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
     if (lines > 0) {  // scroll up
         if (lines > height) lines = height;
 
+#if SFTE_SIXEL
+        if (ctx->img_layer) {
+            int px_lines = lines * ctx->font.cell_height;
+            int px_top = top * ctx->font.cell_height;
+            int px_hei = height * ctx->font.cell_height;
+            int px_move = px_hei - px_lines;
+
+            if (px_move > 0)
+                memmove(&ctx->img_layer[px_top * ctx->px_wid],
+                        &ctx->img_layer[(px_top + px_lines) * ctx->px_wid],
+                        px_move * ctx->px_wid * sizeof(uint32_t));
+
+            memset(&ctx->img_layer[(px_top + px_move) * ctx->px_wid], 0,
+                   px_lines * ctx->px_wid * sizeof(uint32_t));
+        }
+#endif  // SFTE_SIXEL
+
 #if SFTE_SCROLLBACK_CAP
         if (top == 0
 #if SFTE_ALT_SCREEN
@@ -2339,6 +2531,23 @@ static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
         lines = -lines;
         if (lines > height) lines = height;
 
+#if SFTE_SIXEL
+        if (ctx->img_layer) {
+            int px_lines = lines * ctx->font.cell_height;
+            int px_top = top * ctx->font.cell_height;
+            int px_hei = height * ctx->font.cell_height;
+            int px_move = px_hei - px_lines;
+
+            if (px_move > 0)
+                memmove(&ctx->img_layer[(px_top + px_lines) * ctx->px_wid],
+                        &ctx->img_layer[px_top * ctx->px_wid],
+                        px_move * ctx->px_wid * sizeof(uint32_t));
+
+            memset(&ctx->img_layer[px_top * ctx->px_wid], 0,
+                   px_lines * ctx->px_wid * sizeof(uint32_t));
+        }
+#endif  // SFTE_SIXEL
+
         int move_cnt = height - lines;
         if (move_cnt > 0)
             memmove(&ctx->term.cells[(top + lines) * cols], &ctx->term.cells[top * cols],
@@ -2358,9 +2567,12 @@ static inline void _sfte_grid_check_wrap(sfte_ctx *ctx) {
             ctx->term.cells[_SFTE_IDX(ctx, ctx->term.cols - 1, ctx->term.cursor_y)].wrapped = 1;
 #endif  // SFTE_REFLOW
             ctx->term.cursor_x = 0;
-            if (ctx->term.cursor_y == ctx->term.scroll_bottom)
+            if (ctx->term.cursor_y == ctx->term.scroll_bottom) {
+                uint32_t saved_bg = ctx->term.cur_bg;
+                ctx->term.cur_bg = SFTE_BG_COLOR;
                 _sfte_grid_scroll(ctx, 1);
-            else if (ctx->term.cursor_y < ctx->term.rows - 1)
+                ctx->term.cur_bg = saved_bg;
+            } else if (ctx->term.cursor_y < ctx->term.rows - 1)
                 ctx->term.cursor_y++;
         } else
             ctx->term.cursor_x = ctx->term.cols - 1;
@@ -2373,8 +2585,8 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
     sfte_cell *main_old = ctx->term.alt_active ? ctx->term.alt_cells : ctx->term.cells;
     sfte_cell *alt_old = ctx->term.alt_active ? ctx->term.cells : NULL;
 
-    int target_cx = ctx->term.alt_active ? ctx->term.ansi_saved_x : ctx->term.cursor_x;
-    int target_cy = ctx->term.alt_active ? ctx->term.ansi_saved_y : ctx->term.cursor_y;
+    int target_cx = ctx->term.alt_active ? ctx->term.saved_x[0] : ctx->term.cursor_x;
+    int target_cy = ctx->term.alt_active ? ctx->term.saved_y[0] : ctx->term.cursor_y;
 #else
     sfte_cell *main_old = ctx->term.cells;
     sfte_cell *alt_old = NULL;
@@ -2414,6 +2626,8 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
     int screen_top = st.new_cy - target_cy;
     if (screen_top < 0) screen_top = 0;
 
+    if (st.new_cy >= screen_top + new_rows) screen_top = st.new_cy - new_rows + 1;
+
     if (screen_top + new_rows > total_lines) {
         screen_top = total_lines - new_rows;
         if (screen_top < 0) screen_top = 0;
@@ -2441,8 +2655,8 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
 // anchor cursors
 #if SFTE_ALT_SCREEN
     if (ctx->term.alt_active) {
-        ctx->term.ansi_saved_x = st.new_cx;
-        ctx->term.ansi_saved_y = _SFTE_CLAMP(st.new_cy - screen_top, 0, new_rows - 1);
+        ctx->term.saved_x[0] = st.new_cx;
+        ctx->term.saved_y[0] = _SFTE_CLAMP(st.new_cy - screen_top, 0, new_rows - 1);
     } else {
 #endif  // SFTE_ALT_SCREEN
         ctx->term.cursor_x = st.new_cx;
@@ -2929,60 +3143,62 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
          */
         if (!ctx->term.vt_dec_priv) break;
 
-        if (p[0] == 25) {
-            ctx->term.hide_cursor = 0;
-            ctx->term.cells[_SFTE_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
-        } else if (p[0] == 2004)
-            ctx->term.bracketed_paste = 1;
-        else if (p[0] == 7)
-            ctx->term.auto_wrap = 1;
-        else if (p[0] == 6) {
-            ctx->term.origin_mode = 1;
-            ctx->term.cursor_x = 0;
-            ctx->term.cursor_y = ctx->term.scroll_top;
-        } else if (p[0] == 1047 || p[0] == 1048 || p[0] == 1049) {
-            // 1048 / 1049 save cursor
-            if (p[0] == 1048 || p[0] == 1049) {
-                ctx->term.ansi_saved_x = ctx->term.cursor_x;
-                ctx->term.ansi_saved_y = ctx->term.cursor_y;
-                ctx->term.ansi_saved_fg = ctx->term.cur_fg;
-                ctx->term.ansi_saved_bg = ctx->term.cur_bg;
-                ctx->term.ansi_saved_attr = ctx->term.cur_attr;
-            }
+        for (int i = 0; i < cnt; ++i) {
+            if (p[i] == 25) {
+                ctx->term.hide_cursor = 0;
+                ctx->term.cells[_SFTE_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
+            } else if (p[i] == 2004)
+                ctx->term.bracketed_paste = 1;
+            else if (p[i] == 7)
+                ctx->term.auto_wrap = 1;
+            else if (p[i] == 6) {
+                ctx->term.origin_mode = 1;
+                ctx->term.cursor_x = 0;
+                ctx->term.cursor_y = ctx->term.scroll_top;
+            } else if (p[i] == 1047 || p[i] == 1048 || p[i] == 1049) {
+                // 1048 / 1049 save cursor
+                if (p[i] == 1048 || p[i] == 1049) {
+                    int s_idx = ctx->term.alt_active ? 1 : 0;
+                    ctx->term.saved_x[s_idx] = ctx->term.cursor_x;
+                    ctx->term.saved_y[s_idx] = ctx->term.cursor_y;
+                    ctx->term.saved_fg[s_idx] = ctx->term.cur_fg;
+                    ctx->term.saved_bg[s_idx] = ctx->term.cur_bg;
+                    ctx->term.saved_attr[s_idx] = ctx->term.cur_attr;
+                }
 
 #if SFTE_ALT_SCREEN
-            // 1047 / 1049 switch to alt screen
-            if ((p[0] == 1047 || p[0] == 1049) && !ctx->term.alt_active) {
-                ctx->term.alt_active = 1;
+                // 1047 / 1049 switch to alt screen
+                if ((p[i] == 1047 || p[i] == 1049) && !ctx->term.alt_active) {
+                    ctx->term.alt_active = 1;
 #if SFTE_CURSOR_TRAIL
-                ctx->term.last_move_ms = 0;
+                    ctx->term.last_move_ms = 0;
 #endif  // SFTE_CURSOR_TRAIL
 
-                if (!ctx->term.alt_cells)
-                    ctx->term.alt_cells = (sfte_cell *)SFTE_CALLOC(ctx->term.cols * ctx->term.rows,
-                                                                   sizeof(sfte_cell));
+                    if (!ctx->term.alt_cells)
+                        ctx->term.alt_cells = (sfte_cell *)SFTE_CALLOC(
+                            ctx->term.cols * ctx->term.rows, sizeof(sfte_cell));
 
-                sfte_cell *tmp = ctx->term.cells;
-                ctx->term.cells = ctx->term.alt_cells;
-                ctx->term.alt_cells = tmp;
-            }
+                    sfte_cell *tmp = ctx->term.cells;
+                    ctx->term.cells = ctx->term.alt_cells;
+                    ctx->term.alt_cells = tmp;
+                }
 #endif  // SFTE_ALT_SCREEN
 
-            if (p[0] == 1049) {
-                _sfte_grid_clear_cells(ctx, 0, ctx->term.cols * ctx->term.rows);
-                ctx->term.cursor_x = 0;
-                ctx->term.cursor_y = 0;
-            } else if (p[0] == 1047) {
-                _sfte_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
+                if (p[i] == 1049) {
+                    _sfte_grid_clear_cells(ctx, 0, ctx->term.cols * ctx->term.rows);
+                    ctx->term.cursor_x = 0;
+                    ctx->term.cursor_y = 0;
+                } else if (p[i] == 1047) {
+                    _sfte_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
+                }
             }
-        }
 #if SFTE_MOUSE
-        else if (p[0] == 1000 || p[0] == 1002 || p[0] == 1003)
-            ctx->term.mouse_mode = p[0];
-        else if (p[0] == 1006)
-            ctx->term.mouse_ext = 1006;
+            else if (p[i] == 1000 || p[i] == 1002 || p[i] == 1003)
+                ctx->term.mouse_mode = p[i];
+            else if (p[i] == 1006)
+                ctx->term.mouse_ext = 1006;
 #endif  // SFTE_MOUSE
-
+        }
         break;
     }
     case 'l':  // RM / Reset Mode
@@ -2993,47 +3209,78 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
          */
         if (!ctx->term.vt_dec_priv) break;
 
-        if (p[0] == 25) {
-            ctx->term.hide_cursor = 1;
-            ctx->term.cells[_SFTE_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
-        } else if (p[0] == 2004)
-            ctx->term.bracketed_paste = 0;
-        else if (p[0] == 7)
-            ctx->term.auto_wrap = 0;
-        else if (p[0] == 6) {
-            ctx->term.origin_mode = 0;
-            ctx->term.cursor_x = 0;
-            ctx->term.cursor_y = 0;
-        } else if (p[0] == 1047 || p[0] == 1048 || p[0] == 1049) {
+        for (int i = 0; i < cnt; ++i) {
+            if (p[i] == 25) {
+                ctx->term.hide_cursor = 1;
+                ctx->term.cells[_SFTE_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
+            } else if (p[i] == 2004)
+                ctx->term.bracketed_paste = 0;
+            else if (p[i] == 7)
+                ctx->term.auto_wrap = 0;
+            else if (p[i] == 6) {
+                ctx->term.origin_mode = 0;
+                ctx->term.cursor_x = 0;
+                ctx->term.cursor_y = 0;
+            } else if (p[i] == 1047 || p[i] == 1048 || p[i] == 1049) {
 #if SFTE_ALT_SCREEN
-            if ((p[0] == 1047 || p[0] == 1049) && ctx->term.alt_active) {
-                ctx->term.alt_active = 0;
+                if ((p[i] == 1047 || p[i] == 1049) && ctx->term.alt_active) {
+                    ctx->term.alt_active = 0;
 
-                if (ctx->term.alt_cells) {
-                    sfte_cell *tmp = ctx->term.cells;
-                    ctx->term.cells = ctx->term.alt_cells;
-                    ctx->term.alt_cells = tmp;
-                    _sfte_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
+                    if (ctx->term.alt_cells) {
+                        sfte_cell *tmp = ctx->term.cells;
+                        ctx->term.cells = ctx->term.alt_cells;
+                        ctx->term.alt_cells = tmp;
+                        _sfte_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
+                    }
                 }
-            }
 #endif  // SFTE_ALT_SCREEN
 
-            if (p[0] == 1048 || p[0] == 1049) {
-                ctx->term.cursor_x = _SFTE_CLAMP(ctx->term.ansi_saved_x, 0, ctx->term.cols - 1);
-                ctx->term.cursor_y = _SFTE_CLAMP(ctx->term.ansi_saved_y, 0, ctx->term.rows - 1);
-                ctx->term.cur_fg = ctx->term.ansi_saved_fg;
-                ctx->term.cur_bg = ctx->term.ansi_saved_bg;
-                ctx->term.cur_attr = ctx->term.ansi_saved_attr;
-                ctx->term.cells[_SFTE_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y)].dirty = 1;
-            }
-        }
-#if SFTE_MOUSE
-        else if (p[0] == 1000 || p[0] == 1002 || p[0] == 1003)
-            ctx->term.mouse_mode = 0;
-        else if (p[0] == 1006)
-            ctx->term.mouse_ext = 0;
-#endif  // SFTE_MOUSE
+                if (p[i] == 1048 || p[i] == 1049) {
+                    int s_idx = ctx->term.alt_active ? 1 : 0;
+                    ctx->term.cursor_x = _SFTE_CLAMP(ctx->term.saved_x[s_idx], 0,
+                                                     ctx->term.cols - 1);
+                    ctx->term.cursor_y = _SFTE_CLAMP(ctx->term.saved_y[s_idx], 0,
+                                                     ctx->term.rows - 1);
 
+                    // force external output below prompt
+                    if (p[i] == 1049) {
+                        ctx->term.cursor_x = 0;
+                        if (ctx->term.cursor_y == ctx->term.scroll_bottom)
+                            _sfte_grid_scroll(ctx, 1);
+                        else if (ctx->term.cursor_y == ctx->term.rows - 1) {
+                            int old_t = ctx->term.scroll_top;
+                            int old_b = ctx->term.scroll_bottom;
+                            ctx->term.scroll_top = 0;
+                            ctx->term.scroll_bottom = ctx->term.rows - 1;
+                            _sfte_grid_scroll(ctx, 1);
+                            ctx->term.scroll_top = old_t;
+                            ctx->term.scroll_bottom = old_b;
+                        } else if (ctx->term.cursor_y < ctx->term.rows - 1)
+                            ctx->term.cursor_y++;
+                    }
+
+                    ctx->term.cur_fg = ctx->term.saved_fg[s_idx];
+                    ctx->term.cur_bg = ctx->term.saved_bg[s_idx];
+                    ctx->term.cur_attr = ctx->term.saved_attr[s_idx];
+                    ctx->term.cells[_SFTE_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y)]
+                        .dirty = 1;
+
+#if SFTE_CURSOR_TRAIL
+                    ctx->term.last_move_ms = 0;
+                    ctx->term.is_trailing = 0;
+                    ctx->term.tail_rx = ctx->term.cursor_x * ctx->font.cell_width;
+                    ctx->term.tail_ry = ctx->term.cursor_y * ctx->font.cell_height;
+                    ctx->term.trail_damage_w = 0;
+#endif  // SFTE_CURSOR_TRAIL
+                }
+            }
+#if SFTE_MOUSE
+            else if (p[i] == 1000 || p[i] == 1002 || p[i] == 1003)
+                ctx->term.mouse_mode = 0;
+            else if (p[i] == 1006)
+                ctx->term.mouse_ext = 0;
+#endif  // SFTE_MOUSE
+        }
         break;
     }
     case 'm':  // SGR / Select Graphic Rendition
@@ -3219,11 +3466,12 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
           Saves the current cursor position and attributes.
          */
         if (p[0] != 0) break;  // avoid kitty support command
-        ctx->term.ansi_saved_x = ctx->term.cursor_x;
-        ctx->term.ansi_saved_y = ctx->term.cursor_y;
-        ctx->term.ansi_saved_fg = ctx->term.cur_fg;
-        ctx->term.ansi_saved_bg = ctx->term.cur_bg;
-        ctx->term.ansi_saved_attr = ctx->term.cur_attr;
+        int s_idx = ctx->term.alt_active ? 1 : 0;
+        ctx->term.saved_x[s_idx] = ctx->term.cursor_x;
+        ctx->term.saved_y[s_idx] = ctx->term.cursor_y;
+        ctx->term.saved_fg[s_idx] = ctx->term.cur_fg;
+        ctx->term.saved_bg[s_idx] = ctx->term.cur_bg;
+        ctx->term.saved_attr[s_idx] = ctx->term.cur_attr;
         break;
     }
     case 't':  // XTWINOPS / Window Manipulation
@@ -3255,11 +3503,12 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
           Restores the previously saved cursor position and attributes.
          */
         if (p[0] != 0) break;  // avoid kitty support command
-        ctx->term.cursor_x = _SFTE_CLAMP(ctx->term.ansi_saved_x, 0, ctx->term.cols - 1);
-        ctx->term.cursor_y = _SFTE_CLAMP(ctx->term.ansi_saved_y, 0, ctx->term.rows - 1);
-        ctx->term.cur_fg = ctx->term.ansi_saved_fg;
-        ctx->term.cur_bg = ctx->term.ansi_saved_bg;
-        ctx->term.cur_attr = ctx->term.ansi_saved_attr;
+        int s_idx = ctx->term.alt_active ? 1 : 0;
+        ctx->term.cursor_x = _SFTE_CLAMP(ctx->term.saved_x[s_idx], 0, ctx->term.cols - 1);
+        ctx->term.cursor_y = _SFTE_CLAMP(ctx->term.saved_y[s_idx], 0, ctx->term.rows - 1);
+        ctx->term.cur_fg = ctx->term.saved_fg[s_idx];
+        ctx->term.cur_bg = ctx->term.saved_bg[s_idx];
+        ctx->term.cur_attr = ctx->term.saved_attr[s_idx];
         break;
     }
     default: _SFTE_WARN(ctx, UNHANDLED_CSI, cmd, cnt); break;
@@ -3393,7 +3642,6 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
         ctx->term.cursor_x++;
     }
 }
-
 // =================================================================================================
 // >>parser
 // =================================================================================================
@@ -3405,30 +3653,47 @@ typedef enum {
     VT_OSC,        // \033]
     VT_CHARSET,    // \033( \033)
     VT_HASH,       // #
-    VT_DCS         // P / _ / ^
+    VT_DCS,        // P / _ / ^
+#if SFTE_SIXEL
+    VT_SIXEL,
+#endif  // SFTE_SIXEL
 } sfte_vt_state;
 
 static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
+    // LF, VT, FF trigger a linefeed
+    if (b == '\n' || b == '\x0B' || b == '\x0C') {
+        if (ctx->term.cursor_y == ctx->term.scroll_bottom)
+            _sfte_grid_scroll(ctx, 1);
+        else if (ctx->term.cursor_y == ctx->term.rows - 1) {
+            int old_t = ctx->term.scroll_top;
+            int old_b = ctx->term.scroll_bottom;
+            ctx->term.scroll_top = 0;
+            ctx->term.scroll_bottom = ctx->term.rows - 1;
+            _sfte_grid_scroll(ctx, 1);
+            ctx->term.scroll_top = old_t;
+            ctx->term.scroll_bottom = old_b;
+        } else if (ctx->term.cursor_y < ctx->term.rows - 1)
+            ctx->term.cursor_y++;
+        return;
+    } else if (b == '\r') {
+        ctx->term.cursor_x = 0;
+        return;
+    } else if (b == '\t') {
+        while (ctx->term.cursor_x < ctx->term.cols - 1)
+            if (ctx->term.tab_stops[ctx->term.cursor_x++]) break;
+        return;
+    } else if (b == '\b' || b == '\x7f') {
+        if (ctx->term.cursor_x > 0) ctx->term.cursor_x--;
+        return;
+    } else if (b == '\a' || b == '\x07') {
+        if (ctx->bell_cb) ctx->bell_cb(ctx->user_data);
+        return;
+    }
+
     switch (ctx->term.vt_state) {
     case VT_GROUND:
-        if (b == '\033' || b == '\x1b') {
+        if (b == '\033' || b == '\x1b')
             ctx->term.vt_state = VT_ESCAPE;
-        } else if (b == '\a' || b == '\x07') {
-            if (ctx->bell_cb) ctx->bell_cb(ctx->user_data);
-        } else if (b == '\n') {
-            if (ctx->term.cursor_y == ctx->term.scroll_bottom)
-                _sfte_grid_scroll(ctx, 1);  // at bot margin, scroll text up
-            else if (ctx->term.cursor_y < ctx->term.rows - 1)
-                ctx->term.cursor_y++;  // not at bot, move cursor down
-        } else if (b == '\r')
-            ctx->term.cursor_x = 0;
-        else if (b == '\t') {
-            while (ctx->term.cursor_x < ctx->term.cols - 1) {
-                ctx->term.cursor_x++;
-                if (ctx->term.tab_stops[ctx->term.cursor_x]) break;
-            }
-        } else if ((b == '\b' || b == '\x7f') && ctx->term.cursor_x > 0)
-            ctx->term.cursor_x--;
         else if (b >= 0x20)
             if (_sfte_utf8_decode(ctx, b)) _sfte_utf8_insert_rune(ctx, ctx->term.utf8_rune);
         break;
@@ -3453,18 +3718,20 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
         } else if (b == '(' || b == ')')
             ctx->term.vt_state = VT_CHARSET;
         else if (b == '7') {  // save cursor
-            ctx->term.ansi_saved_x = ctx->term.cursor_x;
-            ctx->term.ansi_saved_y = ctx->term.cursor_y;
-            ctx->term.ansi_saved_fg = ctx->term.cur_fg;
-            ctx->term.ansi_saved_bg = ctx->term.cur_bg;
-            ctx->term.ansi_saved_attr = ctx->term.cur_attr;
+            int s_idx = ctx->term.alt_active ? 1 : 0;
+            ctx->term.saved_x[s_idx] = ctx->term.cursor_x;
+            ctx->term.saved_y[s_idx] = ctx->term.cursor_y;
+            ctx->term.saved_fg[s_idx] = ctx->term.cur_fg;
+            ctx->term.saved_bg[s_idx] = ctx->term.cur_bg;
+            ctx->term.saved_attr[s_idx] = ctx->term.cur_attr;
             ctx->term.vt_state = VT_GROUND;
         } else if (b == '8') {  // restore cursor
-            ctx->term.cursor_x = _SFTE_CLAMP(ctx->term.ansi_saved_x, 0, ctx->term.cols - 1);
-            ctx->term.cursor_y = _SFTE_CLAMP(ctx->term.ansi_saved_y, 0, ctx->term.rows - 1);
-            ctx->term.cur_fg = ctx->term.ansi_saved_fg;
-            ctx->term.cur_bg = ctx->term.ansi_saved_bg;
-            ctx->term.cur_attr = ctx->term.ansi_saved_attr;
+            int s_idx = ctx->term.alt_active ? 1 : 0;
+            ctx->term.cursor_x = _SFTE_CLAMP(ctx->term.saved_x[s_idx], 0, ctx->term.cols - 1);
+            ctx->term.cursor_y = _SFTE_CLAMP(ctx->term.saved_y[s_idx], 0, ctx->term.rows - 1);
+            ctx->term.cur_fg = ctx->term.saved_fg[s_idx];
+            ctx->term.cur_bg = ctx->term.saved_bg[s_idx];
+            ctx->term.cur_attr = ctx->term.saved_attr[s_idx];
             ctx->term.vt_state = VT_GROUND;
         } else if (b == '#')
             ctx->term.vt_state = VT_HASH;
@@ -3552,9 +3819,43 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
             else if (b == '\x07')
                 ctx->term.vt_state = VT_GROUND;
 
-        } else if (ctx->term.osc_idx < (int)sizeof(ctx->term.osc_payload) - 1)
+        }
+#if SFTE_SIXEL
+        else if (b == 'q') {
+            // detect if this dcs header is strictly sixel params (nums/semicols)
+            int is_sixel = 1;
+            for (int i = 0; i < ctx->term.osc_idx; ++i) {
+                char pb = ctx->term.osc_payload[i];
+                if (pb == ';') continue;
+                if (pb >= '0' && pb <= '9') continue;
+                is_sixel = 0;
+                break;
+            }
+
+            if (is_sixel) {
+                ctx->term.vt_state = VT_SIXEL;
+                ctx->sixel.state = SIXEL_GROUND;
+                ctx->sixel.x = ctx->term.cursor_x * ctx->font.cell_width;
+                ctx->sixel.y = ctx->term.cursor_y * ctx->font.cell_height;
+                ctx->sixel.start_x = ctx->sixel.x;
+                break;  // skip adding q to payload
+            } else if (ctx->term.osc_idx < (int)sizeof(ctx->term.osc_payload) - 1)
+                ctx->term.osc_payload[ctx->term.osc_idx++] = b;
+        }
+#endif  // SFTE_SIXEL
+        else if (ctx->term.osc_idx < (int)sizeof(ctx->term.osc_payload) - 1)
             ctx->term.osc_payload[ctx->term.osc_idx++] = b;
         break;
+#if SFTE_SIXEL
+    case VT_SIXEL:
+        if (b == '\x1b')
+            ctx->term.vt_state = VT_ESCAPE;
+        else if (b == '\x07')
+            ctx->term.vt_state = VT_GROUND;
+        else
+            _sfte_sixel_parse_byte(ctx, b);
+        break;
+#endif  // SFTE_SIXEL
     case VT_CSI_ENTRY:
     case VT_CSI_PARAM:
         if (b == '?') {  // private marker
@@ -3568,9 +3869,9 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
 
             ctx->term.vt_params[ctx->term.vt_param_idx] *= 10;
             ctx->term.vt_params[ctx->term.vt_param_idx] += (b - '0');
-        } else if (b == ';' || b == ':')
-            ctx->term.vt_param_idx++;  // move to next param
-        else if (b >= 0x40 && b <= 0x7E) {
+        } else if (b == ';' || b == ':') {
+            if (ctx->term.vt_param_idx < 15) ctx->term.vt_param_idx++;  // move to next param
+        } else if (b >= 0x40 && b <= 0x7E) {
             _sfte_csi_dispatch(ctx, b);
             ctx->term.vt_state = VT_GROUND;
         }
@@ -3616,20 +3917,20 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
 
 #if SFTE_CURSOR_TRAIL
     if (ctx->term.trail_damage_w > 0) {
-        uint32_t bg_col = (SFTE_BG_COLOR & 0x00FFFFFF) | (SFTE_BG_OPACITY << 24);
-        int tx_start = ctx->term.trail_damage_x;
-        int ty_start = ctx->term.trail_damage_y;
-        int tx_end = tx_start + ctx->term.trail_damage_w;
-        int ty_end = ty_start + ctx->term.trail_damage_h;
-
-        for (int y = ty_start; y < ty_end; ++y)
-            for (int x = tx_start; x < tx_end; ++x)
-                if (x >= 0 && x < w && y >= 0 && y < h) px_buf[y * w + x] = bg_col;
-
-        int start_c = tx_start < SFTE_PAD_X ? 0 : (tx_start - SFTE_PAD_X) / ctx->font.cell_width;
-        int start_r = ty_start < SFTE_PAD_Y ? 0 : (ty_start - SFTE_PAD_Y) / ctx->font.cell_height;
-        int end_c = tx_end < SFTE_PAD_X ? 0 : (tx_end - SFTE_PAD_X) / ctx->font.cell_width;
-        int end_r = ty_end < SFTE_PAD_Y ? 0 : (ty_end - SFTE_PAD_Y) / ctx->font.cell_height;
+        int start_c = ctx->term.trail_damage_x < SFTE_PAD_X
+                          ? 0
+                          : (ctx->term.trail_damage_x - SFTE_PAD_X) / ctx->font.cell_width;
+        int start_r = ctx->term.trail_damage_y < SFTE_PAD_Y
+                          ? 0
+                          : (ctx->term.trail_damage_y - SFTE_PAD_Y) / ctx->font.cell_height;
+        int end_c = (ctx->term.trail_damage_x + ctx->term.trail_damage_w) < SFTE_PAD_X
+                        ? 0
+                        : (ctx->term.trail_damage_x + ctx->term.trail_damage_w - SFTE_PAD_X) /
+                              ctx->font.cell_width;
+        int end_r = (ctx->term.trail_damage_y + ctx->term.trail_damage_h) < SFTE_PAD_Y
+                        ? 0
+                        : (ctx->term.trail_damage_y + ctx->term.trail_damage_h - SFTE_PAD_Y) /
+                              ctx->font.cell_height;
 
         start_c = _SFTE_CLAMP(start_c, 0, ctx->term.cols - 1);
         start_r = _SFTE_CLAMP(start_r, 0, ctx->term.rows - 1);
@@ -3667,41 +3968,26 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
     }
 
 #if SFTE_FONT_BLEED
-    int total_cells = ctx->term.rows * ctx->term.cols;
     // dirty propagation:
-    // - dirties other half of wide char
-    // - dirties neighbors
-    for (int i = 0; i < total_cells; ++i) {
-        // only trigger on original dirty cells (=1)
-        // never on expanded bleeds (>1)
-        if (ctx->term.cells[i].dirty != 1) continue;
+    // if a row has any damage, dirty the whole row
+    // and the row above and below it.
+    for (int r = 0; r < ctx->term.rows; ++r) {
+        int row_has_damage = 0;
+        for (int c = 0; c < ctx->term.cols; ++c)
+            if (ctx->term.cells[_SFTE_IDX(ctx, c, r)].dirty) {
+                row_has_damage = 1;
+                break;
+            }
 
-        int c = i % ctx->term.cols;
-        int r = i / ctx->term.cols;
+        if (row_has_damage) {
+            int r_min = r > 0 ? r - 1 : 0;
+            int r_max = r < ctx->term.rows - 1 ? r + 1 : ctx->term.rows - 1;
 
-#if SFTE_WIDE_CHARS
-        // lock wide halves together
-        if ((ctx->term.cells[i].attr & ATTR_WIDE) && c < ctx->term.cols - 1)
-            ctx->term.cells[i + 1].dirty = 1;
-        else if ((ctx->term.cells[i].attr & ATTR_DUMMY) && c > 0 &&
-                 ctx->term.cells[i - 1].dirty != 1) {
-            ctx->term.cells[i - 1].dirty = 1;
-
-            // backfill the skipped left/top bleeds for the left half
-            if (c > 1 && !ctx->term.cells[i - 2].dirty) ctx->term.cells[i - 2].dirty = 2;
-            if (r > 0 && !ctx->term.cells[i - 1 - ctx->term.cols].dirty)
-                ctx->term.cells[i - 1 - ctx->term.cols].dirty = 2;
+            for (int y = r_min; y <= r_max; ++y)
+                for (int x = 0; x < ctx->term.cols; ++x)
+                    if (!ctx->term.cells[_SFTE_IDX(ctx, x, y)].dirty)
+                        ctx->term.cells[_SFTE_IDX(ctx, x, y)].dirty = 2;
         }
-#endif  // SFTE_WIDE_CHARS
-
-        // dirty neighbors
-        if (c > 0 && !ctx->term.cells[i - 1].dirty) ctx->term.cells[i - 1].dirty = 2;
-        if (c < ctx->term.cols - 1 && !ctx->term.cells[i + 1].dirty)
-            ctx->term.cells[i + 1].dirty = 2;
-        if (r > 0 && !ctx->term.cells[i - ctx->term.cols].dirty)
-            ctx->term.cells[i - ctx->term.cols].dirty = 2;
-        if (r < ctx->term.rows - 1 && !ctx->term.cells[i + ctx->term.cols].dirty)
-            ctx->term.cells[i + ctx->term.cols].dirty = 2;
     }
 
     // dirty normalization pass
@@ -3813,9 +4099,15 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
             _sfte_render_decorations(ctx, px_buf, c, r, vcell, is_cursor, w, h);
 
             // submit localized damage to compositor
-            DAMAGE_ADD(c * ctx->font.cell_width + SFTE_PAD_X,
-                       r * ctx->font.cell_height + SFTE_PAD_Y, ctx->font.cell_width,
-                       ctx->font.cell_height);
+            int dmg_cy = r * ctx->font.cell_height + SFTE_PAD_Y;
+            int dmg_ch = ctx->font.cell_height;
+
+            if (r == 0) {
+                dmg_cy = 0;
+                dmg_ch += SFTE_PAD_Y;
+            } else if (r == ctx->term.rows - 1)
+                dmg_ch += ctx->height - (dmg_cy + dmg_ch);
+            DAMAGE_ADD(0, dmg_cy, ctx->width, dmg_ch);
             ctx->term.cells[idx].dirty = 0;
         }
     }
@@ -3860,10 +4152,6 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
         int px_min_y = (int)min_y + SFTE_PAD_Y;
         int px_max_y = (int)max_y + SFTE_PAD_Y;
 
-        uint8_t cr = (SFTE_CURSOR_COLOR >> 16) & 0xFF;
-        uint8_t cg = (SFTE_CURSOR_COLOR >> 8) & 0xFF;
-        uint8_t cb = SFTE_CURSOR_COLOR & 0xFF;
-
         float cx0 = tl_rx + trail_w * 0.5f;
         float cy0 = tl_ry + trail_h * 0.5f;
         float cx1 = t_rx + trail_w * 0.5f;
@@ -3900,20 +4188,10 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
                 if (dist_y < 0) dist_y = -dist_y;
 
                 if (dist_x <= trail_w * 0.5f && dist_y <= trail_h * 0.5f) {
-                    int alpha = (int)(128.0f * t);
+                    uint8_t alpha = (uint8_t)(128.0f * t);
                     if (alpha == 0) continue;
-                    int inv_alpha = 255 - alpha;
-
-                    uint32_t bg = px_buf[y * w + x];
-                    uint8_t bg_r = (bg >> 16) & 0xFF;
-                    uint8_t bg_g = (bg >> 8) & 0xFF;
-                    uint8_t bg_b = bg & 0xFF;
-
-                    uint8_t r = (cr * alpha + bg_r * inv_alpha) >> 8;
-                    uint8_t g = (cg * alpha + bg_g * inv_alpha) >> 8;
-                    uint8_t b = (cb * alpha + bg_b * inv_alpha) >> 8;
-
-                    px_buf[y * w + x] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+                    px_buf[y * w + x] = _sfte_render_blend_argb(px_buf[y * w + x],
+                                                                SFTE_CURSOR_TRAIL_COLOR, alpha);
                 }
             }
         }
@@ -3928,6 +4206,26 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
     } else
         ctx->term.trail_damage_w = 0;
 #endif  // SFTE_CURSOR_TRAIL
+
+#if SFTE_SIXEL
+
+    for (int y = 0; y < ctx->px_hei; ++y)
+        for (int x = 0; x < ctx->px_wid; ++x) {
+            uint32_t img_px = ctx->img_layer[y * ctx->px_wid + x];
+            if ((img_px & 0xFF000000) == 0) continue;
+
+            int out_x = x + SFTE_PAD_X;
+            int out_y = y + SFTE_PAD_Y
+#if SFTE_SCROLLBACK_CAP
+                        + ctx->term.sb_offset * ctx->font.cell_height
+#endif  // SFTE_SCROLLBACK_CAP
+                ;
+
+            if (out_y >= ctx->height) continue;
+
+            px_buf[out_y * ctx->width + out_x] = img_px;
+        }
+#endif  // SFTE_SIXEL
 
     if (dmg_x0 < dmg_x1 && dmg_y0 < dmg_y1) {
         dmg_x0 = _SFTE_CLAMP(dmg_x0, 0, w);
@@ -3957,8 +4255,20 @@ void sfte_resize(sfte_ctx *ctx, int w, int h) {
     int new_rows = (h - (2 * SFTE_PAD_Y)) / ctx->font.cell_height;
     if (new_rows < 1) new_rows = 1;
 
-    if (new_cols != ctx->term.cols || new_rows != ctx->term.rows)
+    if (new_cols != ctx->term.cols || new_rows != ctx->term.rows) {
         _sfte_grid_resize(ctx, new_cols, new_rows);
+
+#if SFTE_CURSOR_TRAIL
+        ctx->term.tail_rx = ctx->term.cursor_x * ctx->font.cell_width;
+        ctx->term.tail_ry = ctx->term.cursor_y * ctx->font.cell_height;
+        ctx->term.is_trailing = 0;
+        ctx->term.trail_damage_w = 0;
+#endif  // SFTE_CURSOR_TRAIL
+    }
+
+#if SFTE_SIXEL
+    _sfte_sixel_resize_img_layer(ctx);
+#endif  // SFTE_SIXEL
 }
 
 void sfte_get_ideal_size(sfte_ctx *ctx, int cols, int rows, int *out_w, int *out_h) {
@@ -4018,6 +4328,12 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
 #ifndef SFTE_NO_LOGGING
     ctx->logger.func = SFTE_LOGGER_FUNC;
 #endif  // !SFTE_NO_LOGGING
+
+#if SFTE_SIXEL
+    for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_ansi_palette); ++i)
+        ctx->sixel.palette[i] = _sfte_ansi_palette[i];
+#endif  // SFTE_SIXEL
+
     ctx->term.cols = 80;
     ctx->term.rows = 24;
     ctx->term.auto_wrap = 1;
