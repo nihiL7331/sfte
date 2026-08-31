@@ -3120,60 +3120,62 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
          */
         if (!ctx->term.vt_dec_priv) break;
 
-        if (p[0] == 25) {
-            ctx->term.hide_cursor = 0;
-            ctx->term.cells[_SFTE_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
-        } else if (p[0] == 2004)
-            ctx->term.bracketed_paste = 1;
-        else if (p[0] == 7)
-            ctx->term.auto_wrap = 1;
-        else if (p[0] == 6) {
-            ctx->term.origin_mode = 1;
-            ctx->term.cursor_x = 0;
-            ctx->term.cursor_y = ctx->term.scroll_top;
-        } else if (p[0] == 1047 || p[0] == 1048 || p[0] == 1049) {
-            // 1048 / 1049 save cursor
-            if (p[0] == 1048 || p[0] == 1049) {
-                ctx->term.ansi_saved_x = ctx->term.cursor_x;
-                ctx->term.ansi_saved_y = ctx->term.cursor_y;
-                ctx->term.ansi_saved_fg = ctx->term.cur_fg;
-                ctx->term.ansi_saved_bg = ctx->term.cur_bg;
-                ctx->term.ansi_saved_attr = ctx->term.cur_attr;
-            }
+        for (int i = 0; i < cnt; ++i) {
+            if (p[i] == 25) {
+                ctx->term.hide_cursor = 0;
+                ctx->term.cells[_SFTE_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
+            } else if (p[i] == 2004)
+                ctx->term.bracketed_paste = 1;
+            else if (p[i] == 7)
+                ctx->term.auto_wrap = 1;
+            else if (p[i] == 6) {
+                ctx->term.origin_mode = 1;
+                ctx->term.cursor_x = 0;
+                ctx->term.cursor_y = ctx->term.scroll_top;
+            } else if (p[i] == 1047 || p[i] == 1048 || p[i] == 1049) {
+                // 1048 / 1049 save cursor
+                if (p[i] == 1048 || p[i] == 1049) {
+                    int s_idx = ctx->term.alt_active ? 1 : 0;
+                    ctx->term.saved_x[s_idx] = ctx->term.cursor_x;
+                    ctx->term.saved_y[s_idx] = ctx->term.cursor_y;
+                    ctx->term.saved_fg[s_idx] = ctx->term.cur_fg;
+                    ctx->term.saved_bg[s_idx] = ctx->term.cur_bg;
+                    ctx->term.saved_attr[s_idx] = ctx->term.cur_attr;
+                }
 
 #if SFTE_ALT_SCREEN
-            // 1047 / 1049 switch to alt screen
-            if ((p[0] == 1047 || p[0] == 1049) && !ctx->term.alt_active) {
-                ctx->term.alt_active = 1;
+                // 1047 / 1049 switch to alt screen
+                if ((p[i] == 1047 || p[i] == 1049) && !ctx->term.alt_active) {
+                    ctx->term.alt_active = 1;
 #if SFTE_CURSOR_TRAIL
-                ctx->term.last_move_ms = 0;
+                    ctx->term.last_move_ms = 0;
 #endif  // SFTE_CURSOR_TRAIL
 
-                if (!ctx->term.alt_cells)
-                    ctx->term.alt_cells = (sfte_cell *)SFTE_CALLOC(ctx->term.cols * ctx->term.rows,
-                                                                   sizeof(sfte_cell));
+                    if (!ctx->term.alt_cells)
+                        ctx->term.alt_cells = (sfte_cell *)SFTE_CALLOC(
+                            ctx->term.cols * ctx->term.rows, sizeof(sfte_cell));
 
-                sfte_cell *tmp = ctx->term.cells;
-                ctx->term.cells = ctx->term.alt_cells;
-                ctx->term.alt_cells = tmp;
-            }
+                    sfte_cell *tmp = ctx->term.cells;
+                    ctx->term.cells = ctx->term.alt_cells;
+                    ctx->term.alt_cells = tmp;
+                }
 #endif  // SFTE_ALT_SCREEN
 
-            if (p[0] == 1049) {
-                _sfte_grid_clear_cells(ctx, 0, ctx->term.cols * ctx->term.rows);
-                ctx->term.cursor_x = 0;
-                ctx->term.cursor_y = 0;
-            } else if (p[0] == 1047) {
-                _sfte_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
+                if (p[i] == 1049) {
+                    _sfte_grid_clear_cells(ctx, 0, ctx->term.cols * ctx->term.rows);
+                    ctx->term.cursor_x = 0;
+                    ctx->term.cursor_y = 0;
+                } else if (p[i] == 1047) {
+                    _sfte_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
+                }
             }
-        }
 #if SFTE_MOUSE
-        else if (p[0] == 1000 || p[0] == 1002 || p[0] == 1003)
-            ctx->term.mouse_mode = p[0];
-        else if (p[0] == 1006)
-            ctx->term.mouse_ext = 1006;
+            else if (p[i] == 1000 || p[i] == 1002 || p[i] == 1003)
+                ctx->term.mouse_mode = p[i];
+            else if (p[i] == 1006)
+                ctx->term.mouse_ext = 1006;
 #endif  // SFTE_MOUSE
-
+        }
         break;
     }
     case 'l':  // RM / Reset Mode
@@ -3184,55 +3186,78 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
          */
         if (!ctx->term.vt_dec_priv) break;
 
-        if (p[0] == 25) {
-            ctx->term.hide_cursor = 1;
-            ctx->term.cells[_SFTE_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
-        } else if (p[0] == 2004)
-            ctx->term.bracketed_paste = 0;
-        else if (p[0] == 7)
-            ctx->term.auto_wrap = 0;
-        else if (p[0] == 6) {
-            ctx->term.origin_mode = 0;
-            ctx->term.cursor_x = 0;
-            ctx->term.cursor_y = 0;
-        } else if (p[0] == 1047 || p[0] == 1048 || p[0] == 1049) {
+        for (int i = 0; i < cnt; ++i) {
+            if (p[i] == 25) {
+                ctx->term.hide_cursor = 1;
+                ctx->term.cells[_SFTE_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
+            } else if (p[i] == 2004)
+                ctx->term.bracketed_paste = 0;
+            else if (p[i] == 7)
+                ctx->term.auto_wrap = 0;
+            else if (p[i] == 6) {
+                ctx->term.origin_mode = 0;
+                ctx->term.cursor_x = 0;
+                ctx->term.cursor_y = 0;
+            } else if (p[i] == 1047 || p[i] == 1048 || p[i] == 1049) {
 #if SFTE_ALT_SCREEN
-            if ((p[0] == 1047 || p[0] == 1049) && ctx->term.alt_active) {
-                ctx->term.alt_active = 0;
+                if ((p[i] == 1047 || p[i] == 1049) && ctx->term.alt_active) {
+                    ctx->term.alt_active = 0;
 
-                if (ctx->term.alt_cells) {
-                    sfte_cell *tmp = ctx->term.cells;
-                    ctx->term.cells = ctx->term.alt_cells;
-                    ctx->term.alt_cells = tmp;
-                    _sfte_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
+                    if (ctx->term.alt_cells) {
+                        sfte_cell *tmp = ctx->term.cells;
+                        ctx->term.cells = ctx->term.alt_cells;
+                        ctx->term.alt_cells = tmp;
+                        _sfte_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
+                    }
                 }
-            }
 #endif  // SFTE_ALT_SCREEN
 
-            if (p[0] == 1048 || p[0] == 1049) {
-                ctx->term.cursor_x = _SFTE_CLAMP(ctx->term.ansi_saved_x, 0, ctx->term.cols - 1);
-                ctx->term.cursor_y = _SFTE_CLAMP(ctx->term.ansi_saved_y, 0, ctx->term.rows - 1);
-                ctx->term.cur_fg = ctx->term.ansi_saved_fg;
-                ctx->term.cur_bg = ctx->term.ansi_saved_bg;
-                ctx->term.cur_attr = ctx->term.ansi_saved_attr;
-                ctx->term.cells[_SFTE_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y)].dirty = 1;
+                if (p[i] == 1048 || p[i] == 1049) {
+                    int s_idx = ctx->term.alt_active ? 1 : 0;
+                    ctx->term.cursor_x = _SFTE_CLAMP(ctx->term.saved_x[s_idx], 0,
+                                                     ctx->term.cols - 1);
+                    ctx->term.cursor_y = _SFTE_CLAMP(ctx->term.saved_y[s_idx], 0,
+                                                     ctx->term.rows - 1);
+
+                    // force external output below prompt
+                    if (p[i] == 1049) {
+                        ctx->term.cursor_x = 0;
+                        if (ctx->term.cursor_y == ctx->term.scroll_bottom)
+                            _sfte_grid_scroll(ctx, 1);
+                        else if (ctx->term.cursor_y == ctx->term.rows - 1) {
+                            int old_t = ctx->term.scroll_top;
+                            int old_b = ctx->term.scroll_bottom;
+                            ctx->term.scroll_top = 0;
+                            ctx->term.scroll_bottom = ctx->term.rows - 1;
+                            _sfte_grid_scroll(ctx, 1);
+                            ctx->term.scroll_top = old_t;
+                            ctx->term.scroll_bottom = old_b;
+                        } else if (ctx->term.cursor_y < ctx->term.rows - 1)
+                            ctx->term.cursor_y++;
+                    }
+
+                    ctx->term.cur_fg = ctx->term.saved_fg[s_idx];
+                    ctx->term.cur_bg = ctx->term.saved_bg[s_idx];
+                    ctx->term.cur_attr = ctx->term.saved_attr[s_idx];
+                    ctx->term.cells[_SFTE_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y)]
+                        .dirty = 1;
 
 #if SFTE_CURSOR_TRAIL
-                ctx->term.last_move_ms = 0;
-                ctx->term.is_trailing = 0;
-                ctx->term.tail_rx = ctx->term.cursor_x * ctx->font.cell_width;
-                ctx->term.tail_ry = ctx->term.cursor_y * ctx->font.cell_height;
-                ctx->term.trail_damage_w = 0;
+                    ctx->term.last_move_ms = 0;
+                    ctx->term.is_trailing = 0;
+                    ctx->term.tail_rx = ctx->term.cursor_x * ctx->font.cell_width;
+                    ctx->term.tail_ry = ctx->term.cursor_y * ctx->font.cell_height;
+                    ctx->term.trail_damage_w = 0;
 #endif  // SFTE_CURSOR_TRAIL
+                }
             }
-        }
 #if SFTE_MOUSE
-        else if (p[0] == 1000 || p[0] == 1002 || p[0] == 1003)
-            ctx->term.mouse_mode = 0;
-        else if (p[0] == 1006)
-            ctx->term.mouse_ext = 0;
+            else if (p[i] == 1000 || p[i] == 1002 || p[i] == 1003)
+                ctx->term.mouse_mode = 0;
+            else if (p[i] == 1006)
+                ctx->term.mouse_ext = 0;
 #endif  // SFTE_MOUSE
-
+        }
         break;
     }
     case 'm':  // SGR / Select Graphic Rendition
