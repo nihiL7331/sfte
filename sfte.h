@@ -1104,6 +1104,29 @@ static void _sfte_font_reset_cache(sfte_ctx *ctx) {
 #define _SFTE_CUR_STYLE(ctx) (SFTE_CURSOR_STYLE)
 #endif  // !SFTE_CURSOR_DYNAMIC
 
+static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, uint8_t src_a) {
+    if (src_a == 0) return dst;                                    // no trail
+    if (src_a == 255) return (0xFF << 24) | (src_col & 0xFFFFFF);  // solid trail
+
+    // unpack dest
+    uint8_t da = (dst >> 24) & 0xFF;
+    uint8_t dr = (dst >> 16) & 0xFF;
+    uint8_t dg = (dst >> 8) & 0xFF;
+    uint8_t db = dst & 0xFF;
+
+    // unpack src
+    uint8_t sr = (src_col >> 16) & 0xFF;
+    uint8_t sg = (src_col >> 8) & 0xFF;
+    uint8_t sb = src_col & 0xFF;
+
+    uint8_t out_r = (sr * src_a + dr * (255 - src_a)) >> 8;
+    uint8_t out_g = (sg * src_a + dg * (255 - src_a)) >> 8;
+    uint8_t out_b = (sb * src_a + db * (255 - src_a)) >> 8;
+    uint8_t out_a = da + ((src_a * (255 - da)) >> 8);
+
+    return (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
+}
+
 static void _sfte_render_bg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, uint32_t bg) {
     int cx = col * ctx->font.cell_width + SFTE_PAD_X;
     int cy = row * ctx->font.cell_height + SFTE_PAD_Y;
@@ -4129,10 +4152,6 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
         int px_min_y = (int)min_y + SFTE_PAD_Y;
         int px_max_y = (int)max_y + SFTE_PAD_Y;
 
-        uint8_t cr = (SFTE_CURSOR_COLOR >> 16) & 0xFF;
-        uint8_t cg = (SFTE_CURSOR_COLOR >> 8) & 0xFF;
-        uint8_t cb = SFTE_CURSOR_COLOR & 0xFF;
-
         float cx0 = tl_rx + trail_w * 0.5f;
         float cy0 = tl_ry + trail_h * 0.5f;
         float cx1 = t_rx + trail_w * 0.5f;
@@ -4169,20 +4188,10 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
                 if (dist_y < 0) dist_y = -dist_y;
 
                 if (dist_x <= trail_w * 0.5f && dist_y <= trail_h * 0.5f) {
-                    int alpha = (int)(128.0f * t);
+                    uint8_t alpha = (uint8_t)(128.0f * t);
                     if (alpha == 0) continue;
-                    int inv_alpha = 255 - alpha;
-
-                    uint32_t bg = px_buf[y * w + x];
-                    uint8_t bg_r = (bg >> 16) & 0xFF;
-                    uint8_t bg_g = (bg >> 8) & 0xFF;
-                    uint8_t bg_b = bg & 0xFF;
-
-                    uint8_t r = (cr * alpha + bg_r * inv_alpha) >> 8;
-                    uint8_t g = (cg * alpha + bg_g * inv_alpha) >> 8;
-                    uint8_t b = (cb * alpha + bg_b * inv_alpha) >> 8;
-
-                    px_buf[y * w + x] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+                    px_buf[y * w + x] = _sfte_render_blend_argb(px_buf[y * w + x],
+                                                                SFTE_CURSOR_TRAIL_COLOR, alpha);
                 }
             }
         }
