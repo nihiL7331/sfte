@@ -255,6 +255,10 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #define SFTE_SIXEL 1
 #endif  // SFTE_SIXEL
 
+#ifndef SFTE_KITTY_KB
+#define SFTE_KITTY_KB 1
+#endif  // SFTE_KITTY_KB
+
 // NOTE: SFTE_SELECTION implicitly enables SFTE_MOUSE
 #ifndef SFTE_SELECTION
 #define SFTE_SELECTION 1
@@ -277,10 +281,11 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #define SFTE_MOUSE 1
 #endif  // SFTE_SELECTION
 
-#define SFTE_MOD_CTRL 0b001
-#define SFTE_MOD_ALT 0b010
-#define SFTE_MOD_SHIFT 0b100
-#define SFTE_MOD_NONE 0b000
+#define SFTE_MOD_CTRL 0b0001
+#define SFTE_MOD_ALT 0b0010
+#define SFTE_MOD_SHIFT 0b0100
+#define SFTE_MOD_SUPER 0b1000
+#define SFTE_MOD_NONE 0b0000
 
 typedef union {
     int i;
@@ -352,6 +357,39 @@ typedef struct {
     int x, y, w, h;
 } sfte_damage_rect;
 
+typedef enum sfte_key {
+    SFTE_KEY_NONE = 0,
+    // control keys (ASCII-based)
+    SFTE_KEY_TAB = 9,
+    SFTE_KEY_ENTER = 13,
+    SFTE_KEY_ESCAPE = 27,
+    SFTE_KEY_BACKSPACE = 127,
+    // nav keys (offset into dedicated range)
+    SFTE_KEY_UP = 1000,
+    SFTE_KEY_DOWN,
+    SFTE_KEY_LEFT,
+    SFTE_KEY_RIGHT,
+    SFTE_KEY_HOME,
+    SFTE_KEY_END,
+    SFTE_KEY_PAGE_UP,
+    SFTE_KEY_PAGE_DOWN,
+    SFTE_KEY_INSERT,
+    SFTE_KEY_DELETE,
+    // function keys
+    SFTE_KEY_F1,
+    SFTE_KEY_F2,
+    SFTE_KEY_F3,
+    SFTE_KEY_F4,
+    SFTE_KEY_F5,
+    SFTE_KEY_F6,
+    SFTE_KEY_F7,
+    SFTE_KEY_F8,
+    SFTE_KEY_F9,
+    SFTE_KEY_F10,
+    SFTE_KEY_F11,
+    SFTE_KEY_F12,
+} sfte_key;
+
 // callback interface for the core to talk back to the host (e.g. pty)
 typedef void (*sfte_write_cb)(void *user_data, const char *data, size_t len);
 
@@ -411,6 +449,16 @@ void sfte_mouse_click(sfte_ctx *ctx, int btn, int pressed, int px_x, int px_y);
 // dir: +up -down
 void sfte_mouse_scroll(sfte_ctx *ctx, int dir, int px_x, int px_y);
 #endif  // SFTE_MOUSE
+
+#if SFTE_KITTY_KB
+// generates the kitty keyboard (CSI u) or standard CSI escape sequence for a given key.
+// returns bytes written to out_buf, or 0 if inactive/unhandled.
+// `key` is a backend-agnostic sfte_key enum. may be SFTE_KEY_KONE if key is purely text.
+// `codepoint` is the raw UTF-32 char value of the key (if applicable).
+// `mod_mask` is a bitmask of the active modifiers using SFTE_MOD_* definitions.
+int sfte_kitty_kb_encode(sfte_ctx *ctx, sfte_key key, uint32_t codepoint, uint32_t mod_mask,
+                         char *out_buf, size_t max_bytes);
+#endif  // SFTE_KITTY_KB
 
 #if SFTE_SELECTION
 // copies the UTF-8 selection into out_buf, up to max_bytes.
@@ -587,6 +635,10 @@ typedef struct {
     int mouse_sel_end_x, mouse_sel_end_y;
 #endif  // SFTE_SELECTION
 #endif  // SFTE_MOUSE
+#if SFTE_KITTY_KB
+    int kitty_kb_stack[2][16];  // 0=main, 1=alt
+    int kitty_kb_idx[2];
+#endif  // SFTE_KITTY_KB
 
     int scroll_top;
     int scroll_bottom;
@@ -1500,6 +1552,41 @@ struct sfte_wayland_app {
     int pending_width, pending_height;
 };
 
+static sfte_key _sfte_xkb_to_sfte_key(xkb_keysym_t sym) {
+    switch (sym) {
+    case XKB_KEY_Tab:
+    case XKB_KEY_ISO_Left_Tab: return SFTE_KEY_TAB;
+    case XKB_KEY_Return:
+    case XKB_KEY_Linefeed:
+    case XKB_KEY_KP_Enter: return SFTE_KEY_ENTER;
+    case XKB_KEY_BackSpace: return SFTE_KEY_BACKSPACE;
+    case XKB_KEY_Escape: return SFTE_KEY_ESCAPE;
+    case XKB_KEY_Up: return SFTE_KEY_UP;
+    case XKB_KEY_Down: return SFTE_KEY_DOWN;
+    case XKB_KEY_Left: return SFTE_KEY_LEFT;
+    case XKB_KEY_Right: return SFTE_KEY_RIGHT;
+    case XKB_KEY_Home: return SFTE_KEY_HOME;
+    case XKB_KEY_End: return SFTE_KEY_END;
+    case XKB_KEY_Page_Up: return SFTE_KEY_PAGE_UP;
+    case XKB_KEY_Page_Down: return SFTE_KEY_PAGE_DOWN;
+    case XKB_KEY_Insert: return SFTE_KEY_INSERT;
+    case XKB_KEY_Delete: return SFTE_KEY_DELETE;
+    case XKB_KEY_F1: return SFTE_KEY_F1;
+    case XKB_KEY_F2: return SFTE_KEY_F2;
+    case XKB_KEY_F3: return SFTE_KEY_F3;
+    case XKB_KEY_F4: return SFTE_KEY_F4;
+    case XKB_KEY_F5: return SFTE_KEY_F5;
+    case XKB_KEY_F6: return SFTE_KEY_F6;
+    case XKB_KEY_F7: return SFTE_KEY_F7;
+    case XKB_KEY_F8: return SFTE_KEY_F8;
+    case XKB_KEY_F9: return SFTE_KEY_F9;
+    case XKB_KEY_F10: return SFTE_KEY_F10;
+    case XKB_KEY_F11: return SFTE_KEY_F11;
+    case XKB_KEY_F12: return SFTE_KEY_F12;
+    default: return SFTE_KEY_NONE;
+    }
+}
+
 static void _sfte_wayland_write_cb(void *user_data, const char *data, size_t len) {
     sfte_wayland_app *app = (sfte_wayland_app *)user_data;
     if (app->pty_fd > 0) write(app->pty_fd, data, len);
@@ -1857,11 +1944,14 @@ static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
                                             XKB_STATE_MODS_EFFECTIVE);
     bool shift = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_SHIFT,
                                               XKB_STATE_MODS_EFFECTIVE);
+    bool super = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_LOGO,
+                                              XKB_STATE_MODS_EFFECTIVE);
 
     uint32_t active_mods = SFTE_MOD_NONE;
     if (ctrl) active_mods |= SFTE_MOD_CTRL;
     if (alt) active_mods |= SFTE_MOD_ALT;
     if (shift) active_mods |= SFTE_MOD_SHIFT;
+    if (super) active_mods |= SFTE_MOD_SUPER;
 
     for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_shortcuts); ++i) {
         if ((xkb_keysym_t)_sfte_shortcuts[i].keysym != sym ||
@@ -1875,43 +1965,58 @@ static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
     char buf[128];
     int size = 0;
 
+    // ignore standalone mod keys
+    if (sym >= XKB_KEY_Shift_L && sym <= XKB_KEY_Hyper_R) return;
+
+#if SFTE_KITTY_KB
+    sfte_key key_id = _sfte_xkb_to_sfte_key(sym);
+    uint32_t codepoint = xkb_keysym_to_utf32(sym);
+
+    size = sfte_kitty_kb_encode(app->ctx, key_id, codepoint, active_mods, buf, sizeof(buf));
+#endif  // SFTE_KITTY_KB
+
+    // if unhandled by kitty
+    if (size == 0) {
 #define MAP_KEY(str)                                                                               \
     do {                                                                                           \
         size = sizeof(str) - 1;                                                                    \
         memcpy(buf, str, size);                                                                    \
     } while (0)
 
-    switch (sym) {
-    case XKB_KEY_Up: MAP_KEY("\033[A"); break;
-    case XKB_KEY_Down: MAP_KEY("\033[B"); break;
-    case XKB_KEY_Right: MAP_KEY("\033[C"); break;
-    case XKB_KEY_Left: MAP_KEY("\033[D"); break;
-    case XKB_KEY_BackSpace: MAP_KEY("\x7f"); break;
-    case XKB_KEY_Delete: MAP_KEY("\033[3~"); break;
-    case XKB_KEY_Home: MAP_KEY("\033[H"); break;
-    case XKB_KEY_End: MAP_KEY("\033[F"); break;
-    default:
-        if (ctrl) {
-            if (sym >= XKB_KEY_a && sym <= XKB_KEY_z) {
-                buf[0] = sym - XKB_KEY_a + 1;
-                size = 1;
-            } else if (sym >= XKB_KEY_A && sym <= XKB_KEY_Z) {
-                buf[0] = sym - XKB_KEY_A + 1;
-                size = 1;
-            } else if (sym == XKB_KEY_space) {
-                buf[0] = '\0';
-                size = 1;
+        switch (sym) {
+        case XKB_KEY_Up: MAP_KEY("\033[A"); break;
+        case XKB_KEY_Down: MAP_KEY("\033[B"); break;
+        case XKB_KEY_Right: MAP_KEY("\033[C"); break;
+        case XKB_KEY_Left: MAP_KEY("\033[D"); break;
+        case XKB_KEY_BackSpace: MAP_KEY("\x7f"); break;
+        case XKB_KEY_Delete: MAP_KEY("\033[3~"); break;
+        case XKB_KEY_Home: MAP_KEY("\033[H"); break;
+        case XKB_KEY_End: MAP_KEY("\033[F"); break;
+        default:
+            if (ctrl) {
+                if (sym >= XKB_KEY_a && sym <= XKB_KEY_z) {
+                    buf[0] = sym - XKB_KEY_a + 1;
+                    size = 1;
+                } else if (sym >= XKB_KEY_A && sym <= XKB_KEY_Z) {
+                    buf[0] = sym - XKB_KEY_A + 1;
+                    size = 1;
+                } else if (sym == XKB_KEY_space) {
+                    buf[0] = '\0';
+                    size = 1;
+                }
             }
+
+            // if nothing intercepted the key, default to generating
+            // standard terminal control chars or psasing through the raw utf8 string
+            if (size == 0) size = xkb_state_key_get_utf8(app->xkb_state, keycode, buf, sizeof(buf));
         }
 
-        // if nothing intercepted the key, default to generating
-        // standard terminal control chars or psasing through the raw utf8 string
-        if (size == 0) size = xkb_state_key_get_utf8(app->xkb_state, keycode, buf, sizeof(buf));
-    }
-    // if alt is held, prepend esc byte
-    if (alt && size > 0 && size < (int)(sizeof(buf) - 1)) {
-        memmove(buf + 1, buf, size++);
-        buf[0] = '\033';
+        // if alt is held, prepend esc byte
+        if (alt && size > 0 && size < (int)(sizeof(buf) - 1)) {
+            memmove(buf + 1, buf, size++);
+            buf[0] = '\033';
+        }
+#undef MAP_KEY
     }
 
     if (size > 0) {
@@ -3170,6 +3275,10 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
                 // 1047 / 1049 switch to alt screen
                 if ((p[i] == 1047 || p[i] == 1049) && !ctx->term.alt_active) {
                     ctx->term.alt_active = 1;
+#if SFTE_KITTY_KB
+                    ctx->term.kitty_kb_idx[1] = 0;
+                    ctx->term.kitty_kb_stack[1][0] = 0;
+#endif  // SFTE_KITTY_KB
 #if SFTE_CURSOR_TRAIL
                     ctx->term.last_move_ms = 0;
 #endif  // SFTE_CURSOR_TRAIL
@@ -3225,6 +3334,10 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
 #if SFTE_ALT_SCREEN
                 if ((p[i] == 1047 || p[i] == 1049) && ctx->term.alt_active) {
                     ctx->term.alt_active = 0;
+#if SFTE_KITTY_KB
+                    ctx->term.kitty_kb_idx[1] = 0;
+                    ctx->term.kitty_kb_stack[1][0] = 0;
+#endif  // SFTE_KITTY_KB
 
                     if (ctx->term.alt_cells) {
                         sfte_cell *tmp = ctx->term.cells;
@@ -3380,6 +3493,12 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         ctx->term.mouse_mode = 0;
         ctx->term.mouse_ext = 0;
 #endif  // SFTE_MOUSE
+#if SFTE_KITTY_KB
+        ctx->term.kitty_kb_idx[0] = 0;
+        ctx->term.kitty_kb_idx[1] = 0;
+        ctx->term.kitty_kb_stack[0][0] = 0;
+        ctx->term.kitty_kb_stack[1][0] = 0;
+#endif  // SFTE_KITTY_KB
 #if SFTE_CURSOR_BLINK
         ctx->term.blink_enabled = 1;
 #endif  // SFTE_CURSOR_BLINK
@@ -3497,13 +3616,42 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         }
         break;
     }
-    case 'u':  // SCORC / Restore Cursor
+    case 'u':  // SCORC / Restore Cursor // kitty keyboard protocol
     {
+        int s_idx = ctx->term.alt_active ? 1 : 0;
+        /*
+            Handles extended (kitty) keyboard protcool.
+         */
+#if SFTE_KITTY_KB
+        if (ctx->term.vt_dec_priv == 2) {  // CSI > flags u (push)
+            if (ctx->term.kitty_kb_idx[s_idx] < 15) ctx->term.kitty_kb_idx[s_idx]++;
+            ctx->term.kitty_kb_stack[s_idx][ctx->term.kitty_kb_idx[s_idx]] = (cnt > 0 && p[0] >= 0)
+                                                                                 ? p[0]
+                                                                                 : 0;
+            break;
+        } else if (ctx->term.vt_dec_priv == 4) {  // CSI = flags u (set/overwrite)
+            ctx->term.kitty_kb_stack[s_idx][ctx->term.kitty_kb_idx[s_idx]] = (cnt > 0 && p[0] >= 0)
+                                                                                 ? p[0]
+                                                                                 : 0;
+            break;
+        } else if (ctx->term.vt_dec_priv == 3) {  // CSI < n u (pop)
+            int pop_cnt = (cnt > 0 && p[0] > 0) ? p[0] : 1;
+            ctx->term.kitty_kb_idx[s_idx] -= pop_cnt;
+            if (ctx->term.kitty_kb_idx[s_idx] < 0) ctx->term.kitty_kb_idx[s_idx] = 0;
+            break;
+        } else if (ctx->term.vt_dec_priv == 1) {  // CSI ? u (query)
+            char buf[32];
+            int flags = ctx->term.kitty_kb_stack[s_idx][ctx->term.kitty_kb_idx[s_idx]];
+            int len = snprintf(buf, sizeof(buf), "\033[?%du", flags);
+            if (ctx->write_cb) ctx->write_cb(ctx->user_data, buf, len);
+            break;
+        }
+#endif  // SFTE_KITTY_KB
+
         /*
           Restores the previously saved cursor position and attributes.
          */
-        if (p[0] != 0) break;  // avoid kitty support command
-        int s_idx = ctx->term.alt_active ? 1 : 0;
+        if (ctx->term.vt_dec_priv != 0 || p[0] != 0) break;
         ctx->term.cursor_x = _SFTE_CLAMP(ctx->term.saved_x[s_idx], 0, ctx->term.cols - 1);
         ctx->term.cursor_y = _SFTE_CLAMP(ctx->term.saved_y[s_idx], 0, ctx->term.rows - 1);
         ctx->term.cur_fg = ctx->term.saved_fg[s_idx];
@@ -3709,6 +3857,12 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
             ctx->term.osc_idx = 0;
 
             memset(ctx->term.osc_payload, 0, sizeof(ctx->term.osc_payload));
+        } else if (b == 'c') {
+            _sfte_csi_dispatch(ctx, 'p');
+            ctx->term.cursor_x = 0;
+            ctx->term.cursor_y = 0;
+            _sfte_grid_clear_cells(ctx, 0, ctx->term.rows * ctx->term.cols);
+            ctx->term.vt_state = VT_GROUND;
         } else if (b == '\\')
             ctx->term.vt_state = VT_GROUND;
         else if (b == 'P' || b == '_' || b == '^') {
@@ -4352,6 +4506,12 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
 #if SFTE_MOUSE
     ctx->term.mouse_btn_state = 3;
 #endif  // SFTE_MOUSE
+#if SFTE_KITTY_KB
+    ctx->term.kitty_kb_idx[0] = 0;
+    ctx->term.kitty_kb_idx[1] = 0;
+    ctx->term.kitty_kb_stack[0][0] = 0;
+    ctx->term.kitty_kb_stack[1][0] = 0;
+#endif  // SFTE_KITTY_KB
 
 #if SFTE_CURSOR_BLINK
     ctx->term.blink_enabled = 1;
@@ -4615,6 +4775,74 @@ void sfte_mouse_scroll(sfte_ctx *ctx, int dir, int px_x, int px_y) {
 #endif  // SFTE_SCROLLBACK_CAP
 }
 #endif  // SFTE_MOUSE
+
+#if SFTE_KITTY_KB
+int sfte_kitty_kb_encode(sfte_ctx *ctx, sfte_key key, uint32_t codepoint, uint32_t mod_mask,
+                         char *out_buf, size_t max_bytes) {
+    int s_idx = ctx->term.alt_active ? 1 : 0;
+    int flags = ctx->term.kitty_kb_stack[s_idx][ctx->term.kitty_kb_idx[s_idx]];
+    if (flags == 0) return 0;
+
+    uint32_t csi_mod = 1;
+    if (mod_mask & SFTE_MOD_SHIFT) csi_mod += 1;
+    if (mod_mask & SFTE_MOD_ALT) csi_mod += 2;
+    if (mod_mask & SFTE_MOD_CTRL) csi_mod += 4;
+    if (mod_mask & SFTE_MOD_SUPER) csi_mod += 8;
+
+    // arrows, home, end, f1-f4 -> CSI 1 ; mods [char]
+    char func_char = 0;
+    switch (key) {
+    case SFTE_KEY_UP: func_char = 'A'; break;
+    case SFTE_KEY_DOWN: func_char = 'B'; break;
+    case SFTE_KEY_RIGHT: func_char = 'C'; break;
+    case SFTE_KEY_LEFT: func_char = 'D'; break;
+    case SFTE_KEY_HOME: func_char = 'H'; break;
+    case SFTE_KEY_END: func_char = 'F'; break;
+    case SFTE_KEY_F1: func_char = 'P'; break;
+    case SFTE_KEY_F2: func_char = 'Q'; break;
+    case SFTE_KEY_F3: func_char = 'R'; break;
+    case SFTE_KEY_F4: func_char = 'S'; break;
+    default: break;
+    }
+
+    if (func_char) {
+        if (csi_mod > 1) return snprintf(out_buf, max_bytes, "\033[1;%u%c", csi_mod, func_char);
+        return snprintf(out_buf, max_bytes, "\033[%c", func_char);
+    }
+
+    // insert, delete, pgup, pgdn, f5-f12 -> CSI num ; mods ~
+    int tilde_num = 0;
+    switch (key) {
+    case SFTE_KEY_INSERT: tilde_num = 2; break;
+    case SFTE_KEY_DELETE: tilde_num = 3; break;
+    case SFTE_KEY_PAGE_UP: tilde_num = 5; break;
+    case SFTE_KEY_PAGE_DOWN: tilde_num = 6; break;
+    case SFTE_KEY_F5: tilde_num = 15; break;
+    case SFTE_KEY_F6: tilde_num = 17; break;
+    case SFTE_KEY_F7: tilde_num = 18; break;
+    case SFTE_KEY_F8: tilde_num = 19; break;
+    case SFTE_KEY_F9: tilde_num = 20; break;
+    case SFTE_KEY_F10: tilde_num = 21; break;
+    case SFTE_KEY_F11: tilde_num = 22; break;
+    case SFTE_KEY_F12: tilde_num = 23; break;
+    default: break;
+    }
+
+    if (tilde_num) {
+        if (csi_mod > 1) return snprintf(out_buf, max_bytes, "\033[%d;%u~", tilde_num, csi_mod);
+        return snprintf(out_buf, max_bytes, "\033[%d~", tilde_num);
+    }
+
+    // text keys and control keys -> CSI codepoint ; mods u
+    uint32_t target_cp = codepoint ? codepoint : (uint32_t)key;
+    // we can safely use SFTE_KEY_* as ASCII values
+    if (target_cp > 0 && (csi_mod > 1 || target_cp == SFTE_KEY_TAB || target_cp == SFTE_KEY_ENTER ||
+                          target_cp == SFTE_KEY_ESCAPE || target_cp == SFTE_KEY_BACKSPACE))
+        return snprintf(out_buf, max_bytes, "\033[%u;%uu", target_cp, csi_mod);
+
+    return 0;
+}
+#endif  // SFTE_KITTY_KB
 
 #if SFTE_SCROLLBACK_CAP
 void sfte_view_scroll(sfte_ctx *ctx, int delta) {
