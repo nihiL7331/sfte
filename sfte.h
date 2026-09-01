@@ -65,6 +65,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_MALLOC
 #include <stdlib.h>
 #define SFTE_MALLOC(sz) malloc(sz)
+#define SFTE_REALLOC(p, sz) realloc(p, sz)
 #define SFTE_CALLOC(n, sz) calloc(n, sz)
 #define SFTE_FREE(p) free(p)
 #endif  // !SFTE_MALLOC
@@ -276,6 +277,18 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #define SFTE_CLIPBOARD_BUF_SIZE 4096
 #endif  // SFTE_CLIPBOARD_BUF_SIZE
 
+#ifndef SFTE_OSC52_CLIPBOARD
+#define SFTE_OSC52_CLIPBOARD 1
+#endif  // SFTE_OSC52_CLIPBOARD
+
+#ifndef SFTE_OSC_INIT_CAP
+#define SFTE_OSC_INIT_CAP 1024
+#endif  // SFTE_OSC_INIT_CAP
+
+#ifndef SFTE_OSC_MAX_CAP
+#define SFTE_OSC_MAX_CAP (16 * 1024 * 1024)
+#endif  // SFTE_OSC_MAX_CAP
+
 #if SFTE_SELECTION
 #undef SFTE_MOUSE
 #define SFTE_MOUSE 1
@@ -392,6 +405,10 @@ typedef enum sfte_key {
 
 // callback interface for the core to talk back to the host (e.g. pty)
 typedef void (*sfte_write_cb)(void *user_data, const char *data, size_t len);
+
+// callback interface for the core to request clipboard copy/paste operations
+// `target` is typically 'c' (clipboard) or 'p' (primary selection).
+typedef void (*sfte_clipboard_cb)(void *user_data, char target, const char *data);
 
 // context initialization
 sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data);
@@ -643,8 +660,9 @@ typedef struct {
     int scroll_top;
     int scroll_bottom;
     // osc
-    char osc_payload[128];
-    int osc_idx;
+    char *osc_payload;  // dynamic buffer
+    size_t osc_len;     // track len
+    size_t osc_cap;     // track alloc cap
     // pen state
     uint32_t cur_fg;
     uint32_t cur_bg;
@@ -744,6 +762,9 @@ struct sfte_ctx {
 
     sfte_write_cb write_cb;
     void (*bell_cb)(void *user_data);
+#if SFTE_OSC52_CLIPBOARD
+    sfte_clipboard_cb clipboard_cb;
+#endif  // SFTE_OSC52_CLIPBOARD
     void *user_data;
 
     int damage_min_x;
@@ -1017,7 +1038,7 @@ static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_p
         int font_idx = 0;
         int glyph_idx = 0;
 
-        int advance_width, x0, y0, x1, y1;
+        int advance_width = 0, x0 = 0, y0 = 0, x1 = 0, y1 = 0;
 
         // start in primary font [0]
         // then, look through fallback fonts [1-SFTE_FONTS_MAX_COUNT]
@@ -2259,6 +2280,34 @@ static void _sfte_wayland_unload(sfte_wayland_app *app) {
 
 #if SFTE_CLIPBOARD
 #if SFTE_SELECTION
+static void _sfte_wayland_osc_clipboard_cb(void *user_data, char target, const char *data) {
+    (void)target;  // TODO: wl primary selection protocol
+    if (target != 'c') return;
+    sfte_wayland_app *app = (sfte_wayland_app *)user_data;
+
+    if (app->data_source) {
+        wl_data_source_destroy(app->data_source);
+        app->data_source = NULL;
+    }
+    if (app->selection_text) {
+        SFTE_FREE(app->selection_text);
+        app->selection_text = NULL;
+    }
+
+    if (!data || !app->data_device_manager || !app->data_device) return;
+
+    size_t len = strlen(data);
+    app->selection_text = (char *)SFTE_MALLOC(len + 1);
+    memcpy(app->selection_text, data, len + 1);
+
+    app->data_source = wl_data_device_manager_create_data_source(app->data_device_manager);
+    wl_data_source_add_listener(app->data_source, &_sfte_wayland_data_source_listener, app);
+    wl_data_source_offer(app->data_source, "text/plain;charset=utf-8");
+    wl_data_source_offer(app->data_source, "text/plain");
+
+    wl_data_device_set_selection(app->data_device, app->data_source, app->serial);
+}
+
 static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
@@ -3791,6 +3840,52 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
     }
 }
 // =================================================================================================
+// >>b64
+// =================================================================================================
+#if SFTE_OSC52_CLIPBOARD
+static const int8_t _sfte_b64_table[256] = {
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63,
+    52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1, -1, 0,  1,  2,  3,  4,  5,  6,
+    7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, -1,
+    -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+    49, 50, 51, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+};
+
+static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len) {
+    // strip trailing pad
+    while (len > 0 && src[len - 1] == '=') len--;
+
+    *out_len = (len * 3) / 4;
+    uint8_t *dst = (uint8_t *)SFTE_MALLOC(*out_len);
+    if (!dst) return NULL;
+
+    size_t i = 0, j = 0;
+    uint32_t acc = 0;
+    int bits = 0;
+
+    while (i < len) {
+        int8_t v = _sfte_b64_table[src[i++]];
+        if (v == -1) continue;
+
+        acc = (acc << 6) | v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            dst[j++] = (acc >> bits);
+        }
+    }
+
+    *out_len = j;
+    return dst;
+}
+#endif  // SFTE_OSC52_CLIPBOARD
+// =================================================================================================
 // >>parser
 // =================================================================================================
 typedef enum {
@@ -3854,9 +3949,7 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
             memset(ctx->term.vt_params, 0, sizeof(ctx->term.vt_params));
         } else if (b == ']') {
             ctx->term.vt_state = VT_OSC;
-            ctx->term.osc_idx = 0;
-
-            memset(ctx->term.osc_payload, 0, sizeof(ctx->term.osc_payload));
+            ctx->term.osc_len = 0;
         } else if (b == 'c') {
             _sfte_csi_dispatch(ctx, 'p');
             ctx->term.cursor_x = 0;
@@ -3867,8 +3960,7 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
             ctx->term.vt_state = VT_GROUND;
         else if (b == 'P' || b == '_' || b == '^') {
             ctx->term.vt_state = VT_DCS;
-            ctx->term.osc_idx = 0;
-            memset(ctx->term.osc_payload, 0, sizeof(ctx->term.osc_payload));
+            ctx->term.osc_len = 0;
         } else if (b == '(' || b == ')')
             ctx->term.vt_state = VT_CHARSET;
         else if (b == '7') {  // save cursor
@@ -3946,16 +4038,49 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
                 int len = snprintf(reply, sizeof(reply), "\033]%d;rgb:%02x%02x/%02x%02x/%02x%02x%s",
                                    is_bg ? 11 : 10, cr, cr, cg, cg, cb, cb, term);
                 ctx->write_cb(ctx->user_data, reply, len);
-            } else
+            }
+#if SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
+            else if (strncmp(ctx->term.osc_payload, "52;", 3) == 0) {  // remote clipboard (OSC 52)
+                char *p = ctx->term.osc_payload + 3;
+
+                char target = 'c';  // default to 'c' if missing
+                if (*p && *p != ';') target = *p;
+
+                while (*p && *p != ';') p++;
+                if (*p == ';') {
+                    p++;
+                    if (*p != '?') {  // skip read requests
+                        size_t b64_len = ctx->term.osc_len - (p - ctx->term.osc_payload);
+                        size_t raw_len = 0;
+                        uint8_t *raw_data = _sfte_b64_decode((uint8_t *)p, b64_len, &raw_len);
+                        if (raw_data) {
+                            char *data = (char *)SFTE_MALLOC(raw_len + 1);
+                            memcpy(data, raw_data, raw_len);
+                            data[raw_len] = '\0';
+
+                            if (ctx->clipboard_cb) ctx->clipboard_cb(ctx->user_data, target, data);
+
+                            SFTE_FREE(data);
+                            SFTE_FREE(raw_data);
+                        }
+                    }
+                }
+            }
+#endif  // SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
+            else
                 _SFTE_WARN(ctx, UNHANDLED_OSC, ctx->term.osc_payload);
 
-            if (b == '\x1b')
-                ctx->term.vt_state = VT_ESCAPE;
-            else
-                ctx->term.vt_state = VT_GROUND;
-
-        } else if (ctx->term.osc_idx < (int)sizeof(ctx->term.osc_payload) - 1)
-            ctx->term.osc_payload[ctx->term.osc_idx++] = b;
+            ctx->term.vt_state = (b == '\x1b') ? VT_ESCAPE : VT_GROUND;
+        } else {
+            if (ctx->term.osc_len + 1 >= ctx->term.osc_cap &&
+                ctx->term.osc_cap < SFTE_OSC_MAX_CAP) {
+                ctx->term.osc_cap *= 2;
+                ctx->term.osc_payload = (char *)SFTE_REALLOC(ctx->term.osc_payload,
+                                                             ctx->term.osc_cap);
+            }
+            if (ctx->term.osc_len + 1 < ctx->term.osc_cap)
+                ctx->term.osc_payload[ctx->term.osc_len++] = b;
+        }
         break;
     case VT_DCS:
         if (b == '\x07' || b == '\x1b') {
@@ -3968,17 +4093,13 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
                 ctx->write_cb(ctx->user_data, reply, len);
             }
 
-            if (b == '\x1b')
-                ctx->term.vt_state = VT_ESCAPE;
-            else if (b == '\x07')
-                ctx->term.vt_state = VT_GROUND;
-
+            ctx->term.vt_state = (b == '\x1b') ? VT_ESCAPE : VT_GROUND;
         }
 #if SFTE_SIXEL
         else if (b == 'q') {
             // detect if this dcs header is strictly sixel params (nums/semicols)
             int is_sixel = 1;
-            for (int i = 0; i < ctx->term.osc_idx; ++i) {
+            for (size_t i = 0; i < ctx->term.osc_len; ++i) {
                 char pb = ctx->term.osc_payload[i];
                 if (pb == ';') continue;
                 if (pb >= '0' && pb <= '9') continue;
@@ -3993,12 +4114,20 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
                 ctx->sixel.y = ctx->term.cursor_y * ctx->font.cell_height;
                 ctx->sixel.start_x = ctx->sixel.x;
                 break;  // skip adding q to payload
-            } else if (ctx->term.osc_idx < (int)sizeof(ctx->term.osc_payload) - 1)
-                ctx->term.osc_payload[ctx->term.osc_idx++] = b;
+            } else if (ctx->term.osc_len < (int)sizeof(ctx->term.osc_payload) - 1)
+                ctx->term.osc_payload[ctx->term.osc_len++] = b;
         }
 #endif  // SFTE_SIXEL
-        else if (ctx->term.osc_idx < (int)sizeof(ctx->term.osc_payload) - 1)
-            ctx->term.osc_payload[ctx->term.osc_idx++] = b;
+        else {
+            if (ctx->term.osc_len + 1 >= ctx->term.osc_cap &&
+                ctx->term.osc_cap < SFTE_OSC_MAX_CAP) {
+                ctx->term.osc_cap *= 2;
+                ctx->term.osc_payload = (char *)SFTE_REALLOC(ctx->term.osc_payload,
+                                                             ctx->term.osc_cap);
+            }
+            if (ctx->term.osc_len + 1 < ctx->term.osc_cap)
+                ctx->term.osc_payload[ctx->term.osc_len++] = b;
+        }
         break;
 #if SFTE_SIXEL
     case VT_SIXEL:
@@ -4542,6 +4671,10 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
     ctx->term.scroll_top = 0;
     ctx->term.scroll_bottom = ctx->term.rows - 1;
 
+    ctx->term.osc_cap = SFTE_OSC_INIT_CAP;
+    ctx->term.osc_payload = (char *)SFTE_MALLOC(ctx->term.osc_cap);
+    ctx->term.osc_len = 0;
+
     ctx->term.cells = (sfte_cell *)SFTE_MALLOC(ctx->term.cols * ctx->term.rows * sizeof(sfte_cell));
     SFTE_ASSERT(ctx->term.cells, "failed to allocate term grid");
     memset(ctx->term.cells, 0, ctx->term.cols * ctx->term.rows * sizeof(sfte_cell));
@@ -4575,6 +4708,7 @@ void sfte_free(sfte_ctx *ctx) {
 
 #undef FREE_CACHE
 
+    SFTE_FREE(ctx->term.osc_payload);
     SFTE_FREE(ctx->term.cells);
 #if SFTE_ALT_SCREEN
     SFTE_FREE(ctx->term.alt_cells);
@@ -4951,6 +5085,10 @@ sfte_wayland_app *sfte_wayland_init(void) {
     sfte_wayland_app *app = (sfte_wayland_app *)SFTE_CALLOC(1, sizeof(sfte_wayland_app));
     app->running = 1;
     app->ctx = sfte_init(_sfte_wayland_write_cb, app);
+
+#if SFTE_CLIPBOARD
+    app->ctx->clipboard_cb = _sfte_wayland_osc_clipboard_cb;
+#endif  // SFTE_CLIPBOARD
 
     _sfte_wayland_pty_spawn(app);
     _sfte_wayland_load(app);
