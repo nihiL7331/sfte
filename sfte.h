@@ -4416,6 +4416,11 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
             int r_min = r > 0 ? r - 1 : 0;
             int r_max = r < ctx->term.rows - 1 ? r + 1 : ctx->term.rows - 1;
 
+            // mark padding dirty to clear the bleed area.
+            // it's not hidden behind an if (r_min == 0 || r_max == ctx->term.rows - 1)
+            // because if damage is at left or right edge, the bleed area will be visible there too.
+            ctx->padding_dirty = 1;
+
             for (int y = r_min; y <= r_max; ++y)
                 for (int x = 0; x < ctx->term.cols; ++x)
                     if (!ctx->term.cells[_SFTE_IDX(ctx, x, y)].dirty)
