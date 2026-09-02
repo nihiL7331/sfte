@@ -1137,7 +1137,8 @@ static void _sfte_grid_scroll(sfte_ctx *ctx, int lines);
 
 static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
     const char *semi = strchr(payload, ';');
-    if (!semi) return;
+    // if there's no semicolon, the dictionary spans the entire payload
+    const char *dict_end = semi ? semi : payload + strlen(payload);
 
     int more = 0;
 
@@ -1145,7 +1146,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
     int is_new = 0;
     for (const char *p = payload; p < semi; ++p) {
         if (*p == 'a' || *p == 'f' || *p == 'i' || *p == 's' || *p == 'v' || *p == 'z')
-            if (p + 1 < semi && p[1] == '=') {
+            if (p + 1 < dict_end && p[1] == '=') {
                 is_new = 1;
                 break;
             }
@@ -1165,9 +1166,9 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
 
     // parse params into state
     const char *p = payload;
-    while (p && p < semi) {
+    while (p && p < dict_end) {
         char key = p[0];
-        if (p[1] != '=') break;
+        if (p + 1 >= dict_end || p[1] != '=') break;
         const char *val = p + 2;
 
         switch (key) {
@@ -1183,20 +1184,22 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         }
 
         p = strchr(p, ',');
-        if (!p || p > semi) break;
+        if (!p || p >= dict_end) break;
         p++;  // skip comma
     }
 
-    const char *b64_start = semi + 1;
-    size_t b64_len = strlen(b64_start);
+    if (semi) {
+        const char *b64_start = semi + 1;
+        size_t b64_len = strlen(b64_start);
 
-    if (ctx->kitty.b64_len + b64_len + 1 >= ctx->kitty.b64_cap) {
-        ctx->kitty.b64_cap = (ctx->kitty.b64_cap + b64_len + 1) * 2;
-        if (ctx->kitty.b64_cap < 4096) ctx->kitty.b64_cap = 4096;
-        ctx->kitty.b64_buf = (char *)SFTE_REALLOC(ctx->kitty.b64_buf, ctx->kitty.b64_cap);
+        if (ctx->kitty.b64_len + b64_len + 1 >= ctx->kitty.b64_cap) {
+            ctx->kitty.b64_cap = (ctx->kitty.b64_cap + b64_len + 1) * 2;
+            if (ctx->kitty.b64_cap < 4096) ctx->kitty.b64_cap = 4096;
+            ctx->kitty.b64_buf = (char *)SFTE_REALLOC(ctx->kitty.b64_buf, ctx->kitty.b64_cap);
+        }
+        memcpy(ctx->kitty.b64_buf + ctx->kitty.b64_len, b64_start, b64_len);
+        ctx->kitty.b64_len += b64_len;
     }
-    memcpy(ctx->kitty.b64_buf + ctx->kitty.b64_len, b64_start, b64_len);
-    ctx->kitty.b64_len += b64_len;
 
     if (more == 1) return;  // abort and wait for next sequence
 
