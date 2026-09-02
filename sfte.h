@@ -47,6 +47,11 @@ typedef stbtt_fontinfo sfte_font_backend_info;
 typedef struct sfte_font_backend_info sfte_font_backend_info;
 #endif  // SFTE_CUSTOM_FONT_BACKEND
 
+// default value for SFTE_KITTY_GRAPHICS is 1, so if it's undefined its 1
+#if !defined(SFTE_KITTY_GRAPHICS) || SFTE_KITTY_GRAPHICS
+#include "stb_image.h"
+#endif  // !defined(SFTE_KITTY_GRAPHICS) || SFTE_KITTY_GRAPHICS
+
 #include <stddef.h>  // size_t
 #include <stdint.h>
 
@@ -271,6 +276,10 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #ifndef SFTE_SIXEL
 #define SFTE_SIXEL 1
 #endif  // SFTE_SIXEL
+
+#ifndef SFTE_KITTY_GRAPHICS
+#define SFTE_KITTY_GRAPHICS 1
+#endif  // SFTE_KITTY_GRAPHICS
 
 #ifndef SFTE_KITTY_KB
 #define SFTE_KITTY_KB 1
@@ -542,6 +551,12 @@ int sfte_wayland_run(sfte_wayland_app *app);
 #include "stb_truetype.h"
 #endif  // !SFTE_FONT_CUSTOM_BACKEND
 
+#if SFTE_KITTY_GRAPHICS
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_STATIC
+#include "stb_image.h"
+#endif  // SFTE_KITTY_GRAPHICS
+
 #include <fcntl.h>
 #include <locale.h>  // LC_ALL
 #include <poll.h>
@@ -619,21 +634,14 @@ typedef struct {
     int xadvance;
 } sfte_glyph;
 
-#if SFTE_SIXEL
-typedef enum {
-    SIXEL_GROUND,
-    SIXEL_REPEAT,       // !
-    SIXEL_COLOR_INTRO,  // #
-    SIXEL_COLOR_PARAM   // col definition
-} sfte_sixel_state_enum;
-
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 typedef struct {
     uint32_t id;
     int width;      // in pxs
     int height;     // in pxs
     uint32_t *pxs;  // ARGB8888
     int ref_cnt;    // how many placements are using this img
-} sfte_sixel_img;
+} sfte_img;
 
 // placement of an image onto the terminal grid
 typedef struct {
@@ -641,7 +649,16 @@ typedef struct {
     int start_col;
     int start_row;
     int z_idx;  // <0=below text, >=0=above text
-} sfte_sixel_img_placement;
+} sfte_img_placement;
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+
+#if SFTE_SIXEL
+typedef enum {
+    SIXEL_GROUND,
+    SIXEL_REPEAT,       // !
+    SIXEL_COLOR_INTRO,  // #
+    SIXEL_COLOR_PARAM   // col definition
+} sfte_sixel_state_enum;
 
 typedef struct {
     sfte_sixel_state_enum state;
@@ -666,6 +683,14 @@ typedef struct {
     uint8_t param_idx;
 } sfte_sixel_state;
 #endif  // SFTE_SIXEL
+
+#if SFTE_KITTY_GRAPHICS
+typedef struct {
+    char *b64_buf;
+    size_t b64_len;
+    size_t b64_cap;
+} sfte_kitty_state;
+#endif  // SFTE_KITTY_GRAPHICS
 
 typedef struct {
     sfte_cell *cells;
@@ -753,15 +778,15 @@ typedef struct {
     uint32_t cur_ul_color;
 #endif  // SFTE_COLOR_UNDERLINE
 // sixel
-#if SFTE_SIXEL
-    sfte_sixel_img *img_pool;
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+    sfte_img *img_pool;
     uint32_t img_pool_cap;
     uint32_t img_pool_len;
-    sfte_sixel_img_placement *img_placements;
+    sfte_img_placement *img_placements;
     uint32_t img_placements_cap;
     uint32_t img_placements_len;
     uint32_t next_img_id;
-#endif  // SFTE_SIXEL
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
     // parser
     int vt_state;
     int vt_params[16];  // stores nums from esc sequences
@@ -824,6 +849,9 @@ struct sfte_ctx {
 #if SFTE_SIXEL
     sfte_sixel_state sixel;
 #endif  // SFTE_SIXEL
+#if SFTE_KITTY_GRAPHICS
+    sfte_kitty_state kitty;
+#endif  // SFTE_KITTY_GRAPHICS
 
     int width;
     int height;
@@ -943,6 +971,52 @@ static void _sfte_log(sfte_ctx *ctx, _sfte_log_item_t log_item, uint32_t log_lev
 #endif  // !SFTE_NO_LOGGING
 
 // =================================================================================================
+// >>b64
+// =================================================================================================
+#if (SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD) || SFTE_KITTY_GRAPHICS
+static const int8_t _sfte_b64_table[256] = {
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63,
+    52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1, -1, 0,  1,  2,  3,  4,  5,  6,
+    7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, -1,
+    -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+    49, 50, 51, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+};
+
+static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len) {
+    // strip trailing pad
+    while (len > 0 && src[len - 1] == '=') len--;
+
+    *out_len = (len * 3) / 4;
+    uint8_t *dst = (uint8_t *)SFTE_MALLOC(*out_len);
+    if (!dst) return NULL;
+
+    size_t i = 0, j = 0;
+    uint32_t acc = 0;
+    int bits = 0;
+
+    while (i < len) {
+        int8_t v = _sfte_b64_table[src[i++]];
+        if (v == -1) continue;
+
+        acc = (acc << 6) | (v & 0x3F);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            if (j < *out_len) dst[j++] = (acc >> bits) & 0xFF;
+        }
+    }
+
+    *out_len = j;
+    return dst;
+}
+#endif  // (SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD) || SFTE_KITTY_GRAPHICS
+// =================================================================================================
 // >>sixel
 // =================================================================================================
 #if SFTE_SIXEL
@@ -1047,6 +1121,128 @@ static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b) {
     }
 }
 #endif  // SFTE_SIXEL
+// =================================================================================================
+// >>kitty
+// =================================================================================================
+#if SFTE_KITTY_GRAPHICS
+static void _sfte_grid_scroll(sfte_ctx *ctx, int lines);
+
+static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
+    const char *semi = strchr(payload, ';');
+    if (!semi) return;
+    int action = 'T';  // default to transmit and display
+    uint32_t id = 0;
+    int z_idx = 0;
+    int more = 0;
+
+    const char *p = payload;
+    while (p && p < semi) {
+        char key = p[0];
+        if (p[1] != '=') break;
+
+        const char *val_ptr = p + 2;
+        switch (key) {
+        case 'a': action = val_ptr[0]; break;
+        case 'i': id = atoi(val_ptr); break;
+        case 'm': more = atoi(val_ptr); break;
+        case 'z': z_idx = atoi(val_ptr); break;
+        default: break;
+        }
+
+        p = strchr(p, ',');
+        if (!p || p > semi) break;
+        p++;  // skip comma
+    }
+
+    const char *b64_start = semi + 1;
+    size_t b64_len = strlen(b64_start);
+
+    if (ctx->kitty.b64_len + b64_len + 1 >= ctx->kitty.b64_cap) {
+        ctx->kitty.b64_cap = (ctx->kitty.b64_cap + b64_len + 1) * 2;
+        if (ctx->kitty.b64_cap < 4096) ctx->kitty.b64_cap = 4096;
+        ctx->kitty.b64_buf = (char *)SFTE_REALLOC(ctx->kitty.b64_buf, ctx->kitty.b64_cap);
+    }
+    memcpy(ctx->kitty.b64_buf + ctx->kitty.b64_len, b64_start, b64_len);
+    ctx->kitty.b64_len += b64_len;
+
+    if (more == 1) return;  // abort and wait for next sequence
+
+    ctx->kitty.b64_buf[ctx->kitty.b64_len] = '\0';
+
+    if (action == 'T') {
+        size_t raw_len = 0;
+        uint8_t *raw_data = _sfte_b64_decode((uint8_t *)ctx->kitty.b64_buf, ctx->kitty.b64_len,
+                                             &raw_len);
+
+        if (raw_data) {
+            int w = 0, h = 0, channels = 0;
+            uint8_t *stb_pxs = stbi_load_from_memory(raw_data, raw_len, &w, &h, &channels, 4);
+
+            if (stb_pxs && w && h) {
+                uint32_t *pxs = (uint32_t *)SFTE_MALLOC(w * h * sizeof(uint32_t));
+                for (int i = 0; i < w * h; ++i) {
+                    uint8_t r = stb_pxs[i * 4 + 0];
+                    uint8_t g = stb_pxs[i * 4 + 1];
+                    uint8_t b = stb_pxs[i * 4 + 2];
+                    uint8_t a = stb_pxs[i * 4 + 3];
+                    pxs[i] = (a << 24) | (r << 16) | (g << 8) | b;
+                }
+                stbi_image_free(stb_pxs);
+
+                if (id == 0) id = ++ctx->term.next_img_id;
+
+                // write to shared object pool
+                if (ctx->term.img_pool_len >= ctx->term.img_pool_cap) {
+                    ctx->term.img_pool_cap = ctx->term.img_pool_cap == 0
+                                                 ? 16
+                                                 : ctx->term.img_pool_cap * 2;
+                    ctx->term.img_pool = (sfte_img *)SFTE_REALLOC(
+                        ctx->term.img_pool, ctx->term.img_pool_cap * sizeof(sfte_img));
+                }
+                ctx->term.img_pool[ctx->term.img_pool_len++] = (sfte_img){
+                    .id = id, .width = w, .height = h, .pxs = pxs, .ref_cnt = 1};
+
+                // write to shared placement pool
+                if (ctx->term.img_placements_len >= ctx->term.img_placements_cap) {
+                    ctx->term.img_placements_cap = ctx->term.img_placements_cap == 0
+                                                       ? 32
+                                                       : ctx->term.img_placements_cap * 2;
+                    ctx->term.img_placements = (sfte_img_placement *)SFTE_REALLOC(
+                        ctx->term.img_placements,
+                        ctx->term.img_placements_cap * sizeof(sfte_img_placement));
+                }
+                ctx->term.img_placements[ctx->term.img_placements_len++] = (sfte_img_placement){
+                    .img_id = id,
+                    .start_col = ctx->term.cursor_x,
+                    .start_row = ctx->term.cursor_y,
+                    .z_idx = z_idx};
+
+                int img_rows = (h / ctx->font.cell_height) + 1;
+                int img_cols = (w / ctx->font.cell_width) + 1;
+
+                for (int r = ctx->term.cursor_y; r < ctx->term.cursor_y + img_rows; ++r) {
+                    if (r >= ctx->term.rows) break;
+
+                    for (int c = ctx->term.cursor_x; c < ctx->term.cursor_x + img_cols; ++c) {
+                        if (c >= ctx->term.cols) break;
+                        ctx->term.cells[_SFTE_IDX(ctx, c, r)].dirty = 1;
+                    }
+                }
+
+                ctx->term.cursor_y += img_rows;
+                ctx->term.cursor_x = 0;
+                while (ctx->term.cursor_y > ctx->term.scroll_bottom) {
+                    _sfte_grid_scroll(ctx, 1);
+                    ctx->term.cursor_y--;
+                }
+            }
+            SFTE_FREE(raw_data);
+        }
+    }
+
+    ctx->kitty.b64_len = 0;
+}
+#endif  // SFTE_KITTY_GRAPHICS
 // =================================================================================================
 // >>font
 // =================================================================================================
@@ -2721,11 +2917,11 @@ static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt)
         ctx->term.cells[start_idx + i].link_idx = 0;
 #endif  // SFTE_HYPERLINKS
 
-#if SFTE_SIXEL
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
         // erase overlapping img placements
         for (uint32_t i = 0; i < ctx->term.img_placements_len;) {
-            sfte_sixel_img_placement *p = &ctx->term.img_placements[i];
-            sfte_sixel_img *img = NULL;
+            sfte_img_placement *p = &ctx->term.img_placements[i];
+            sfte_img *img = NULL;
 
             for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j) {
                 if (ctx->term.img_pool[j].id == p->img_id) {
@@ -2774,14 +2970,14 @@ static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
     int height = bot - top + 1;
     int cols = ctx->term.cols;
 
-#if SFTE_SIXEL
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
     for (uint32_t i = 0; i < ctx->term.img_placements_len;) {
-        sfte_sixel_img_placement *p = &ctx->term.img_placements[i];
+        sfte_img_placement *p = &ctx->term.img_placements[i];
 
         if (p->start_row >= top && p->start_row <= bot) {
             p->start_row -= lines;
 
-            sfte_sixel_img *img = NULL;
+            sfte_img *img = NULL;
             for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
                 if (ctx->term.img_pool[j].id == p->img_id) {
                     img = &ctx->term.img_pool[j];
@@ -2800,7 +2996,7 @@ static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
         }
         i++;
     }
-#endif  // SFTE_SIXEL
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 
     if (lines > 0) {  // scroll up
         if (lines > height) lines = height;
@@ -4019,54 +4215,8 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
     }
 }
 // =================================================================================================
-// >>b64
+// >>parser
 // =================================================================================================
-#if SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
-static const int8_t _sfte_b64_table[256] = {
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63,
-    52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1, -1, 0,  1,  2,  3,  4,  5,  6,
-    7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, -1,
-    -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
-    49, 50, 51, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-};
-
-static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len) {
-    // strip trailing pad
-    while (len > 0 && src[len - 1] == '=') len--;
-
-    *out_len = (len * 3) / 4;
-    uint8_t *dst = (uint8_t *)SFTE_MALLOC(*out_len);
-    if (!dst) return NULL;
-
-    size_t i = 0, j = 0;
-    uint32_t acc = 0;
-    int bits = 0;
-
-    while (i < len) {
-        int8_t v = _sfte_b64_table[src[i++]];
-        if (v == -1) continue;
-
-        acc = (acc << 6) | v;
-        bits += 6;
-        if (bits >= 8) {
-            bits -= 8;
-            dst[j++] = (acc >> bits);
-        }
-    }
-
-    *out_len = j;
-    return dst;
-}
-#endif  // SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
-        // =================================================================================================
-        // >>parser
-        // =================================================================================================
 typedef enum {
     VT_GROUND,     // normal
     VT_ESCAPE,     // \033
@@ -4306,13 +4456,19 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
     case VT_DCS:
         if (b == '\x07' || b == '\x1b') {
             const char *term = (b == '\x1b') ? "\033\\" : "\x07";
+            ctx->term.osc_payload[ctx->term.osc_len] = '\0';
 
-            if (strncmp(ctx->term.osc_payload, "+q", 2) == 0) {
-                char reply[128];
-                int len = snprintf(reply, sizeof(reply), "\033P0+r%s%s", ctx->term.osc_payload + 2,
-                                   term);
-                ctx->write_cb(ctx->user_data, reply, len);
-            }
+#if SFTE_KITTY_GRAPHICS
+            if (ctx->term.osc_payload[0] == 'G')
+                _sfte_kitty_parse_graphics(ctx, ctx->term.osc_payload + 1);
+            else
+#endif  // SFTE_KITTY_GRAPHICS
+                if (strncmp(ctx->term.osc_payload, "+q", 2) == 0) {
+                    char reply[128];
+                    int len = snprintf(reply, sizeof(reply), "\033P0+r%s%s",
+                                       ctx->term.osc_payload + 2, term);
+                    ctx->write_cb(ctx->user_data, reply, len);
+                }
 
             ctx->term.vt_state = (b == '\x1b') ? VT_ESCAPE : VT_GROUND;
         }
@@ -4381,12 +4537,12 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
                     ctx->term.img_pool_cap = ctx->term.img_pool_cap == 0
                                                  ? 16
                                                  : ctx->term.img_pool_cap * 2;
-                    ctx->term.img_pool = (sfte_sixel_img *)SFTE_REALLOC(
-                        ctx->term.img_pool, ctx->term.img_pool_cap * sizeof(sfte_sixel_img));
+                    ctx->term.img_pool = (sfte_img *)SFTE_REALLOC(
+                        ctx->term.img_pool, ctx->term.img_pool_cap * sizeof(sfte_img));
                 }
 
                 // add to image pool
-                ctx->term.img_pool[ctx->term.img_pool_len++] = (sfte_sixel_img){
+                ctx->term.img_pool[ctx->term.img_pool_len++] = (sfte_img){
                     .id = id,
                     .width = ctx->sixel.width,
                     .height = ctx->sixel.height,
@@ -4398,14 +4554,13 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
                     ctx->term.img_placements_cap = ctx->term.img_placements_cap == 0
                                                        ? 32
                                                        : ctx->term.img_placements_cap * 2;
-                    ctx->term.img_placements = (sfte_sixel_img_placement *)SFTE_REALLOC(
+                    ctx->term.img_placements = (sfte_img_placement *)SFTE_REALLOC(
                         ctx->term.img_placements,
-                        ctx->term.img_placements_cap * sizeof(sfte_sixel_img_placement));
+                        ctx->term.img_placements_cap * sizeof(sfte_img_placement));
                 }
 
                 // add to placement pool
-                ctx->term
-                    .img_placements[ctx->term.img_placements_len++] = (sfte_sixel_img_placement){
+                ctx->term.img_placements[ctx->term.img_placements_len++] = (sfte_img_placement){
                     .img_id = id,
                     .start_col = ctx->sixel.start_col,
                     .start_row = ctx->sixel.start_row,
@@ -4463,7 +4618,6 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
 
 // =================================================================================================
 //  PUBLIC IMPLEMENTATION
-//  =========================================================================
 // =================================================================================================
 
 // =================================================================================================
@@ -4585,9 +4739,9 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
         if (ctx->term.cells[i].dirty == 2) ctx->term.cells[i].dirty = 1;
 #endif  // SFTE_FONT_BLEED
 
-#if SFTE_SIXEL
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
     for (uint32_t i = 1; i < ctx->term.img_placements_len; ++i) {
-        sfte_sixel_img_placement key = ctx->term.img_placements[i];
+        sfte_img_placement key = ctx->term.img_placements[i];
         int j = i - 1;
         while (j >= 0 && ctx->term.img_placements[j].z_idx > key.z_idx) {
             ctx->term.img_placements[j + 1] = ctx->term.img_placements[j];
@@ -4603,11 +4757,11 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
 
 #define SFTE_RENDER_IMG_PASS(is_bg_pass)                                                           \
     for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {                                  \
-        sfte_sixel_img_placement *p = &ctx->term.img_placements[i];                                \
+        sfte_img_placement *p = &ctx->term.img_placements[i];                                      \
         int is_bg_img = (p->z_idx < 0);                                                            \
         if (is_bg_img != (is_bg_pass)) continue;                                                   \
                                                                                                    \
-        sfte_sixel_img *img = NULL;                                                                \
+        sfte_img *img = NULL;                                                                      \
         for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j) {                                    \
             if (ctx->term.img_pool[j].id == p->img_id) {                                           \
                 img = &ctx->term.img_pool[j];                                                      \
@@ -4642,7 +4796,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
             }                                                                                      \
         }                                                                                          \
     }
-#endif  // SFTE_SIXEL
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 
     for (int r = 0; r < ctx->term.rows; ++r) {
         for (int c = 0; c < ctx->term.cols; ++c) {
@@ -4689,9 +4843,9 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
         }
     }
 
-#if SFTE_SIXEL
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
     SFTE_RENDER_IMG_PASS(1);
-#endif  // SFTE_SIXEL
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 
     for (int r = 0; r < ctx->term.rows; ++r) {
         for (int c = 0; c < ctx->term.cols; ++c) {
@@ -4860,10 +5014,10 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
         ctx->term.trail_damage_w = 0;
 #endif  // SFTE_CURSOR_TRAIL
 
-#if SFTE_SIXEL
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
     SFTE_RENDER_IMG_PASS(0);
 #undef SFTE_RENDER_IMG_PASS
-#endif  // SFTE_SIXEL
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 
     if (dmg_x0 < dmg_x1 && dmg_y0 < dmg_y1) {
         dmg_x0 = _SFTE_CLAMP(dmg_x0, 0, w);
@@ -5080,14 +5234,21 @@ void sfte_free(sfte_ctx *ctx) {
         SFTE_FREE(ctx->term.link_pool);
     }
 #endif  // SFTE_HYPERLINKS
+
 #if SFTE_SIXEL
+    if (ctx->sixel.pxs) SFTE_FREE(ctx->sixel.pxs);
+#endif  // SFTE_SIXEL
+#if SFTE_KITTY_GRAPHICS
+    if (ctx->kitty.b64_buf) SFTE_FREE(ctx->kitty.b64_buf);
+#endif  // SFTE_KITTY_GRAPHICS
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
     if (ctx->term.img_pool) {
         for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i)
             if (ctx->term.img_pool[i].pxs) SFTE_FREE(ctx->term.img_pool[i].pxs);
         SFTE_FREE(ctx->term.img_pool);
     }
     if (ctx->term.img_placements) SFTE_FREE(ctx->term.img_placements);
-#endif  // SFTE_SIXEL
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 
     SFTE_FREE(ctx);
 }
