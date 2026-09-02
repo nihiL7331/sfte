@@ -696,6 +696,7 @@ typedef struct {
     int format;
     int width;
     int height;
+    char t_medium;
 } sfte_kitty_state;
 #endif  // SFTE_KITTY_GRAPHICS
 
@@ -1159,6 +1160,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         ctx->kitty.format = 32 /* RGBA */;
         ctx->kitty.width = 0;
         ctx->kitty.height = 0;
+        ctx->kitty.t_medium = 'd';
     }
 
     // parse params into state
@@ -1176,6 +1178,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         case 's': ctx->kitty.width = atoi(val); break;
         case 'v': ctx->kitty.height = atoi(val); break;
         case 'm': more = atoi(val); break;
+        case 't': ctx->kitty.t_medium = val[0]; break;
         default: break;
         }
 
@@ -1213,9 +1216,19 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
             int h = ctx->kitty.height;
             uint32_t *pxs = NULL;
 
+            int is_file = (ctx->kitty.t_medium == 'f' || ctx->kitty.t_medium == 't');
+            char *file_path = NULL;
+            if (is_file) {
+                file_path = (char *)SFTE_MALLOC(raw_len + 1);
+                memcpy(file_path, raw_data, raw_len);
+                file_path[raw_len] = '\0';
+            }
+
             if (ctx->kitty.format == 100 /* PNG / JPEG */) {
                 int channels = 0;
-                uint8_t *stb_pxs = stbi_load_from_memory(raw_data, raw_len, &w, &h, &channels, 4);
+                uint8_t *stb_pxs = is_file ? stbi_load(file_path, &w, &h, &channels, 4)
+                                           : stbi_load_from_memory(raw_data, raw_len, &w, &h,
+                                                                   &channels, 4);
 
                 if (stb_pxs && w && h) {
                     pxs = (uint32_t *)SFTE_MALLOC(w * h * sizeof(uint32_t));
@@ -1231,18 +1244,38 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
             } else if ((ctx->kitty.format == 24 /* RGB */ || ctx->kitty.format == 32 /* RGBA */) &&
                        w > 0 && h > 0) {
                 int bpp = (ctx->kitty.format == 24) ? 3 : 4;
+                uint8_t *pixel_src = raw_data;
+                size_t pixel_len = raw_len;
 
-                if (raw_len >= (size_t)(w * h * bpp)) {
+                if (is_file) {
+                    FILE *f = fopen(file_path, "rb");
+                    if (f) {
+                        fseek(f, 0, SEEK_END);
+                        pixel_len = ftell(f);
+                        fseek(f, 0, SEEK_SET);
+                        pixel_src = (uint8_t *)SFTE_MALLOC(pixel_len);
+                        fread(pixel_src, 1, pixel_len, f);
+                        fclose(f);
+                    } else
+                        pixel_src = NULL;
+                }
+
+                if (pixel_src && raw_len >= (size_t)(w * h * bpp)) {
                     pxs = (uint32_t *)SFTE_MALLOC(w * h * sizeof(uint32_t));
                     for (int i = 0; i < w * h; ++i) {
-                        uint8_t r = raw_data[i * bpp + 0];
-                        uint8_t g = raw_data[i * bpp + 1];
-                        uint8_t b = raw_data[i * bpp + 2];
-                        uint8_t a = (bpp == 4) ? raw_data[i * bpp + 3] : 255;
+                        uint8_t r = pixel_src[i * bpp + 0];
+                        uint8_t g = pixel_src[i * bpp + 1];
+                        uint8_t b = pixel_src[i * bpp + 2];
+                        uint8_t a = (bpp == 4) ? pixel_src[i * bpp + 3] : 255;
                         pxs[i] = (a << 24) | (r << 16) | (g << 8) | b;
                     }
                 }
+                if (is_file && pixel_src) SFTE_FREE(pixel_src);
             }
+
+            // if t=t, term should delete the temp file
+            if (ctx->kitty.t_medium == 't' && is_file) remove(file_path);
+            if (is_file) SFTE_FREE(file_path);
 
             if (pxs) {
                 if (ctx->kitty.id == 0) ctx->kitty.id = ++ctx->term.next_img_id;
@@ -1283,13 +1316,6 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
                         if (c >= ctx->term.cols) break;
                         ctx->term.cells[_SFTE_IDX(ctx, c, r)].dirty = 1;
                     }
-                }
-
-                ctx->term.cursor_y += img_rows;
-                ctx->term.cursor_x = 0;
-                while (ctx->term.cursor_y > ctx->term.scroll_bottom) {
-                    _sfte_grid_scroll(ctx, 1);
-                    ctx->term.cursor_y--;
                 }
             }
             SFTE_FREE(raw_data);
