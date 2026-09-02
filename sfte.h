@@ -697,6 +697,7 @@ typedef struct {
     int width;
     int height;
     char t_medium;
+    char d_action;
 } sfte_kitty_state;
 #endif  // SFTE_KITTY_GRAPHICS
 
@@ -1162,6 +1163,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         ctx->kitty.width = 0;
         ctx->kitty.height = 0;
         ctx->kitty.t_medium = 'd';
+        ctx->kitty.d_action = 0;
     }
 
     // parse params into state
@@ -1180,6 +1182,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         case 'v': ctx->kitty.height = atoi(val); break;
         case 'm': more = atoi(val); break;
         case 't': ctx->kitty.t_medium = val[0]; break;
+        case 'd': ctx->kitty.d_action = val[0]; break;
         default: break;
         }
 
@@ -1209,6 +1212,46 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         char reply[64];
         int len = snprintf(reply, sizeof(reply), "\033_Gi=%u;OK\033\\", ctx->kitty.id);
         if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
+    } else if (ctx->kitty.action == 'd') {
+        for (uint32_t j = 0; j < ctx->term.img_placements_len;) {
+            sfte_img_placement *p = &ctx->term.img_placements[j];
+
+            int should_del = 0;
+            if (ctx->kitty.d_action == 'A' || ctx->kitty.d_action == 'a')
+                should_del = 1;  // delete all
+            else if ((ctx->kitty.d_action == 'I' || ctx->kitty.d_action == 'i') &&
+                     p->img_id == ctx->kitty.id)
+                should_del = 1;  // delete specific id
+
+            if (should_del) {
+                // find image to get its dims for dirtying
+                sfte_img *img = NULL;
+                for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i)
+                    if (ctx->term.img_pool[i].id == p->img_id) {
+                        img = &ctx->term.img_pool[i];
+                        break;
+                    }
+
+                if (img) {
+                    int img_rows = (img->height / ctx->font.cell_height) + 1;
+                    int img_cols = (img->width / ctx->font.cell_width) + 1;
+
+                    for (int r = p->start_row; r < p->start_row + img_rows; ++r) {
+                        if (r >= ctx->term.rows || r < 0) continue;
+
+                        for (int c = p->start_col; c < p->start_col + img_cols; ++c) {
+                            if (c >= ctx->term.cols || c < 0) continue;
+
+                            ctx->term.cells[_SFTE_IDX(ctx, c, r)].dirty = 1;
+                        }
+                    }
+                }
+
+                ctx->term.img_placements[j] = ctx->term
+                                                  .img_placements[--ctx->term.img_placements_len];
+            } else
+                j++;
+        }
     } else if (ctx->kitty.action == 'T') {
         size_t raw_len = 0;
         uint8_t *raw_data = _sfte_b64_decode((uint8_t *)ctx->kitty.b64_buf, ctx->kitty.b64_len,
