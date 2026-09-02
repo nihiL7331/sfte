@@ -406,9 +406,11 @@ typedef enum sfte_key {
 // callback interface for the core to talk back to the host (e.g. pty)
 typedef void (*sfte_write_cb)(void *user_data, const char *data, size_t len);
 
+#if SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
 // callback interface for the core to request clipboard copy/paste operations
 // `target` is typically 'c' (clipboard) or 'p' (primary selection).
-typedef void (*sfte_clipboard_cb)(void *user_data, char target, const char *data);
+typedef void (*sfte_osc52_clipboard_cb)(void *user_data, char target, const char *data);
+#endif  // SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
 
 // context initialization
 sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data);
@@ -762,8 +764,8 @@ struct sfte_ctx {
 
     sfte_write_cb write_cb;
     void (*bell_cb)(void *user_data);
-#if SFTE_OSC52_CLIPBOARD
-    sfte_clipboard_cb clipboard_cb;
+#if SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
+    sfte_osc52_clipboard_cb osc52_clipboard_cb;
 #endif  // SFTE_OSC52_CLIPBOARD
     void *user_data;
 
@@ -2280,7 +2282,8 @@ static void _sfte_wayland_unload(sfte_wayland_app *app) {
 
 #if SFTE_CLIPBOARD
 #if SFTE_SELECTION
-static void _sfte_wayland_osc_clipboard_cb(void *user_data, char target, const char *data) {
+#if SFTE_OSC52_CLIPBOARD
+static void _sfte_wayland_osc52_clipboard_cb(void *user_data, char target, const char *data) {
     (void)target;  // TODO: wl primary selection protocol
     if (target != 'c') return;
     sfte_wayland_app *app = (sfte_wayland_app *)user_data;
@@ -2307,6 +2310,7 @@ static void _sfte_wayland_osc_clipboard_cb(void *user_data, char target, const c
 
     wl_data_device_set_selection(app->data_device, app->data_source, app->serial);
 }
+#endif  // SFTE_OSC52_CLIPBOARD
 
 static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
@@ -3842,7 +3846,7 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
 // =================================================================================================
 // >>b64
 // =================================================================================================
-#if SFTE_OSC52_CLIPBOARD
+#if SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
 static const int8_t _sfte_b64_table[256] = {
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63,
@@ -3884,7 +3888,7 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
     *out_len = j;
     return dst;
 }
-#endif  // SFTE_OSC52_CLIPBOARD
+#endif  // SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
 // =================================================================================================
 // >>parser
 // =================================================================================================
@@ -4058,7 +4062,8 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
                             memcpy(data, raw_data, raw_len);
                             data[raw_len] = '\0';
 
-                            if (ctx->clipboard_cb) ctx->clipboard_cb(ctx->user_data, target, data);
+                            if (ctx->osc52_clipboard_cb)
+                                ctx->osc52_clipboard_cb(ctx->user_data, target, data);
 
                             SFTE_FREE(data);
                             SFTE_FREE(raw_data);
@@ -5086,9 +5091,9 @@ sfte_wayland_app *sfte_wayland_init(void) {
     app->running = 1;
     app->ctx = sfte_init(_sfte_wayland_write_cb, app);
 
-#if SFTE_CLIPBOARD
-    app->ctx->clipboard_cb = _sfte_wayland_osc_clipboard_cb;
-#endif  // SFTE_CLIPBOARD
+#if SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
+    app->ctx->osc52_clipboard_cb = _sfte_wayland_osc52_clipboard_cb;
+#endif  // SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
 
     _sfte_wayland_pty_spawn(app);
     _sfte_wayland_load(app);
