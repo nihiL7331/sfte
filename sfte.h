@@ -4341,8 +4341,16 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
                 ctx->sixel.cap_w = 0;
                 ctx->sixel.cap_h = 0;
                 break;  // skip adding q to payload
-            } else if (ctx->term.osc_len < (int)sizeof(ctx->term.osc_payload) - 1)
-                ctx->term.osc_payload[ctx->term.osc_len++] = b;
+            } else {
+                if (ctx->term.osc_len + 1 >= ctx->term.osc_cap &&
+                    ctx->term.osc_cap < SFTE_OSC_MAX_CAP) {
+                    ctx->term.osc_cap *= 2;
+                    ctx->term.osc_payload = (char *)SFTE_REALLOC(ctx->term.osc_payload,
+                                                                 ctx->term.osc_cap);
+                }
+                if (ctx->term.osc_len + 1 < ctx->term.osc_cap)
+                    ctx->term.osc_payload[ctx->term.osc_len++] = b;
+            }
         }
 #endif  // SFTE_SIXEL
         else {
