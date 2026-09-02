@@ -689,6 +689,13 @@ typedef struct {
     char *b64_buf;
     size_t b64_len;
     size_t b64_cap;
+
+    int action;
+    uint32_t id;
+    int z_idx;
+    int format;
+    int width;
+    int height;
 } sfte_kitty_state;
 #endif  // SFTE_KITTY_GRAPHICS
 
@@ -1130,22 +1137,45 @@ static void _sfte_grid_scroll(sfte_ctx *ctx, int lines);
 static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
     const char *semi = strchr(payload, ';');
     if (!semi) return;
-    int action = 'T';  // default to transmit and display
-    uint32_t id = 0;
-    int z_idx = 0;
+
     int more = 0;
 
+    // lookahead to check if its a new transmission
+    int is_new = 0;
+    for (const char *p = payload; p < semi; ++p) {
+        if (*p == 'a' || *p == 'f' || *p == 'i' || *p == 's' || *p == 'v' || *p == 'z')
+            if (p + 1 < semi && p[1] == '=') {
+                is_new = 1;
+                break;
+            }
+    }
+
+    // reset state if fresh
+    if (is_new || ctx->kitty.action == 0) {
+        ctx->kitty.b64_len = 0;
+        ctx->kitty.action = 'T';
+        ctx->kitty.id = 0;
+        ctx->kitty.z_idx = 0;
+        ctx->kitty.format = 32 /* RGBA */;
+        ctx->kitty.width = 0;
+        ctx->kitty.height = 0;
+    }
+
+    // parse params into state
     const char *p = payload;
     while (p && p < semi) {
         char key = p[0];
         if (p[1] != '=') break;
+        const char *val = p + 2;
 
-        const char *val_ptr = p + 2;
         switch (key) {
-        case 'a': action = val_ptr[0]; break;
-        case 'i': id = atoi(val_ptr); break;
-        case 'm': more = atoi(val_ptr); break;
-        case 'z': z_idx = atoi(val_ptr); break;
+        case 'a': ctx->kitty.action = val[0]; break;
+        case 'i': ctx->kitty.id = (uint32_t)atoi(val); break;
+        case 'z': ctx->kitty.z_idx = atoi(val); break;
+        case 'f': ctx->kitty.format = atoi(val); break;
+        case 's': ctx->kitty.width = atoi(val); break;
+        case 'v': ctx->kitty.height = atoi(val); break;
+        case 'm': more = atoi(val); break;
         default: break;
         }
 
@@ -1169,27 +1199,49 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
 
     ctx->kitty.b64_buf[ctx->kitty.b64_len] = '\0';
 
-    if (action == 'T') {
+    if (ctx->kitty.action == 'T') {
         size_t raw_len = 0;
         uint8_t *raw_data = _sfte_b64_decode((uint8_t *)ctx->kitty.b64_buf, ctx->kitty.b64_len,
                                              &raw_len);
 
         if (raw_data) {
-            int w = 0, h = 0, channels = 0;
-            uint8_t *stb_pxs = stbi_load_from_memory(raw_data, raw_len, &w, &h, &channels, 4);
+            int w = ctx->kitty.width;
+            int h = ctx->kitty.height;
+            uint32_t *pxs = NULL;
 
-            if (stb_pxs && w && h) {
-                uint32_t *pxs = (uint32_t *)SFTE_MALLOC(w * h * sizeof(uint32_t));
-                for (int i = 0; i < w * h; ++i) {
-                    uint8_t r = stb_pxs[i * 4 + 0];
-                    uint8_t g = stb_pxs[i * 4 + 1];
-                    uint8_t b = stb_pxs[i * 4 + 2];
-                    uint8_t a = stb_pxs[i * 4 + 3];
-                    pxs[i] = (a << 24) | (r << 16) | (g << 8) | b;
+            if (ctx->kitty.format == 100 /* PNG / JPEG */) {
+                int channels = 0;
+                uint8_t *stb_pxs = stbi_load_from_memory(raw_data, raw_len, &w, &h, &channels, 4);
+
+                if (stb_pxs && w && h) {
+                    pxs = (uint32_t *)SFTE_MALLOC(w * h * sizeof(uint32_t));
+                    for (int i = 0; i < w * h; ++i) {
+                        uint8_t r = stb_pxs[i * 4 + 0];
+                        uint8_t g = stb_pxs[i * 4 + 1];
+                        uint8_t b = stb_pxs[i * 4 + 2];
+                        uint8_t a = stb_pxs[i * 4 + 3];
+                        pxs[i] = (a << 24) | (r << 16) | (g << 8) | b;
+                    }
+                    stbi_image_free(stb_pxs);
                 }
-                stbi_image_free(stb_pxs);
+            } else if ((ctx->kitty.format == 24 /* RGB */ || ctx->kitty.format == 32 /* RGBA */) &&
+                       w > 0 && h > 0) {
+                int bpp = (ctx->kitty.format == 24) ? 3 : 4;
 
-                if (id == 0) id = ++ctx->term.next_img_id;
+                if (raw_len >= (size_t)(w * h * bpp)) {
+                    pxs = (uint32_t *)SFTE_MALLOC(w * h * sizeof(uint32_t));
+                    for (int i = 0; i < w * h; ++i) {
+                        uint8_t r = raw_data[i * bpp + 0];
+                        uint8_t g = raw_data[i * bpp + 1];
+                        uint8_t b = raw_data[i * bpp + 2];
+                        uint8_t a = (bpp == 4) ? raw_data[i * bpp + 3] : 255;
+                        pxs[i] = (a << 24) | (r << 16) | (g << 8) | b;
+                    }
+                }
+            }
+
+            if (pxs) {
+                if (ctx->kitty.id == 0) ctx->kitty.id = ++ctx->term.next_img_id;
 
                 // write to shared object pool
                 if (ctx->term.img_pool_len >= ctx->term.img_pool_cap) {
@@ -1200,7 +1252,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
                         ctx->term.img_pool, ctx->term.img_pool_cap * sizeof(sfte_img));
                 }
                 ctx->term.img_pool[ctx->term.img_pool_len++] = (sfte_img){
-                    .id = id, .width = w, .height = h, .pxs = pxs, .ref_cnt = 1};
+                    .id = ctx->kitty.id, .width = w, .height = h, .pxs = pxs, .ref_cnt = 1};
 
                 // write to shared placement pool
                 if (ctx->term.img_placements_len >= ctx->term.img_placements_cap) {
@@ -1212,10 +1264,10 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
                         ctx->term.img_placements_cap * sizeof(sfte_img_placement));
                 }
                 ctx->term.img_placements[ctx->term.img_placements_len++] = (sfte_img_placement){
-                    .img_id = id,
+                    .img_id = ctx->kitty.id,
                     .start_col = ctx->term.cursor_x,
                     .start_row = ctx->term.cursor_y,
-                    .z_idx = z_idx};
+                    .z_idx = ctx->kitty.z_idx};
 
                 int img_rows = (h / ctx->font.cell_height) + 1;
                 int img_cols = (w / ctx->font.cell_width) + 1;
@@ -1239,9 +1291,9 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
             SFTE_FREE(raw_data);
         }
     }
-
     ctx->kitty.b64_len = 0;
 }
+
 #endif  // SFTE_KITTY_GRAPHICS
 // =================================================================================================
 // >>font
