@@ -252,6 +252,18 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #define SFTE_MOUSE 1
 #endif  // SFTE_MOUSE
 
+#ifndef SFTE_HYPERLINKS
+#define SFTE_HYPERLINKS 1
+#endif  // SFTE_HYPERLINKS
+
+#ifndef SFTE_HYPERLINKS_INIT_CAP
+#define SFTE_HYPERLINKS_INIT_CAP 128
+#endif  // SFTE_HYPERLINKS_POOL_INIT_CAP
+
+#ifndef SFTE_HYPERLINKS_MAX_CAP
+#define SFTE_HYPERLINKS_MAX_CAP 65535
+#endif  // SFTE_HYPERLINKS_MAX_CAP
+
 #ifndef SFTE_SIXEL
 #define SFTE_SIXEL 1
 #endif  // SFTE_SIXEL
@@ -406,9 +418,16 @@ typedef enum sfte_key {
 // callback interface for the core to talk back to the host (e.g. pty)
 typedef void (*sfte_write_cb)(void *user_data, const char *data, size_t len);
 
+#if SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
 // callback interface for the core to request clipboard copy/paste operations
 // `target` is typically 'c' (clipboard) or 'p' (primary selection).
-typedef void (*sfte_clipboard_cb)(void *user_data, char target, const char *data);
+typedef void (*sfte_osc52_clipboard_cb)(void *user_data, char target, const char *data);
+#endif  // SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
+
+#if SFTE_HYPERLINKS
+// callback interface for the core to request opening a URI
+typedef void (*sfte_open_link_cb)(void *user_data, const char *uri);
+#endif  // SFTE_HYPERLINKS
 
 // context initialization
 sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data);
@@ -477,6 +496,11 @@ int sfte_kitty_kb_encode(sfte_ctx *ctx, sfte_key key, uint32_t codepoint, uint32
                          char *out_buf, size_t max_bytes);
 #endif  // SFTE_KITTY_KB
 
+#if SFTE_HYPERLINKS
+// returns the URL at the given cell coords, or NULL if no link is present
+const char *sfte_get_link_at(sfte_ctx *ctx, int col, int row);
+#endif  // SFTE_HYPERLINKS
+
 #if SFTE_SELECTION
 // copies the UTF-8 selection into out_buf, up to max_bytes.
 // if out_buf is NULL, performs a dry-run and returns the required byte size.
@@ -525,6 +549,7 @@ int sfte_wayland_run(sfte_wayland_app *app);
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/timerfd.h>
+#include <sys/wait.h>
 #include <unistd.h>  // exec/fork/env
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <xkbcommon/xkbcommon-names.h>
@@ -571,6 +596,9 @@ typedef struct {
     uint32_t fg;
     uint32_t bg;
     uint16_t attr;  // bitmask of sfte_attr
+#if SFTE_HYPERLINKS
+    uint16_t link_idx;  // 0=no link, >0=idxs to `term.link_pool`
+#endif                  // SFTE_HYPERLINKS
 #if SFTE_EXT_UNDERLINES
     uint8_t ul_style;  // 1=straight, 2=double, 3=curl, 4=dotted, 5=dashed
 #endif                 // SFTE_EXT_UNDERLINES
@@ -682,6 +710,13 @@ typedef struct {
     // utf-8 state
     uint32_t utf8_rune;
     int utf8_bytes_left;
+// hyperlink state
+#if SFTE_HYPERLINKS
+    char **link_pool;        // dynamic arr of URI strs
+    uint16_t link_pool_len;  // # of stored links
+    uint16_t link_pool_cap;  // allocated cap
+    uint16_t cur_link_idx;   // active OSC8 link for new txt
+#endif                       // SFTE_HYPERLINKS
 } sfte_term;
 
 typedef struct {
@@ -762,9 +797,12 @@ struct sfte_ctx {
 
     sfte_write_cb write_cb;
     void (*bell_cb)(void *user_data);
-#if SFTE_OSC52_CLIPBOARD
-    sfte_clipboard_cb clipboard_cb;
+#if SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
+    sfte_osc52_clipboard_cb osc52_clipboard_cb;
 #endif  // SFTE_OSC52_CLIPBOARD
+#if SFTE_HYPERLINKS
+    sfte_open_link_cb open_link_cb;
+#endif  // SFTE_HYPERLINKS
     void *user_data;
 
     int damage_min_x;
@@ -1887,6 +1925,20 @@ static const struct wl_pointer_listener _sfte_wayland_pointer_listener = {
 };
 #endif  // SFTE_SELECTION
 
+#if SFTE_HYPERLINKS
+static void _sfte_wayland_open_link_cb(void *user_data, const char *uri) {
+    (void)user_data;
+    if (!uri) return;
+
+    if (fork() == 0) {
+        freopen("/dev/null", "w", stdout);
+        freopen("/dev/null", "w", stderr);
+        execlp("xdg-open", "xdg-open", uri, NULL);
+        exit(1);
+    }
+}
+#endif  // SFTE_HYPERLINKS
+
 static void _sfte_wayland_keyboard_keymap(void *data, struct wl_keyboard *keyboard, uint32_t format,
                                           int32_t fd, uint32_t size) {
     (void)keyboard;
@@ -2280,7 +2332,8 @@ static void _sfte_wayland_unload(sfte_wayland_app *app) {
 
 #if SFTE_CLIPBOARD
 #if SFTE_SELECTION
-static void _sfte_wayland_osc_clipboard_cb(void *user_data, char target, const char *data) {
+#if SFTE_OSC52_CLIPBOARD
+static void _sfte_wayland_osc52_clipboard_cb(void *user_data, char target, const char *data) {
     (void)target;  // TODO: wl primary selection protocol
     if (target != 'c') return;
     sfte_wayland_app *app = (sfte_wayland_app *)user_data;
@@ -2307,6 +2360,7 @@ static void _sfte_wayland_osc_clipboard_cb(void *user_data, char target, const c
 
     wl_data_device_set_selection(app->data_device, app->data_source, app->serial);
 }
+#endif  // SFTE_OSC52_CLIPBOARD
 
 static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
@@ -3563,6 +3617,9 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
 #if SFTE_EXT_UNDERLINES
         ctx->term.cur_ul_style = 0;
 #endif  // SFTE_EXT_UNDERLINES
+#if SFTE_HYPERLINKS
+        ctx->term.cur_link_idx = 0;
+#endif  // SFTE_HYPERLINKS
         ctx->term.scroll_top = 0;
         ctx->term.scroll_bottom = ctx->term.rows - 1;
         ctx->term.cur_fg = 0xFFFFFF;
@@ -3792,6 +3849,9 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
             ctx->term.cells[idx].fg = 0xFFFFFF;
             ctx->term.cells[idx].bg = SFTE_BG_COLOR;
             ctx->term.cells[idx].attr = 0;
+#if SFTE_HYPERLINKS
+            ctx->term.cells[idx].link_idx = ctx->term.cur_link_idx;
+#endif  // SFTE_HYPERLINKS
             ctx->term.cells[idx].dirty = 1;
             ctx->term.cursor_x++;
             _sfte_grid_check_wrap(ctx);
@@ -3804,6 +3864,9 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
         ctx->term.cells[idx].fg = ctx->term.cur_fg;
         ctx->term.cells[idx].bg = ctx->term.cur_bg;
         ctx->term.cells[idx].attr = ctx->term.cur_attr | ATTR_WIDE;
+#if SFTE_HYPERLINKS
+        ctx->term.cells[idx].link_idx = ctx->term.cur_link_idx;
+#endif  // SFTE_HYPERLINKS
 #if SFTE_EXT_UNDERLINES
         ctx->term.cells[idx].ul_style = ctx->term.cur_ul_style;
 #endif  // SFTE_EXT_UNDERLINES
@@ -3817,6 +3880,9 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
         ctx->term.cells[dummy_idx].fg = ctx->term.cur_fg;
         ctx->term.cells[dummy_idx].bg = ctx->term.cur_bg;
         ctx->term.cells[dummy_idx].attr = ctx->term.cur_attr | ATTR_DUMMY;
+#if SFTE_HYPERLINKS
+        ctx->term.cells[dummy_idx].link_idx = ctx->term.cur_link_idx;
+#endif  // SFTE_HYPERLINKS
         ctx->term.cells[dummy_idx].dirty = 1;
 
         ctx->term.cursor_x += 2;
@@ -3828,6 +3894,9 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
         ctx->term.cells[idx].fg = ctx->term.cur_fg;
         ctx->term.cells[idx].bg = ctx->term.cur_bg;
         ctx->term.cells[idx].attr = ctx->term.cur_attr;
+#if SFTE_HYPERLINKS
+        ctx->term.cells[idx].link_idx = ctx->term.cur_link_idx;
+#endif  // SFTE_HYPERLINKS
 #if SFTE_EXT_UNDERLINES
         ctx->term.cells[idx].ul_style = ctx->term.cur_ul_style;
 #endif  // SFTE_EXT_UNDERLINES
@@ -3842,7 +3911,7 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
 // =================================================================================================
 // >>b64
 // =================================================================================================
-#if SFTE_OSC52_CLIPBOARD
+#if SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
 static const int8_t _sfte_b64_table[256] = {
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63,
@@ -3884,7 +3953,7 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
     *out_len = j;
     return dst;
 }
-#endif  // SFTE_OSC52_CLIPBOARD
+#endif  // SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
 // =================================================================================================
 // >>parser
 // =================================================================================================
@@ -4024,6 +4093,8 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
         if (b == '\x07' || b == '\x1b') {
             const char *term = (b == '\x1b') ? "\033\\" : "\x07";
 
+            ctx->term.osc_payload[ctx->term.osc_len] = '\0';
+
             if (strncmp(ctx->term.osc_payload, "10;?", 4) == 0 ||
                 strncmp(ctx->term.osc_payload, "11;?", 4) == 0) {
                 int is_bg = ctx->term.osc_payload[1] == '1';
@@ -4058,7 +4129,8 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
                             memcpy(data, raw_data, raw_len);
                             data[raw_len] = '\0';
 
-                            if (ctx->clipboard_cb) ctx->clipboard_cb(ctx->user_data, target, data);
+                            if (ctx->osc52_clipboard_cb)
+                                ctx->osc52_clipboard_cb(ctx->user_data, target, data);
 
                             SFTE_FREE(data);
                             SFTE_FREE(raw_data);
@@ -4067,6 +4139,45 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
                 }
             }
 #endif  // SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
+#if SFTE_HYPERLINKS
+            else if (strncmp(ctx->term.osc_payload, "8;", 2) == 0) {  // hyperlink
+                char *p = ctx->term.osc_payload + 2;
+                while (*p && *p != ';') p++;
+
+                if (*p == ';') {
+                    p++;
+                    if (*p == '\0')  // empty URI means close the link
+                        ctx->term.cur_link_idx = 0;
+                    else {  // check if URI is already in pool
+                        uint16_t found_idx = 0;
+                        for (uint16_t i = 1; i < ctx->term.link_pool_len; ++i) {
+                            if (strcmp(ctx->term.link_pool[i], p) == 0) {
+                                found_idx = i;
+                                break;
+                            }
+                        }
+
+                        // add new URI if not found
+                        if (found_idx == 0 && ctx->term.link_pool_len < SFTE_HYPERLINKS_MAX_CAP) {
+                            if (ctx->term.link_pool_len >= ctx->term.link_pool_cap) {
+                                ctx->term.link_pool_cap *= 2;
+                                ctx->term.link_pool = (char **)SFTE_REALLOC(
+                                    ctx->term.link_pool, ctx->term.link_pool_cap * sizeof(char *));
+                            }
+
+                            size_t ulen = strlen(p);
+                            char *uri = (char *)SFTE_MALLOC(ulen + 1);
+                            memcpy(uri, p, ulen + 1);
+
+                            found_idx = ctx->term.link_pool_len++;
+                            ctx->term.link_pool[found_idx] = uri;
+                        }
+
+                        ctx->term.cur_link_idx = found_idx;
+                    }
+                }
+            }
+#endif  // SFTE_HYPERLINKS
             else
                 _SFTE_WARN(ctx, UNHANDLED_OSC, ctx->term.osc_payload);
 
@@ -4675,6 +4786,13 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
     ctx->term.osc_payload = (char *)SFTE_MALLOC(ctx->term.osc_cap);
     ctx->term.osc_len = 0;
 
+#if SFTE_HYPERLINKS
+    ctx->term.link_pool_cap = SFTE_HYPERLINKS_INIT_CAP;
+    ctx->term.link_pool = (char **)SFTE_CALLOC(ctx->term.link_pool_cap, sizeof(char *));
+    ctx->term.link_pool_len = 1;  // idx 0 is reserved for no link
+    ctx->term.cur_link_idx = 0;
+#endif  // SFTE_HYPERLINKS
+
     ctx->term.cells = (sfte_cell *)SFTE_MALLOC(ctx->term.cols * ctx->term.rows * sizeof(sfte_cell));
     SFTE_ASSERT(ctx->term.cells, "failed to allocate term grid");
     memset(ctx->term.cells, 0, ctx->term.cols * ctx->term.rows * sizeof(sfte_cell));
@@ -4716,6 +4834,12 @@ void sfte_free(sfte_ctx *ctx) {
 #if SFTE_SCROLLBACK_CAP
     SFTE_FREE(ctx->term.scrollback);
 #endif  // SFTE_SCROLLBACK_CAP
+#if SFTE_HYPERLINKS
+    if (ctx->term.link_pool) {
+        for (uint16_t i = 0; i < ctx->term.link_pool_len; ++i) SFTE_FREE(ctx->term.link_pool[i]);
+        SFTE_FREE(ctx->term.link_pool);
+    }
+#endif  // SFTE_HYPERLINKS
 
     SFTE_FREE(ctx);
 }
@@ -4862,6 +4986,16 @@ void sfte_mouse_click(sfte_ctx *ctx, int btn, int pressed, int px_x, int px_y) {
     _sfte_px_to_grid(ctx, px_x, px_y, &c, &r);
     sfte_term *term = &ctx->term;
 
+#if SFTE_HYPERLINKS
+    if (pressed && btn == 0 && ctx->open_link_cb) {
+        const char *uri = sfte_get_link_at(ctx, c, r);
+        if (uri) {
+            ctx->open_link_cb(ctx->user_data, uri);
+            return;
+        }
+    }
+#endif  // SFTE_HYPERLINKS
+
     if (term->mouse_mode) {
         if (pressed)
             term->mouse_btn_state = btn;
@@ -4978,6 +5112,17 @@ int sfte_kitty_kb_encode(sfte_ctx *ctx, sfte_key key, uint32_t codepoint, uint32
 }
 #endif  // SFTE_KITTY_KB
 
+#if SFTE_HYPERLINKS
+const char *sfte_get_link_at(sfte_ctx *ctx, int col, int row) {
+    if (col < 0 || col >= ctx->term.cols || row < 0 || row >= ctx->term.rows) return NULL;
+
+    sfte_cell *c = &ctx->term.cells[row * ctx->term.cols + col];
+    if (!c || c->link_idx == 0 || c->link_idx >= ctx->term.link_pool_len) return NULL;
+
+    return ctx->term.link_pool[c->link_idx];
+}
+#endif  // SFTE_HYPERLINKS
+
 #if SFTE_SCROLLBACK_CAP
 void sfte_view_scroll(sfte_ctx *ctx, int delta) {
 #if SFTE_ALT_SCREEN
@@ -5086,9 +5231,12 @@ sfte_wayland_app *sfte_wayland_init(void) {
     app->running = 1;
     app->ctx = sfte_init(_sfte_wayland_write_cb, app);
 
-#if SFTE_CLIPBOARD
-    app->ctx->clipboard_cb = _sfte_wayland_osc_clipboard_cb;
-#endif  // SFTE_CLIPBOARD
+#if SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
+    app->ctx->osc52_clipboard_cb = _sfte_wayland_osc52_clipboard_cb;
+#endif  // SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
+#if SFTE_HYPERLINKS
+    app->ctx->open_link_cb = _sfte_wayland_open_link_cb;
+#endif  // SFTE_HYPERLINKS
 
     _sfte_wayland_pty_spawn(app);
     _sfte_wayland_load(app);
