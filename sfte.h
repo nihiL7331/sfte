@@ -619,6 +619,54 @@ typedef struct {
     int xadvance;
 } sfte_glyph;
 
+#if SFTE_SIXEL
+typedef enum {
+    SIXEL_GROUND,
+    SIXEL_REPEAT,       // !
+    SIXEL_COLOR_INTRO,  // #
+    SIXEL_COLOR_PARAM   // col definition
+} sfte_sixel_state_enum;
+
+typedef struct {
+    uint32_t id;
+    int width;      // in pxs
+    int height;     // in pxs
+    uint32_t *pxs;  // ARGB8888
+    int ref_cnt;    // how many placements are using this img
+} sfte_sixel_img;
+
+// placement of an image onto the terminal grid
+typedef struct {
+    uint32_t img_id;
+    int start_col;
+    int start_row;
+    int z_idx;  // <0=below text, >=0=above text
+} sfte_sixel_img_placement;
+
+typedef struct {
+    sfte_sixel_state_enum state;
+    int x, y;  // in pxs
+
+    // grid placement
+    int start_col;  // grid col where parsing started
+    int start_row;  // grid row where parsing started
+
+    // dynamic img buf
+    uint32_t *pxs;      // dynamic buffer for the in-progress img
+    int width, height;  // max bounds actually touched
+    int cap_w, cap_h;   // allocated cap
+
+    // sixel parsing state
+    uint8_t col_idx;
+    uint32_t palette[256];
+    int repeat_cnt;
+
+    // color def
+    int params[5];
+    uint8_t param_idx;
+} sfte_sixel_state;
+#endif  // SFTE_SIXEL
+
 typedef struct {
     sfte_cell *cells;
     int cols;
@@ -688,7 +736,6 @@ typedef struct {
     int kitty_kb_stack[2][16];  // 0=main, 1=alt
     int kitty_kb_idx[2];
 #endif  // SFTE_KITTY_KB
-
     int scroll_top;
     int scroll_bottom;
     // osc
@@ -705,6 +752,16 @@ typedef struct {
 #if SFTE_COLOR_UNDERLINE
     uint32_t cur_ul_color;
 #endif  // SFTE_COLOR_UNDERLINE
+// sixel
+#if SFTE_SIXEL
+    sfte_sixel_img *img_pool;
+    uint32_t img_pool_cap;
+    uint32_t img_pool_len;
+    sfte_sixel_img_placement *img_placements;
+    uint32_t img_placements_cap;
+    uint32_t img_placements_len;
+    uint32_t next_img_id;
+#endif  // SFTE_SIXEL
     // parser
     int vt_state;
     int vt_params[16];  // stores nums from esc sequences
@@ -758,29 +815,6 @@ typedef struct {
 #endif  // SFTE_FONT_BOLD_ITALIC
 } sfte_font;
 
-#if SFTE_SIXEL
-typedef enum {
-    SIXEL_GROUND,
-    SIXEL_REPEAT,       // !
-    SIXEL_COLOR_INTRO,  // #
-    SIXEL_COLOR_PARAM   // col definition
-} sfte_sixel_state_enum;
-
-typedef struct {
-    uint8_t active;
-    sfte_sixel_state_enum state;
-    int x, y;     // in pxs
-    int start_x;  // tracks init cursor indent
-    uint8_t col_idx;
-    uint32_t palette[256];
-    int repeat_cnt;
-
-    // color def
-    int params[5];
-    uint8_t param_idx;
-} sfte_sixel_state;
-#endif  // SFTE_SIXEL
-
 struct sfte_ctx {
     sfte_term term;
     sfte_font font;
@@ -789,10 +823,6 @@ struct sfte_ctx {
 #endif  // !SFTE_NO_LOGGING
 #if SFTE_SIXEL
     sfte_sixel_state sixel;
-    // NOTE: definitions below will go in #if SFTE_SIXEL && SFTE_KITTY when kitty gets implemented
-    uint32_t *img_layer;
-    int px_wid;
-    int px_hei;
 #endif  // SFTE_SIXEL
 
     int width;
@@ -916,20 +946,6 @@ static void _sfte_log(sfte_ctx *ctx, _sfte_log_item_t log_item, uint32_t log_lev
 // >>sixel
 // =================================================================================================
 #if SFTE_SIXEL
-static void _sfte_sixel_resize_img_layer(sfte_ctx *ctx) {
-    int new_pw = ctx->term.cols * ctx->font.cell_width;
-    int new_ph = ctx->term.rows * ctx->font.cell_height;
-
-    if (ctx->px_wid == new_pw && ctx->px_hei == new_ph) return;
-
-    ctx->px_wid = new_pw;
-    ctx->px_hei = new_ph;
-
-    if (ctx->img_layer) SFTE_FREE(ctx->img_layer);
-    ctx->img_layer = (uint32_t *)SFTE_MALLOC(new_pw * new_ph * sizeof(uint32_t));
-    memset(ctx->img_layer, 0, new_pw * new_ph * sizeof(uint32_t));
-}
-
 static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b) {
     switch (ctx->sixel.state) {
     case SIXEL_GROUND:
@@ -938,26 +954,46 @@ static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b) {
             int repeats = ctx->sixel.repeat_cnt > 0 ? ctx->sixel.repeat_cnt : 1;
             uint32_t col = ctx->sixel.palette[ctx->sixel.col_idx];
 
+            int max_x = ctx->sixel.x + repeats - 1;
+            int max_y = ctx->sixel.y + 5;  // 6 pxs tall
+
+            if (max_x >= ctx->sixel.cap_w || max_y >= ctx->sixel.cap_h) {
+                int new_w = ctx->sixel.cap_w == 0 ? 256 : ctx->sixel.cap_w;
+                int new_h = ctx->sixel.cap_h == 0 ? 256 : ctx->sixel.cap_h;
+                while (max_x >= new_w) new_w *= 2;
+                while (max_y >= new_h) new_h *= 2;
+
+                uint32_t *new_pxs = (uint32_t *)SFTE_CALLOC(new_w * new_h, sizeof(uint32_t));
+                if (ctx->sixel.pxs) {
+                    for (int r = 0; r < ctx->sixel.height; ++r)
+                        memcpy(&new_pxs[r * new_w], &ctx->sixel.pxs[r * ctx->sixel.cap_w],
+                               ctx->sixel.width * sizeof(uint32_t));
+                    SFTE_FREE(ctx->sixel.pxs);
+                }
+                ctx->sixel.pxs = new_pxs;
+                ctx->sixel.cap_w = new_w;
+                ctx->sixel.cap_h = new_h;
+            }
+
             for (int dx = 0; dx < repeats; ++dx) {
                 int px_x = ctx->sixel.x + dx;
-
-                if (px_x >= ctx->px_wid) continue;
 
                 for (int bit = 0; bit < 6; ++bit)
                     if (pattern & (1 << bit)) {
                         int px_y = ctx->sixel.y + bit;
-                        if (px_y >= ctx->px_hei) continue;
+                        ctx->sixel.pxs[px_y * ctx->sixel.cap_w + px_x] = col;
 
-                        ctx->img_layer[px_y * ctx->px_wid + px_x] = col;
+                        if (px_x >= ctx->sixel.width) ctx->sixel.width = px_x + 1;
+                        if (px_y >= ctx->sixel.height) ctx->sixel.height = px_y + 1;
                     }
             }
 
             ctx->sixel.x += repeats;
             ctx->sixel.repeat_cnt = 0;
         } else if (b == '$')  // carriage return
-            ctx->sixel.x = ctx->sixel.start_x;
+            ctx->sixel.x = 0;
         else if (b == '-') {  // move down one band
-            ctx->sixel.x = ctx->sixel.start_x;
+            ctx->sixel.x = 0;
             ctx->sixel.y += 6;
         } else if (b == '!') {  // start repeat
             ctx->sixel.state = SIXEL_REPEAT;
@@ -1204,10 +1240,6 @@ static void _sfte_font_reset_cache(sfte_ctx *ctx) {
     sfte_font_cache *dummy = &ctx->font.regular;
     sfte_glyph *m = _sfte_font_get_glyph(ctx, &dummy, 'M');
     ctx->font.cell_width = m->xadvance;
-
-#if SFTE_SIXEL
-    _sfte_sixel_resize_img_layer(ctx);
-#endif  // SFTE_SIXEL
 }
 
 // =================================================================================================
@@ -2688,6 +2720,51 @@ static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt)
 #if SFTE_HYPERLINKS
         ctx->term.cells[start_idx + i].link_idx = 0;
 #endif  // SFTE_HYPERLINKS
+
+#if SFTE_SIXEL
+        // erase overlapping img placements
+        for (uint32_t i = 0; i < ctx->term.img_placements_len;) {
+            sfte_sixel_img_placement *p = &ctx->term.img_placements[i];
+            sfte_sixel_img *img = NULL;
+
+            for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j) {
+                if (ctx->term.img_pool[j].id == p->img_id) {
+                    img = &ctx->term.img_pool[j];
+                    break;
+                }
+            }
+
+            int img_rows = img ? (img->height / ctx->font.cell_height) + 1 : 1;
+            int img_cols = img ? (img->width / ctx->font.cell_width) + 1 : 1;
+
+            // check if 2D image bbox overlaps the 1D cleared range
+            int overlap = 0;
+            for (int r = p->start_row; r < p->start_row + img_rows && !overlap; ++r)
+                for (int c = p->start_col; c < p->start_col + img_cols; ++c) {
+                    int cell_idx = r * ctx->term.cols + c;
+                    if (cell_idx >= start_idx && cell_idx < start_idx + cnt) {
+                        overlap = 1;
+                        break;
+                    }
+                }
+
+            if (overlap) {
+                if (img) img->ref_cnt--;
+                ctx->term.img_placements[i] = ctx->term
+                                                  .img_placements[--ctx->term.img_placements_len];
+            } else
+                i++;
+        }
+
+        // free memory for imgs with no placements
+        for (uint32_t j = 0; j < ctx->term.img_pool_len;) {
+            if (ctx->term.img_pool[j].ref_cnt <= 0) {
+                if (ctx->term.img_pool[j].pxs) SFTE_FREE(ctx->term.img_pool[j].pxs);
+                ctx->term.img_pool[j] = ctx->term.img_pool[--ctx->term.img_pool_len];
+            } else
+                j++;
+        }
+#endif  // SFTE_SIXEL
     }
 }
 
@@ -2697,25 +2774,36 @@ static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
     int height = bot - top + 1;
     int cols = ctx->term.cols;
 
+#if SFTE_SIXEL
+    for (uint32_t i = 0; i < ctx->term.img_placements_len;) {
+        sfte_sixel_img_placement *p = &ctx->term.img_placements[i];
+
+        if (p->start_row >= top && p->start_row <= bot) {
+            p->start_row -= lines;
+
+            sfte_sixel_img *img = NULL;
+            for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
+                if (ctx->term.img_pool[j].id == p->img_id) {
+                    img = &ctx->term.img_pool[j];
+                    break;
+                }
+
+            int img_rows = img ? (img->height / ctx->font.cell_height) + 1 : 1;
+
+            // if it scrolled out of visible area, delete it
+            if (p->start_row + img_rows <= top || p->start_row > bot) {
+                if (img) img->ref_cnt--;
+                ctx->term.img_placements[i] = ctx->term
+                                                  .img_placements[--ctx->term.img_placements_len];
+                continue;
+            }
+        }
+        i++;
+    }
+#endif  // SFTE_SIXEL
+
     if (lines > 0) {  // scroll up
         if (lines > height) lines = height;
-
-#if SFTE_SIXEL
-        if (ctx->img_layer) {
-            int px_lines = lines * ctx->font.cell_height;
-            int px_top = top * ctx->font.cell_height;
-            int px_hei = height * ctx->font.cell_height;
-            int px_move = px_hei - px_lines;
-
-            if (px_move > 0)
-                memmove(&ctx->img_layer[px_top * ctx->px_wid],
-                        &ctx->img_layer[(px_top + px_lines) * ctx->px_wid],
-                        px_move * ctx->px_wid * sizeof(uint32_t));
-
-            memset(&ctx->img_layer[(px_top + px_move) * ctx->px_wid], 0,
-                   px_lines * ctx->px_wid * sizeof(uint32_t));
-        }
-#endif  // SFTE_SIXEL
 
 #if SFTE_SCROLLBACK_CAP
         if (top == 0
@@ -2745,23 +2833,6 @@ static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
     } else if (lines < 0) {                                    // scroll down
         lines = -lines;
         if (lines > height) lines = height;
-
-#if SFTE_SIXEL
-        if (ctx->img_layer) {
-            int px_lines = lines * ctx->font.cell_height;
-            int px_top = top * ctx->font.cell_height;
-            int px_hei = height * ctx->font.cell_height;
-            int px_move = px_hei - px_lines;
-
-            if (px_move > 0)
-                memmove(&ctx->img_layer[(px_top + px_lines) * ctx->px_wid],
-                        &ctx->img_layer[px_top * ctx->px_wid],
-                        px_move * ctx->px_wid * sizeof(uint32_t));
-
-            memset(&ctx->img_layer[px_top * ctx->px_wid], 0,
-                   px_lines * ctx->px_wid * sizeof(uint32_t));
-        }
-#endif  // SFTE_SIXEL
 
         int move_cnt = height - lines;
         if (move_cnt > 0)
@@ -3139,8 +3210,8 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
          */
         int mode = (cnt > 0) ? p[0] : 0;
 
-        // if we clear entire screen and scrollback exists, push the data to scrollback instead
-        // of erasing it in its entirety
+        // if we clear entire screen and scrollback exists, push the data to scrollback
+        // instead of erasing it in its entirety
         if (mode == 2 || (mode == 0 && ctx->term.cursor_x == 0 && ctx->term.cursor_y == 0)) {
 #if SFTE_SCROLLBACK_CAP
             // find last populated row
@@ -3993,9 +4064,9 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
     return dst;
 }
 #endif  // SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
-// =================================================================================================
-// >>parser
-// =================================================================================================
+        // =================================================================================================
+        // >>parser
+        // =================================================================================================
 typedef enum {
     VT_GROUND,     // normal
     VT_ESCAPE,     // \033
@@ -4260,9 +4331,15 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
             if (is_sixel) {
                 ctx->term.vt_state = VT_SIXEL;
                 ctx->sixel.state = SIXEL_GROUND;
-                ctx->sixel.x = ctx->term.cursor_x * ctx->font.cell_width;
-                ctx->sixel.y = ctx->term.cursor_y * ctx->font.cell_height;
-                ctx->sixel.start_x = ctx->sixel.x;
+                ctx->sixel.start_col = ctx->term.cursor_x;
+                ctx->sixel.start_row = ctx->term.cursor_y;
+                ctx->sixel.x = 0;
+                ctx->sixel.y = 0;
+                ctx->sixel.pxs = NULL;
+                ctx->sixel.width = 0;
+                ctx->sixel.height = 0;
+                ctx->sixel.cap_w = 0;
+                ctx->sixel.cap_h = 0;
                 break;  // skip adding q to payload
             } else if (ctx->term.osc_len < (int)sizeof(ctx->term.osc_payload) - 1)
                 ctx->term.osc_payload[ctx->term.osc_len++] = b;
@@ -4281,11 +4358,76 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
         break;
 #if SFTE_SIXEL
     case VT_SIXEL:
-        if (b == '\x1b')
-            ctx->term.vt_state = VT_ESCAPE;
-        else if (b == '\x07')
-            ctx->term.vt_state = VT_GROUND;
-        else
+        if (b == '\x1b' || b == '\x07') {
+            // sequence ended, commit image to obj pool
+            if (ctx->sixel.width > 0 && ctx->sixel.height > 0) {
+                uint32_t *final_pxs = (uint32_t *)SFTE_MALLOC(ctx->sixel.width * ctx->sixel.height *
+                                                              sizeof(uint32_t));
+                for (int y = 0; y < ctx->sixel.height; ++y)
+                    memcpy(&final_pxs[y * ctx->sixel.width], &ctx->sixel.pxs[y * ctx->sixel.cap_w],
+                           ctx->sixel.width * sizeof(uint32_t));
+                SFTE_FREE(ctx->sixel.pxs);
+
+                uint32_t id = ++ctx->term.next_img_id;
+                if (ctx->term.img_pool_len >= ctx->term.img_pool_cap) {
+                    ctx->term.img_pool_cap = ctx->term.img_pool_cap == 0
+                                                 ? 16
+                                                 : ctx->term.img_pool_cap * 2;
+                    ctx->term.img_pool = (sfte_sixel_img *)SFTE_REALLOC(
+                        ctx->term.img_pool, ctx->term.img_pool_cap * sizeof(sfte_sixel_img));
+                }
+
+                // add to image pool
+                ctx->term.img_pool[ctx->term.img_pool_len++] = (sfte_sixel_img){
+                    .id = id,
+                    .width = ctx->sixel.width,
+                    .height = ctx->sixel.height,
+                    .pxs = final_pxs,
+                    .ref_cnt = 1,
+                };
+
+                if (ctx->term.img_placements_len >= ctx->term.img_placements_cap) {
+                    ctx->term.img_placements_cap = ctx->term.img_placements_cap == 0
+                                                       ? 32
+                                                       : ctx->term.img_placements_cap * 2;
+                    ctx->term.img_placements = (sfte_sixel_img_placement *)SFTE_REALLOC(
+                        ctx->term.img_placements,
+                        ctx->term.img_placements_cap * sizeof(sfte_sixel_img_placement));
+                }
+
+                // add to placement pool
+                ctx->term
+                    .img_placements[ctx->term.img_placements_len++] = (sfte_sixel_img_placement){
+                    .img_id = id,
+                    .start_col = ctx->sixel.start_col,
+                    .start_row = ctx->sixel.start_row,
+                    .z_idx = 1,
+                };
+
+                // dirty image area
+                int img_rows = (ctx->sixel.height / ctx->font.cell_height);
+                if (ctx->sixel.height % ctx->font.cell_height != 0) img_rows++;
+
+                // force text cursor below the image
+                ctx->term.cursor_y = ctx->sixel.start_row + img_rows;
+                ctx->term.cursor_x = 0;
+
+                // if image pushed cursor off the screen, scroll
+                while (ctx->term.cursor_y > ctx->term.scroll_bottom) {
+                    _sfte_grid_scroll(ctx, 1);
+                    ctx->term.cursor_y--;
+                }
+            }
+
+            // clean state
+            ctx->sixel.pxs = NULL;
+            ctx->sixel.cap_w = 0;
+            ctx->sixel.cap_h = 0;
+            ctx->sixel.width = 0;
+            ctx->sixel.height = 0;
+
+            ctx->term.vt_state = (b == '\x1b') ? VT_ESCAPE : VT_GROUND;
+        } else
             _sfte_sixel_parse_byte(ctx, b);
         break;
 #endif  // SFTE_SIXEL
@@ -4312,7 +4454,8 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
 }
 
 // =================================================================================================
-//  PUBLIC IMPLEMENTATION  =========================================================================
+//  PUBLIC IMPLEMENTATION
+//  =========================================================================
 // =================================================================================================
 
 // =================================================================================================
@@ -4418,7 +4561,8 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
 
             // mark padding dirty to clear the bleed area.
             // it's not hidden behind an if (r_min == 0 || r_max == ctx->term.rows - 1)
-            // because if damage is at left or right edge, the bleed area will be visible there too.
+            // because if damage is at left or right edge, the bleed area will be visible
+            // there too.
             ctx->padding_dirty = 1;
 
             for (int y = r_min; y <= r_max; ++y)
@@ -4432,6 +4576,65 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
     for (int i = 0; i < ctx->term.rows * ctx->term.cols; ++i)
         if (ctx->term.cells[i].dirty == 2) ctx->term.cells[i].dirty = 1;
 #endif  // SFTE_FONT_BLEED
+
+#if SFTE_SIXEL
+    for (uint32_t i = 1; i < ctx->term.img_placements_len; ++i) {
+        sfte_sixel_img_placement key = ctx->term.img_placements[i];
+        int j = i - 1;
+        while (j >= 0 && ctx->term.img_placements[j].z_idx > key.z_idx) {
+            ctx->term.img_placements[j + 1] = ctx->term.img_placements[j];
+            j--;
+        }
+        ctx->term.img_placements[j + 1] = key;
+    }
+
+    int base_y_off = 0;
+#if SFTE_SCROLLBACK_CAP
+    base_y_off = ctx->term.sb_offset * ctx->font.cell_height;
+#endif  // SFTE_SCROLLBACK_CAP
+
+#define SFTE_RENDER_IMG_PASS(is_bg_pass)                                                           \
+    for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {                                  \
+        sfte_sixel_img_placement *p = &ctx->term.img_placements[i];                                \
+        int is_bg_img = (p->z_idx < 0);                                                            \
+        if (is_bg_img != (is_bg_pass)) continue;                                                   \
+                                                                                                   \
+        sfte_sixel_img *img = NULL;                                                                \
+        for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j) {                                    \
+            if (ctx->term.img_pool[j].id == p->img_id) {                                           \
+                img = &ctx->term.img_pool[j];                                                      \
+                break;                                                                             \
+            }                                                                                      \
+        }                                                                                          \
+        if (!img) continue;                                                                        \
+                                                                                                   \
+        int base_x = (p->start_col * ctx->font.cell_width) + SFTE_PAD_X;                           \
+        int base_y = (p->start_row * ctx->font.cell_height) + SFTE_PAD_Y;                          \
+        base_y += base_y_off;                                                                      \
+                                                                                                   \
+        int draw_h = img->height;                                                                  \
+        if (base_y + draw_h > ctx->height) draw_h = ctx->height - base_y;                          \
+        int draw_w = img->width;                                                                   \
+        if (base_x + draw_w > ctx->width) draw_w = ctx->width - base_x;                            \
+                                                                                                   \
+        if (draw_h > 0 && draw_w > 0) DAMAGE_ADD(base_x, base_y, draw_w, draw_h);                  \
+                                                                                                   \
+        for (int iy = 0; iy < img->height; ++iy) {                                                 \
+            int out_y = base_y + iy;                                                               \
+            if (out_y < 0 || out_y >= ctx->height) continue;                                       \
+                                                                                                   \
+            for (int ix = 0; ix < img->width; ++ix) {                                              \
+                int out_x = base_x + ix;                                                           \
+                if (out_x < 0 || out_x >= ctx->width) continue;                                    \
+                                                                                                   \
+                uint32_t img_pxs = img->pxs[iy * img->width + ix];                                 \
+                if ((img_pxs & 0xFF000000) == 0) continue;                                         \
+                px_buf[out_y * ctx->width + out_x] = _sfte_render_blend_argb(                      \
+                    px_buf[out_y * ctx->width + out_x], img_pxs, (uint8_t)(img_pxs >> 24));        \
+            }                                                                                      \
+        }                                                                                          \
+    }
+#endif  // SFTE_SIXEL
 
     for (int r = 0; r < ctx->term.rows; ++r) {
         for (int c = 0; c < ctx->term.cols; ++c) {
@@ -4477,6 +4680,10 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
                 _sfte_render_bg(ctx, px_buf, c, r, bg);
         }
     }
+
+#if SFTE_SIXEL
+    SFTE_RENDER_IMG_PASS(1);
+#endif  // SFTE_SIXEL
 
     for (int r = 0; r < ctx->term.rows; ++r) {
         for (int c = 0; c < ctx->term.cols; ++c) {
@@ -4646,23 +4853,8 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
 #endif  // SFTE_CURSOR_TRAIL
 
 #if SFTE_SIXEL
-
-    for (int y = 0; y < ctx->px_hei; ++y)
-        for (int x = 0; x < ctx->px_wid; ++x) {
-            uint32_t img_px = ctx->img_layer[y * ctx->px_wid + x];
-            if ((img_px & 0xFF000000) == 0) continue;
-
-            int out_x = x + SFTE_PAD_X;
-            int out_y = y + SFTE_PAD_Y
-#if SFTE_SCROLLBACK_CAP
-                        + ctx->term.sb_offset * ctx->font.cell_height
-#endif  // SFTE_SCROLLBACK_CAP
-                ;
-
-            if (out_y >= ctx->height) continue;
-
-            px_buf[out_y * ctx->width + out_x] = img_px;
-        }
+    SFTE_RENDER_IMG_PASS(0);
+#undef SFTE_RENDER_IMG_PASS
 #endif  // SFTE_SIXEL
 
     if (dmg_x0 < dmg_x1 && dmg_y0 < dmg_y1) {
@@ -4703,10 +4895,6 @@ void sfte_resize(sfte_ctx *ctx, int w, int h) {
         ctx->term.trail_damage_w = 0;
 #endif  // SFTE_CURSOR_TRAIL
     }
-
-#if SFTE_SIXEL
-    _sfte_sixel_resize_img_layer(ctx);
-#endif  // SFTE_SIXEL
 }
 
 void sfte_get_ideal_size(sfte_ctx *ctx, int cols, int rows, int *out_w, int *out_h) {
@@ -4769,7 +4957,7 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
 
 #if SFTE_SIXEL
     for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_ansi_palette); ++i)
-        ctx->sixel.palette[i] = _sfte_ansi_palette[i];
+        ctx->sixel.palette[i] = 0xFF000000 | _sfte_ansi_palette[i];
 #endif  // SFTE_SIXEL
 
     ctx->term.cols = 80;
@@ -4884,6 +5072,14 @@ void sfte_free(sfte_ctx *ctx) {
         SFTE_FREE(ctx->term.link_pool);
     }
 #endif  // SFTE_HYPERLINKS
+#if SFTE_SIXEL
+    if (ctx->term.img_pool) {
+        for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i)
+            if (ctx->term.img_pool[i].pxs) SFTE_FREE(ctx->term.img_pool[i].pxs);
+        SFTE_FREE(ctx->term.img_pool);
+    }
+    if (ctx->term.img_placements) SFTE_FREE(ctx->term.img_placements);
+#endif  // SFTE_SIXEL
 
     SFTE_FREE(ctx);
 }
@@ -5294,14 +5490,14 @@ sfte_ctx *sfte_wayland_get_ctx(sfte_wayland_app *app) {
 
 int sfte_wayland_run(sfte_wayland_app *app) {
 #ifdef SFTE_FONT_BOLD
-    SFTE_ASSERT(
-        app->ctx->font.bold.glyphs && app->ctx->font.bold.atlas_pxs,
-        "if SFTE_FONT_BOLD is defined, a bold font must be provided using sfte_font_load_*");
+    SFTE_ASSERT(app->ctx->font.bold.glyphs && app->ctx->font.bold.atlas_pxs,
+                "if SFTE_FONT_BOLD is defined, a bold font must be provided using "
+                "sfte_font_load_*");
 #endif  // SFTE_FONT_BOLD
 #ifdef SFTE_FONT_ITALIC
-    SFTE_ASSERT(
-        app->ctx->font.italic.glyphs && app->ctx->font.italic.atlas_pxs,
-        "if SFTE_FONT_ITALIC is defined, an italic font must be provided using sfte_font_load_*");
+    SFTE_ASSERT(app->ctx->font.italic.glyphs && app->ctx->font.italic.atlas_pxs,
+                "if SFTE_FONT_ITALIC is defined, an italic font must be provided using "
+                "sfte_font_load_*");
 #endif  // SFTE_FONT_ITALIC
 #ifdef SFTE_FONT_BOLD_ITALIC
     SFTE_ASSERT(app->ctx->font.bold_italic.glyphs && app->ctx->font.bold_italic.atlas_pxs,
