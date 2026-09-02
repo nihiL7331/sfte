@@ -1199,7 +1199,11 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
 
     ctx->kitty.b64_buf[ctx->kitty.b64_len] = '\0';
 
-    if (ctx->kitty.action == 'T') {
+    if (ctx->kitty.action == 'q') {
+        char reply[64];
+        int len = snprintf(reply, sizeof(reply), "\033_Gi=%u;OK\033\\", ctx->kitty.id);
+        if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
+    } else if (ctx->kitty.action == 'T') {
         size_t raw_len = 0;
         uint8_t *raw_data = _sfte_b64_decode((uint8_t *)ctx->kitty.b64_buf, ctx->kitty.b64_len,
                                              &raw_len);
