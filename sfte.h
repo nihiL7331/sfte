@@ -232,6 +232,10 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #define SFTE_SCROLLBACK_CAP 2000
 #endif  // SFTE_SCROLLBACK_CAP
 
+#ifndef SFTE_SCROLLBACK_ALLOW_CLEAR
+#define SFTE_SCROLLBACK_ALLOW_CLEAR 1
+#endif  // SFTE_SCROLLBACK_ALLOW_CLEAR
+
 #ifndef SFTE_TAB_WIDTH
 #define SFTE_TAB_WIDTH 8
 #endif  // SFTE_TAB_WIDTH
@@ -2681,6 +2685,9 @@ static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt)
 #if SFTE_REFLOW
         ctx->term.cells[start_idx + i].wrapped = 0;
 #endif  // SFTE_REFLOW
+#if SFTE_HYPERLINKS
+        ctx->term.cells[start_idx + i].link_idx = 0;
+#endif  // SFTE_HYPERLINKS
     }
 }
 
@@ -3127,25 +3134,57 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
           Clears part of the screen.
           If n is 0 (or missing), clear from cursor to end of screen.
           If n is 1, clear from cursor to beginning of the screen.
-          If n is 2, clear entire screen (and moves cursor to upper left on DOS ANSI.SYS)
-          If n is 3, clear entire screen and delete all lines saved in the scrollback buffer.
+          If n is 2, clear entire screen (and moves cursor to upper left on DOS ANSI.SYS).
+          If n is 3, delete all lines saved in the scrollback buffer.
          */
-        if (p[0] == 0) {
+        int mode = (cnt > 0) ? p[0] : 0;
+
+        // if we clear entire screen and scrollback exists, push the data to scrollback instead
+        // of erasing it in its entirety
+        if (mode == 2 || (mode == 0 && ctx->term.cursor_x == 0 && ctx->term.cursor_y == 0)) {
+#if SFTE_SCROLLBACK_CAP
+            // find last populated row
+            int last_r = -1;
+            for (int r = ctx->term.rows - 1; r >= 0; --r) {
+                for (int c = 0; c < ctx->term.cols; ++c) {
+                    sfte_cell *cell = &ctx->term.cells[r * ctx->term.cols + c];
+                    if (cell->rune != ' ' && cell->rune != '\0') {
+                        last_r = r;
+                        break;
+                    }
+                }
+
+                if (last_r != -1) break;
+            }
+            int lines_to_push = last_r + 1;
+
+            // temporarily bypass scroll margins to ensure full-screen push
+            int old_top = ctx->term.scroll_top;
+            int old_bot = ctx->term.scroll_bottom;
+            ctx->term.scroll_top = 0;
+            ctx->term.scroll_bottom = ctx->term.rows - 1;
+            if (lines_to_push > 0) _sfte_grid_scroll(ctx, lines_to_push);
+
+            ctx->term.scroll_top = old_top;
+            ctx->term.scroll_bottom = old_bot;
+#endif  // SFTE_SCROLLBACK_CAP
+
+            _sfte_grid_clear_cells(ctx, 0, ctx->term.rows * ctx->term.cols);
+            break;
+        }
+
+        if (mode == 0) {
             int start_idx = _SFTE_IDX(ctx, cx, ctx->term.cursor_y);
             _sfte_grid_clear_cells(ctx, start_idx, (ctx->term.rows * ctx->term.cols) - start_idx);
-        } else if (p[0] == 1)
-            _sfte_grid_clear_cells(ctx, 0, _SFTE_IDX(ctx, cx, ctx->term.cursor_y) + 1);
-        else if (p[0] == 2)
-            _sfte_grid_clear_cells(ctx, 0, ctx->term.rows * ctx->term.cols);
-        else if (p[0] == 3) {
-            _sfte_grid_clear_cells(ctx, 0, ctx->term.rows * ctx->term.cols);
-#if SFTE_SCROLLBACK_CAP
+        } else if (mode == 1) {
+            int end_idx = _SFTE_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y) + 1;
+            _sfte_grid_clear_cells(ctx, 0, end_idx);
+        } else if (mode == 3) {
+#if SFTE_SCROLLBACK_CAP && SFTE_SCROLLBACK_ALLOW_CLEAR
             ctx->term.sb_len = 0;
             ctx->term.sb_head = 0;
             ctx->term.sb_offset = 0;
-#endif  // SFTE_SCROLLBACK_CAP
-            ctx->term.cursor_x = 0;
-            ctx->term.cursor_y = 0;
+#endif  // SFTE_SCROLLBACK_CAP && SFTE_SCROLLBACK_ALLOW_CLEAR
         }
         break;
     }
