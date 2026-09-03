@@ -648,6 +648,8 @@ typedef struct {
     uint32_t img_id;
     int start_col;
     int start_row;
+    int x_off;
+    int y_off;
     int z_idx;  // <0=below text, >=0=above text
 } sfte_img_placement;
 #endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
@@ -700,6 +702,8 @@ typedef struct {
     char d_action;
     int cols;
     int rows;
+    int x_off;
+    int y_off;
 } sfte_kitty_state;
 #endif  // SFTE_KITTY_GRAPHICS
 
@@ -1210,6 +1214,8 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         ctx->kitty.d_action = 0;
         ctx->kitty.cols = 0;
         ctx->kitty.rows = 0;
+        ctx->kitty.x_off = 0;
+        ctx->kitty.y_off = 0;
     }
 
     // parse params into state
@@ -1231,6 +1237,8 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         case 'd': ctx->kitty.d_action = val[0]; break;
         case 'c': ctx->kitty.cols = atoi(val); break;
         case 'r': ctx->kitty.rows = atoi(val); break;
+        case 'X': ctx->kitty.x_off = atoi(val); break;
+        case 'Y': ctx->kitty.y_off = atoi(val); break;
         default: break;
         }
 
@@ -1428,7 +1436,9 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
                     .img_id = ctx->kitty.id,
                     .start_col = ctx->term.cursor_x,
                     .start_row = ctx->term.cursor_y,
-                    .z_idx = ctx->kitty.z_idx};
+                    .x_off = ctx->kitty.x_off,
+                    .y_off = ctx->kitty.y_off,
+                    .z_idx = ctx->kitty.z_idx,
 
                 int img_rows = (h / ctx->font.cell_height) + 1;
                 int img_cols = (w / ctx->font.cell_width) + 1;
@@ -4976,8 +4986,8 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
         }                                                                                          \
         if (!img) continue;                                                                        \
                                                                                                    \
-        int base_x = (p->start_col * ctx->font.cell_width) + SFTE_PAD_X;                           \
-        int base_y = (p->start_row * ctx->font.cell_height) + SFTE_PAD_Y;                          \
+        int base_x = (p->start_col * ctx->font.cell_width) + SFTE_PAD_X + p->x_off;                \
+        int base_y = (p->start_row * ctx->font.cell_height) + SFTE_PAD_Y + p->y_off;               \
         base_y += base_y_off;                                                                      \
                                                                                                    \
         int draw_h = img->height;                                                                  \
