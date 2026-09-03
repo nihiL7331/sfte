@@ -281,6 +281,30 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #define SFTE_KITTY_GRAPHICS 1
 #endif  // SFTE_KITTY_GRAPHICS
 
+#ifndef SFTE_KITTY_B64_INIT_CAP
+#define SFTE_KITTY_B64_INIT_CAP 4096
+#endif  // SFTE_KITTY_B64_INIT_CAP
+
+#ifndef SFTE_KITTY_B64_MAX_CAP
+#define SFTE_KITTY_B64_MAX_CAP (16 * 1024 * 1024)
+#endif  // SFTE_KITTY_B64_MAX_CAP
+
+#ifndef SFTE_IMG_POOL_INIT_CAP
+#define SFTE_IMG_POOL_INIT_CAP 16
+#endif  // SFTE_IMG_POOL_INIT_CAP
+
+#ifndef SFTE_IMG_POOL_MAX_CAP
+#define SFTE_IMG_POOL_MAX_CAP 1024
+#endif  // SFTE_IMG_POOL_MAX_CAP
+
+#ifndef SFTE_IMG_PLACEMENT_INIT_CAP
+#define SFTE_IMG_PLACEMENT_INIT_CAP 32
+#endif  // SFTE_IMG_PLACEMENT_INIT_CAP
+
+#ifndef SFTE_IMG_PLACEMENT_MAX_CAP
+#define SFTE_IMG_PLACEMENT_MAX_CAP 4096
+#endif  // SFTE_IMG_PLACEMENT_MAX_CAP
+
 #ifndef SFTE_KITTY_KB
 #define SFTE_KITTY_KB 1
 #endif  // SFTE_KITTY_KB
@@ -318,6 +342,10 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #undef SFTE_MOUSE
 #define SFTE_MOUSE 1
 #endif  // SFTE_SELECTION
+
+#define SFTE_KITTY_FMT_RGB 24
+#define SFTE_KITTY_FMT_RGBA 32
+#define SFTE_KITTY_FMT_PNG_JPEG 100
 
 #define SFTE_MOD_CTRL 0b0001
 #define SFTE_MOD_ALT 0b0010
@@ -1254,8 +1282,11 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         size_t b64_len = strlen(b64_start);
 
         if (ctx->kitty.b64_len + b64_len + 1 >= ctx->kitty.b64_cap) {
-            ctx->kitty.b64_cap = (ctx->kitty.b64_cap + b64_len + 1) * 2;
-            if (ctx->kitty.b64_cap < 4096) ctx->kitty.b64_cap = 4096;
+            size_t new_cap = (ctx->kitty.b64_cap + b64_len + 1) * 2;
+            if (new_cap < SFTE_KITTY_B64_INIT_CAP) new_cap = SFTE_KITTY_B64_INIT_CAP;
+            if (new_cap > SFTE_KITTY_B64_MAX_CAP) return;
+
+            ctx->kitty.b64_cap = new_cap;
             ctx->kitty.b64_buf = (char *)SFTE_REALLOC(ctx->kitty.b64_buf, ctx->kitty.b64_cap);
         }
         memcpy(ctx->kitty.b64_buf + ctx->kitty.b64_len, b64_start, b64_len);
@@ -1332,7 +1363,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
                 file_path[raw_len] = '\0';
             }
 
-            if (ctx->kitty.format == 100 /* PNG / JPEG */) {
+            if (ctx->kitty.format == SFTE_KITTY_FMT_PNG_JPEG) {
                 int channels = 0;
                 uint8_t *stb_pxs = is_file ? stbi_load(file_path, &w, &h, &channels, 4)
                                            : stbi_load_from_memory(raw_data, raw_len, &w, &h,
@@ -1349,9 +1380,10 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
                     }
                     stbi_image_free(stb_pxs);
                 }
-            } else if ((ctx->kitty.format == 24 /* RGB */ || ctx->kitty.format == 32 /* RGBA */) &&
+            } else if ((ctx->kitty.format == SFTE_KITTY_FMT_RGB ||
+                        ctx->kitty.format == SFTE_KITTY_FMT_RGBA) &&
                        w > 0 && h > 0) {
-                int bpp = (ctx->kitty.format == 24) ? 3 : 4;
+                int bpp = (ctx->kitty.format == SFTE_KITTY_FMT_RGB) ? 3 : 4;
                 uint8_t *pixel_src = raw_data;
                 size_t pixel_len = raw_len;
 
@@ -1418,45 +1450,59 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
                     }
                 }
 
-                // write to shared object pool
+                uint8_t oom = 0;
                 if (ctx->term.img_pool_len >= ctx->term.img_pool_cap) {
-                    ctx->term.img_pool_cap = ctx->term.img_pool_cap == 0
-                                                 ? 16
-                                                 : ctx->term.img_pool_cap * 2;
-                    ctx->term.img_pool = (sfte_img *)SFTE_REALLOC(
-                        ctx->term.img_pool, ctx->term.img_pool_cap * sizeof(sfte_img));
+                    if (ctx->term.img_pool_cap >= SFTE_IMG_POOL_MAX_CAP)
+                        oom = 1;
+                    else {
+                        ctx->term.img_pool_cap = ctx->term.img_pool_cap == 0
+                                                     ? SFTE_IMG_POOL_INIT_CAP
+                                                     : ctx->term.img_pool_cap * 2;
+                        ctx->term.img_pool = (sfte_img *)SFTE_REALLOC(
+                            ctx->term.img_pool, ctx->term.img_pool_cap * sizeof(sfte_img));
+                    }
                 }
-                ctx->term.img_pool[ctx->term.img_pool_len++] = (sfte_img){
-                    .id = ctx->kitty.id, .width = w, .height = h, .pxs = pxs, .ref_cnt = 1};
 
-                // write to shared placement pool
                 if (ctx->term.img_placements_len >= ctx->term.img_placements_cap) {
-                    ctx->term.img_placements_cap = ctx->term.img_placements_cap == 0
-                                                       ? 32
-                                                       : ctx->term.img_placements_cap * 2;
-                    ctx->term.img_placements = (sfte_img_placement *)SFTE_REALLOC(
-                        ctx->term.img_placements,
-                        ctx->term.img_placements_cap * sizeof(sfte_img_placement));
+                    if (ctx->term.img_placements_cap >= SFTE_IMG_PLACEMENT_MAX_CAP)
+                        oom = 1;
+                    else {
+                        ctx->term.img_placements_cap = ctx->term.img_placements_cap == 0
+                                                           ? SFTE_IMG_PLACEMENT_INIT_CAP
+                                                           : ctx->term.img_placements_cap * 2;
+                        ctx->term.img_placements = (sfte_img_placement *)SFTE_REALLOC(
+                            ctx->term.img_placements,
+                            ctx->term.img_placements_cap * sizeof(sfte_img_placement));
+                    }
                 }
-                ctx->term.img_placements[ctx->term.img_placements_len++] = (sfte_img_placement){
-                    .img_id = ctx->kitty.id,
-                    .start_col = ctx->term.cursor_x,
-                    .start_row = ctx->term.cursor_y,
-                    .x_off = ctx->kitty.x_off,
-                    .y_off = ctx->kitty.y_off,
-                    .z_idx = ctx->kitty.z_idx,
-                    .is_sixel = 0,
-                    .alt_screen = ctx->term.alt_active};
 
-                int img_rows = (h / ctx->font.cell_height) + 1;
-                int img_cols = (w / ctx->font.cell_width) + 1;
+                if (oom)
+                    SFTE_FREE(pxs);
+                else {
+                    ctx->term.img_pool[ctx->term.img_pool_len++] = (sfte_img){
+                        .id = ctx->kitty.id, .width = w, .height = h, .pxs = pxs, .ref_cnt = 1};
 
-                for (int r = ctx->term.cursor_y; r < ctx->term.cursor_y + img_rows; ++r) {
-                    if (r >= ctx->term.rows) break;
+                    ctx->term.img_placements[ctx->term.img_placements_len++] = (sfte_img_placement){
+                        .img_id = ctx->kitty.id,
+                        .start_col = ctx->term.cursor_x,
+                        .start_row = ctx->term.cursor_y,
+                        .x_off = ctx->kitty.x_off,
+                        .y_off = ctx->kitty.y_off,
+                        .z_idx = ctx->kitty.z_idx,
+                        .is_sixel = 0,
+                        .alt_screen = ctx->term.alt_active};
 
-                    for (int c = ctx->term.cursor_x; c < ctx->term.cursor_x + img_cols; ++c) {
-                        if (c >= ctx->term.cols) break;
-                        ctx->term.cells[_SFTE_IDX(ctx, c, r)].dirty = 1;
+                    // dirty cells covered by image
+                    int img_rows = (h / ctx->font.cell_height) + 1;
+                    int img_cols = (w / ctx->font.cell_width) + 1;
+
+                    for (int r = ctx->term.cursor_y; r < ctx->term.cursor_y + img_rows; ++r) {
+                        if (r >= ctx->term.rows) break;
+
+                        for (int c = ctx->term.cursor_x; c < ctx->term.cursor_x + img_cols; ++c) {
+                            if (c >= ctx->term.cols) break;
+                            ctx->term.cells[_SFTE_IDX(ctx, c, r)].dirty = 1;
+                        }
                     }
                 }
             }
@@ -4783,54 +4829,67 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
                 SFTE_FREE(ctx->sixel.pxs);
 
                 uint32_t id = ++ctx->term.next_img_id;
+                uint8_t oom = 0;
                 if (ctx->term.img_pool_len >= ctx->term.img_pool_cap) {
-                    ctx->term.img_pool_cap = ctx->term.img_pool_cap == 0
-                                                 ? 16
-                                                 : ctx->term.img_pool_cap * 2;
-                    ctx->term.img_pool = (sfte_img *)SFTE_REALLOC(
-                        ctx->term.img_pool, ctx->term.img_pool_cap * sizeof(sfte_img));
+                    if (ctx->term.img_pool_cap >= SFTE_IMG_POOL_MAX_CAP)
+                        oom = 1;
+                    else {
+                        ctx->term.img_pool_cap = ctx->term.img_pool_cap == 0
+                                                     ? SFTE_IMG_POOL_INIT_CAP
+                                                     : ctx->term.img_pool_cap * 2;
+                        ctx->term.img_pool = (sfte_img *)SFTE_REALLOC(
+                            ctx->term.img_pool, ctx->term.img_pool_cap * sizeof(sfte_img));
+                    }
                 }
-
-                // add to image pool
-                ctx->term.img_pool[ctx->term.img_pool_len++] = (sfte_img){
-                    .id = id,
-                    .width = ctx->sixel.width,
-                    .height = ctx->sixel.height,
-                    .pxs = final_pxs,
-                    .ref_cnt = 1,
-                };
 
                 if (ctx->term.img_placements_len >= ctx->term.img_placements_cap) {
-                    ctx->term.img_placements_cap = ctx->term.img_placements_cap == 0
-                                                       ? 32
-                                                       : ctx->term.img_placements_cap * 2;
-                    ctx->term.img_placements = (sfte_img_placement *)SFTE_REALLOC(
-                        ctx->term.img_placements,
-                        ctx->term.img_placements_cap * sizeof(sfte_img_placement));
+                    if (ctx->term.img_placements_cap >= SFTE_IMG_PLACEMENT_MAX_CAP)
+                        oom = 1;
+                    else {
+                        ctx->term.img_placements_cap = ctx->term.img_placements_cap == 0
+                                                           ? SFTE_IMG_PLACEMENT_INIT_CAP
+                                                           : ctx->term.img_placements_cap * 2;
+                        ctx->term.img_placements = (sfte_img_placement *)SFTE_REALLOC(
+                            ctx->term.img_placements,
+                            ctx->term.img_placements_cap * sizeof(sfte_img_placement));
+                    }
                 }
 
-                // add to placement pool
-                ctx->term.img_placements[ctx->term.img_placements_len++] = (sfte_img_placement){
-                    .img_id = id,
-                    .start_col = ctx->sixel.start_col,
-                    .start_row = ctx->sixel.start_row,
-                    .z_idx = 1,
-                    .is_sixel = 1,
-                    .alt_screen = ctx->term.alt_active,
-                };
+                if (oom)
+                    SFTE_FREE(final_pxs);
+                else {
+                    // add to image pool
+                    ctx->term.img_pool[ctx->term.img_pool_len++] = (sfte_img){
+                        .id = id,
+                        .width = ctx->sixel.width,
+                        .height = ctx->sixel.height,
+                        .pxs = final_pxs,
+                        .ref_cnt = 1,
+                    };
 
-                // dirty image area
-                int img_rows = (ctx->sixel.height / ctx->font.cell_height);
-                if (ctx->sixel.height % ctx->font.cell_height != 0) img_rows++;
+                    // add to placement pool
+                    ctx->term.img_placements[ctx->term.img_placements_len++] = (sfte_img_placement){
+                        .img_id = id,
+                        .start_col = ctx->sixel.start_col,
+                        .start_row = ctx->sixel.start_row,
+                        .z_idx = 1,
+                        .is_sixel = 1,
+                        .alt_screen = ctx->term.alt_active,
+                    };
 
-                // force text cursor below the image
-                ctx->term.cursor_y = ctx->sixel.start_row + img_rows;
-                ctx->term.cursor_x = 0;
+                    // dirty image area
+                    int img_rows = (ctx->sixel.height / ctx->font.cell_height);
+                    if (ctx->sixel.height % ctx->font.cell_height != 0) img_rows++;
 
-                // if image pushed cursor off the screen, scroll
-                while (ctx->term.cursor_y > ctx->term.scroll_bottom) {
-                    _sfte_grid_scroll(ctx, 1);
-                    ctx->term.cursor_y--;
+                    // force text cursor below the image
+                    ctx->term.cursor_y = ctx->sixel.start_row + img_rows;
+                    ctx->term.cursor_x = 0;
+
+                    // if image pushed cursor off the screen, scroll
+                    while (ctx->term.cursor_y > ctx->term.scroll_bottom) {
+                        _sfte_grid_scroll(ctx, 1);
+                        ctx->term.cursor_y--;
+                    }
                 }
             }
 
