@@ -652,6 +652,7 @@ typedef struct {
     int y_off;
     int z_idx;  // <0=below text, >=0=above text
     uint8_t is_sixel;
+    uint8_t alt_screen;  // 0=main, 1=alt
 } sfte_img_placement;
 #endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 
@@ -756,7 +757,7 @@ typedef struct {
 #endif                     // SFTE_CURSOR_DYNAMIC
 // alt screen state
 #if SFTE_ALT_SCREEN
-    int alt_active;  // tracks if in alt buffer
+    uint8_t alt_active;  // tracks if in alt buffer
     sfte_cell *alt_cells;
 #endif  // SFTE_ALT_SCREEN
 
@@ -1272,6 +1273,10 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
     } else if (ctx->kitty.action == 'd') {
         for (uint32_t j = 0; j < ctx->term.img_placements_len;) {
             sfte_img_placement *p = &ctx->term.img_placements[j];
+            if (p->alt_screen != ctx->term.alt_active) {
+                j++;
+                continue;
+            }
 
             int should_del = 0;
             if (ctx->kitty.d_action == 'A' || ctx->kitty.d_action == 'a')
@@ -1440,7 +1445,8 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
                     .x_off = ctx->kitty.x_off,
                     .y_off = ctx->kitty.y_off,
                     .z_idx = ctx->kitty.z_idx,
-                    .is_sixel = 0};
+                    .is_sixel = 0,
+                    .alt_screen = ctx->term.alt_active};
 
                 int img_rows = (h / ctx->font.cell_height) + 1;
                 int img_cols = (w / ctx->font.cell_width) + 1;
@@ -3196,6 +3202,11 @@ static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
 #if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
     for (uint32_t i = 0; i < ctx->term.img_placements_len;) {
         sfte_img_placement *p = &ctx->term.img_placements[i];
+        // scroll only images on current screen
+        if (p->alt_screen != ctx->term.alt_active) {
+            i++;
+            continue;
+        }
         // scroll the image if its in active region, or its in the scrollback buffer and we're
         // pushing new lines into scrollback.
         if ((p->start_row >= top && p->start_row <= bot + 1) || (top == 0 && p->start_row < 0))
@@ -3976,6 +3987,23 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
                         ctx->term.alt_cells = tmp;
                         _sfte_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
                     }
+
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+                    // destroy all imgs created on alt screen
+                    for (uint32_t j = 0; j < ctx->term.img_placements_len;) {
+                        if (ctx->term.img_placements[j].alt_screen) {
+                            for (uint32_t k = 0; k < ctx->term.img_pool_len; ++k)
+                                if (ctx->term.img_pool[k].id ==
+                                    ctx->term.img_placements[j].img_id) {
+                                    ctx->term.img_pool[k].ref_cnt--;
+                                    break;
+                                }
+                            ctx->term.img_placements[j] = ctx->term.img_placements
+                                                              [--ctx->term.img_placements_len];
+                        } else
+                            j++;
+                    }
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
                 }
 #endif  // SFTE_ALT_SCREEN
 
@@ -4788,6 +4816,7 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
                     .start_row = ctx->sixel.start_row,
                     .z_idx = 1,
                     .is_sixel = 1,
+                    .alt_screen = ctx->term.alt_active,
                 };
 
                 // dirty image area
@@ -4983,6 +5012,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
 #define SFTE_RENDER_IMG_PASS(is_bg_pass)                                                           \
     for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {                                  \
         sfte_img_placement *p = &ctx->term.img_placements[i];                                      \
+        if (p->alt_screen != ctx->term.alt_active) continue;                                       \
         int is_bg_img = (p->z_idx < 0);                                                            \
         if (is_bg_img != (is_bg_pass)) continue;                                                   \
                                                                                                    \
