@@ -698,6 +698,8 @@ typedef struct {
     int height;
     char t_medium;
     char d_action;
+    int cols;
+    int rows;
 } sfte_kitty_state;
 #endif  // SFTE_KITTY_GRAPHICS
 
@@ -1136,6 +1138,48 @@ static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b) {
 #if SFTE_KITTY_GRAPHICS
 static void _sfte_grid_scroll(sfte_ctx *ctx, int lines);
 
+static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int sw, int sh, int dw, int dh) {
+    uint32_t *dst = (uint32_t *)SFTE_MALLOC(dw * dh * sizeof(uint32_t));
+    if (!dst) return NULL;
+
+    float x_ratio = ((float)(sw - 1)) / dw;
+    float y_ratio = ((float)(sh - 1)) / dh;
+
+    for (int i = 0; i < dh; ++i)
+        for (int j = 0; j < dw; ++j) {
+            int x = (int)(x_ratio * j);
+            int y = (int)(y_ratio * i);
+            float x_diff = (x_ratio * j) - x;
+            float y_diff = (y_ratio * i) - y;
+
+            // 4 nearest pxs
+            int idx = y * sw + x;
+            uint32_t p1 = src[idx];
+            uint32_t p2 = (x + 1 < sw) ? src[idx + 1] : p1;
+            uint32_t p3 = (y + 1 < sh) ? src[idx + sw] : p1;
+            uint32_t p4 = (x + 1 < sw && y + 1 < sh) ? src[idx + sw + 1] : p1;
+
+            // weights
+            float w1 = (1.0f - x_diff) * (1.0f - y_diff);
+            float w2 = x_diff * (1.0f - y_diff);
+            float w3 = (1.0f - x_diff) * y_diff;
+            float w4 = x_diff * y_diff;
+
+            // interpolate
+            uint32_t r = (uint32_t)(((p1 >> 16) & 0xFF) * w1 + ((p2 >> 16) & 0xFF) * w2 +
+                                    ((p3 >> 16) & 0xFF) * w3 + ((p4 >> 16) & 0xFF) * w4);
+            uint32_t g = (uint32_t)(((p1 >> 8) & 0xFF) * w1 + ((p2 >> 8) & 0xFF) * w2 +
+                                    ((p3 >> 8) & 0xFF) * w3 + ((p4 >> 8) & 0xFF) * w4);
+            uint32_t b = (uint32_t)((p1 & 0xFF) * w1 + (p2 & 0xFF) * w2 + (p3 & 0xFF) * w3 +
+                                    (p4 & 0xFF) * w4);
+            uint32_t a = (uint32_t)(((p1 >> 24) & 0xFF) * w1 + ((p2 >> 24) & 0xFF) * w2 +
+                                    ((p3 >> 24) & 0xFF) * w3 + ((p4 >> 24) & 0xFF) * w4);
+            dst[i * dw + j] = (a << 24) | (r << 16) | (g << 8) | b;
+        }
+
+    return dst;
+}
+
 static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
     const char *semi = strchr(payload, ';');
     // if there's no semicolon, the dictionary spans the entire payload
@@ -1164,6 +1208,8 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         ctx->kitty.height = 0;
         ctx->kitty.t_medium = 'd';
         ctx->kitty.d_action = 0;
+        ctx->kitty.cols = 0;
+        ctx->kitty.rows = 0;
     }
 
     // parse params into state
@@ -1183,6 +1229,8 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         case 'm': more = atoi(val); break;
         case 't': ctx->kitty.t_medium = val[0]; break;
         case 'd': ctx->kitty.d_action = val[0]; break;
+        case 'c': ctx->kitty.cols = atoi(val); break;
+        case 'r': ctx->kitty.rows = atoi(val); break;
         default: break;
         }
 
@@ -1325,6 +1373,36 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
 
             if (pxs) {
                 if (ctx->kitty.id == 0) ctx->kitty.id = ++ctx->term.next_img_id;
+
+                // c and r scaling
+                if (ctx->kitty.cols > 0 || ctx->kitty.rows > 0) {
+                    int target_w = w;
+                    int target_h = h;
+
+                    // if only one specified, calculate the other
+                    if (ctx->kitty.cols > 0 && ctx->kitty.rows == 0) {
+                        target_w = ctx->kitty.cols * ctx->font.cell_width;
+                        target_h = (target_w * h) / w;
+                    } else if (ctx->kitty.cols == 0 && ctx->kitty.rows > 0) {
+                        target_h = ctx->kitty.rows * ctx->font.cell_height;
+                        target_w = (target_h * w) / h;
+                    } else {  // both specified, stretch to fit
+                        target_w = ctx->kitty.cols * ctx->font.cell_width;
+                        target_h = ctx->kitty.rows * ctx->font.cell_height;
+                    }
+
+                    // only scale if dims changed
+                    if (target_w > 0 && target_h > 0 && (target_w != w || target_h != h)) {
+                        uint32_t *scaled_pxs = _sfte_kitty_scale_image_bilinear(pxs, w, h, target_w,
+                                                                                target_h);
+                        if (scaled_pxs) {
+                            SFTE_FREE(pxs);
+                            pxs = scaled_pxs;
+                            w = target_w;
+                            h = target_h;
+                        }
+                    }
+                }
 
                 // write to shared object pool
                 if (ctx->term.img_pool_len >= ctx->term.img_pool_cap) {
