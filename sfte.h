@@ -1585,6 +1585,58 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
             }
             SFTE_FREE(raw_data);
         }
+    } else if (ctx->kitty.action == 'p') {
+        sfte_img *img = NULL;
+        for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
+            if (ctx->term.img_pool[j].id == ctx->kitty.id) {
+                img = &ctx->term.img_pool[j];
+                break;
+            }
+
+        if (img) {
+            int oom = 0;
+            if (ctx->term.img_placements_len >= ctx->term.img_placements_cap) {
+                if (ctx->term.img_placements_cap >= SFTE_IMG_PLACEMENT_MAX_CAP)
+                    oom = 1;
+                else {
+                    ctx->term.img_placements_cap = ctx->term.img_placements_cap == 0
+                                                       ? SFTE_IMG_PLACEMENT_INIT_CAP
+                                                       : ctx->term.img_placements_cap * 2;
+                    ctx->term.img_placements = (sfte_img_placement *)SFTE_REALLOC(
+                        ctx->term.img_placements,
+                        ctx->term.img_placements_cap * sizeof(sfte_img_placement));
+                }
+            }
+
+            if (!oom) {
+                img->ref_cnt++;
+                ctx->term.img_placements[ctx->term.img_placements_len++] = (sfte_img_placement){
+                    .img_id = ctx->kitty.id,
+                    .start_col = ctx->term.cursor_x,
+                    .start_row = ctx->term.cursor_y,
+                    .x_off = ctx->kitty.x_off,
+                    .y_off = ctx->kitty.y_off,
+                    .z_idx = ctx->kitty.z_idx,
+                    .is_sixel = 0,
+                    .alt_screen = ctx->term.alt_active,
+                };
+
+                // dirty cells covered by image
+                int img_rows = (img->height + ctx->kitty.y_off + ctx->font.cell_height - 1) /
+                               ctx->font.cell_height;
+                int img_cols = (img->width + ctx->kitty.x_off + ctx->font.cell_width - 1) /
+                               ctx->font.cell_width;
+
+                for (int r = ctx->term.cursor_y; r < ctx->term.cursor_y + img_rows; ++r) {
+                    if (r >= ctx->term.rows) break;
+
+                    for (int c = ctx->term.cursor_x; c < ctx->term.cursor_x + img_cols; ++c) {
+                        if (c >= ctx->term.cols) break;
+                        ctx->term.cells[_SFTE_IDX(ctx, c, r)].dirty = 1;
+                    }
+                }
+            }
+        }
     }
     ctx->kitty.b64_len = 0;
 }
