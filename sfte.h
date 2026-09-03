@@ -651,6 +651,7 @@ typedef struct {
     int x_off;
     int y_off;
     int z_idx;  // <0=below text, >=0=above text
+    uint8_t is_sixel;
 } sfte_img_placement;
 #endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 
@@ -1439,6 +1440,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
                     .x_off = ctx->kitty.x_off,
                     .y_off = ctx->kitty.y_off,
                     .z_idx = ctx->kitty.z_idx,
+                    .is_sixel = 0};
 
                 int img_rows = (h / ctx->font.cell_height) + 1;
                 int img_cols = (w / ctx->font.cell_width) + 1;
@@ -3134,11 +3136,16 @@ static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt)
 #endif  // SFTE_HYPERLINKS
 
 #if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
-        // erase overlapping img placements
+        // erase overlapping sixel img placements
         for (uint32_t i = 0; i < ctx->term.img_placements_len;) {
             sfte_img_placement *p = &ctx->term.img_placements[i];
-            sfte_img *img = NULL;
+            // only erase if it's sixel
+            if (!p->is_sixel) {
+                i++;
+                continue;
+            }
 
+            sfte_img *img = NULL;
             for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j) {
                 if (ctx->term.img_pool[j].id == p->img_id) {
                     img = &ctx->term.img_pool[j];
@@ -3189,26 +3196,25 @@ static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
 #if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
     for (uint32_t i = 0; i < ctx->term.img_placements_len;) {
         sfte_img_placement *p = &ctx->term.img_placements[i];
-
-        if (p->start_row >= top && p->start_row <= bot) {
+        // scroll the image if its in active region, or its in the scrollback buffer and we're
+        // pushing new lines into scrollback.
+        if ((p->start_row >= top && p->start_row <= bot + 1) || (top == 0 && p->start_row < 0))
             p->start_row -= lines;
 
-            sfte_img *img = NULL;
-            for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
-                if (ctx->term.img_pool[j].id == p->img_id) {
-                    img = &ctx->term.img_pool[j];
-                    break;
-                }
-
-            int img_rows = img ? (img->height / ctx->font.cell_height) + 1 : 1;
-
-            // if it scrolled out of visible area, delete it
-            if (p->start_row + img_rows <= top || p->start_row > bot) {
-                if (img) img->ref_cnt--;
-                ctx->term.img_placements[i] = ctx->term
-                                                  .img_placements[--ctx->term.img_placements_len];
-                continue;
+        sfte_img *img = NULL;
+        for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
+            if (ctx->term.img_pool[j].id == p->img_id) {
+                img = &ctx->term.img_pool[j];
+                break;
             }
+
+        int img_rows = img ? (img->height / ctx->font.cell_height) + 1 : 1;
+
+        // if it scrolled out of visible area, delete it
+        if (p->start_row + img_rows <= -SFTE_SCROLLBACK_CAP) {
+            if (img) img->ref_cnt--;
+            ctx->term.img_placements[i] = ctx->term.img_placements[--ctx->term.img_placements_len];
+            continue;
         }
         i++;
     }
@@ -4781,6 +4787,7 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
                     .start_col = ctx->sixel.start_col,
                     .start_row = ctx->sixel.start_row,
                     .z_idx = 1,
+                    .is_sixel = 1,
                 };
 
                 // dirty image area
