@@ -4860,6 +4860,8 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
     ctx->width = w;
     ctx->height = h;
 
+    uint8_t pad_was_dirty = ctx->padding_dirty;
+
     if (ctx->padding_dirty > 0) {
         _sfte_clear_padding_rects(ctx, px_buf);
         ctx->padding_dirty--;
@@ -5026,6 +5028,17 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
                 int out_x = base_x + ix;                                                           \
                 if (out_x < 0 || out_x >= ctx->width) continue;                                    \
                                                                                                    \
+                uint8_t is_dirty = 0;                                                              \
+                if (out_x < SFTE_PAD_X || out_y < SFTE_PAD_Y ||                                    \
+                    out_x >= ctx->width - SFTE_PAD_X || out_y >= ctx->height - SFTE_PAD_Y)         \
+                    is_dirty = pad_was_dirty;                                                      \
+                else {                                                                             \
+                    int grid_c = (out_x - SFTE_PAD_X) / ctx->font.cell_width;                      \
+                    int grid_r = (out_y - SFTE_PAD_Y) / ctx->font.cell_height;                     \
+                    is_dirty = ctx->term.cells[_SFTE_IDX(ctx, grid_c, grid_r)].dirty;              \
+                }                                                                                  \
+                if (!is_dirty) continue;                                                           \
+                                                                                                   \
                 uint32_t img_pxs = img->pxs[iy * img->width + ix];                                 \
                 if ((img_pxs & 0xFF000000) == 0) continue;                                         \
                 px_buf[out_y * ctx->width + out_x] = _sfte_render_blend_argb(                      \
@@ -5152,7 +5165,6 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
             } else if (r == ctx->term.rows - 1)
                 dmg_ch += ctx->height - (dmg_cy + dmg_ch);
             DAMAGE_ADD(0, dmg_cy, ctx->width, dmg_ch);
-            ctx->term.cells[idx].dirty = 0;
         }
     }
 
@@ -5265,6 +5277,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
         out_dmg->y = dmg_y0;
         out_dmg->w = dmg_x1 - dmg_x0;
         out_dmg->h = dmg_y1 - dmg_y0;
+        for (int i = 0; i < ctx->term.rows * ctx->term.cols; ++i) ctx->term.cells[i].dirty = 0;
     } else {
         out_dmg->w = 0;
         out_dmg->h = 0;
