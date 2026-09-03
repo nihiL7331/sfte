@@ -4995,7 +4995,21 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
         int draw_w = img->width;                                                                   \
         if (base_x + draw_w > ctx->width) draw_w = ctx->width - base_x;                            \
                                                                                                    \
-        if (draw_h > 0 && draw_w > 0) DAMAGE_ADD(base_x, base_y, draw_w, draw_h);                  \
+        int dmg_x = base_x;                                                                        \
+        int dmg_y = base_y;                                                                        \
+        int dmg_w = draw_w;                                                                        \
+        int dmg_h = draw_h;                                                                        \
+                                                                                                   \
+        if (dmg_y < 0) {                                                                           \
+            dmg_h += dmg_y;                                                                        \
+            dmg_y = 0;                                                                             \
+        }                                                                                          \
+        if (dmg_x < 0) {                                                                           \
+            dmg_w += dmg_x;                                                                        \
+            dmg_x = 0;                                                                             \
+        }                                                                                          \
+                                                                                                   \
+        if (dmg_h > 0 && dmg_w > 0) DAMAGE_ADD(dmg_x, dmg_y, dmg_w, dmg_h);                        \
                                                                                                    \
         for (int iy = 0; iy < img->height; ++iy) {                                                 \
             int out_y = base_y + iy;                                                               \
