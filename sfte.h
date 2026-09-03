@@ -1378,7 +1378,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
             }
             k++;
         }
-    } else if (ctx->kitty.action == 'T') {
+    } else if (ctx->kitty.action == 'T' || ctx->kitty.action == 't') {
         size_t raw_len = 0;
         uint8_t *raw_data = _sfte_b64_decode((uint8_t *)ctx->kitty.b64_buf, ctx->kitty.b64_len,
                                              &raw_len);
@@ -1548,31 +1548,37 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
                                                                               .width = w,
                                                                               .height = h,
                                                                               .pxs = pxs,
-                                                                              .ref_cnt = 1,
+                                                                              .ref_cnt = 0,
                                                                               .is_sixel = 0};
 
-                    ctx->term.img_placements[ctx->term.img_placements_len++] = (sfte_img_placement){
-                        .img_id = ctx->kitty.id,
-                        .start_col = ctx->term.cursor_x,
-                        .start_row = ctx->term.cursor_y,
-                        .x_off = ctx->kitty.x_off,
-                        .y_off = ctx->kitty.y_off,
-                        .z_idx = ctx->kitty.z_idx,
-                        .is_sixel = 0,
-                        .alt_screen = ctx->term.alt_active};
+                    if (ctx->kitty.action == 'T') {
+                        ctx->term.img_pool[ctx->term.img_pool_len - 1].ref_cnt = 1;
 
-                    // dirty cells covered by image
-                    int img_rows = (h + ctx->kitty.y_off + ctx->font.cell_height - 1) /
-                                   ctx->font.cell_height;
-                    int img_cols = (w + ctx->kitty.x_off + ctx->font.cell_width - 1) /
-                                   ctx->font.cell_width;
+                        ctx->term
+                            .img_placements[ctx->term.img_placements_len++] = (sfte_img_placement){
+                            .img_id = ctx->kitty.id,
+                            .start_col = ctx->term.cursor_x,
+                            .start_row = ctx->term.cursor_y,
+                            .x_off = ctx->kitty.x_off,
+                            .y_off = ctx->kitty.y_off,
+                            .z_idx = ctx->kitty.z_idx,
+                            .is_sixel = 0,
+                            .alt_screen = ctx->term.alt_active};
 
-                    for (int r = ctx->term.cursor_y; r < ctx->term.cursor_y + img_rows; ++r) {
-                        if (r >= ctx->term.rows) break;
+                        // dirty cells covered by image
+                        int img_rows = (h + ctx->kitty.y_off + ctx->font.cell_height - 1) /
+                                       ctx->font.cell_height;
+                        int img_cols = (w + ctx->kitty.x_off + ctx->font.cell_width - 1) /
+                                       ctx->font.cell_width;
 
-                        for (int c = ctx->term.cursor_x; c < ctx->term.cursor_x + img_cols; ++c) {
-                            if (c >= ctx->term.cols) break;
-                            ctx->term.cells[_SFTE_IDX(ctx, c, r)].dirty = 1;
+                        for (int r = ctx->term.cursor_y; r < ctx->term.cursor_y + img_rows; ++r) {
+                            if (r >= ctx->term.rows) break;
+
+                            for (int c = ctx->term.cursor_x; c < ctx->term.cursor_x + img_cols;
+                                 ++c) {
+                                if (c >= ctx->term.cols) break;
+                                ctx->term.cells[_SFTE_IDX(ctx, c, r)].dirty = 1;
+                            }
                         }
                     }
                 }
