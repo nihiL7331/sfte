@@ -3738,8 +3738,8 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         if (mode == 2 || (mode == 0 && ctx->term.cursor_x == 0 && ctx->term.cursor_y == 0)) {
 #if SFTE_SCROLLBACK_CAP
             // find last populated row
-            int last_r = -1;
-            for (int r = ctx->term.rows - 1; r >= 0; --r) {
+            int last_r = ctx->term.cursor_y;
+            for (int r = ctx->term.rows - 1; r > last_r; --r) {
                 for (int c = 0; c < ctx->term.cols; ++c) {
                     sfte_cell *cell = &ctx->term.cells[r * ctx->term.cols + c];
                     if (cell->rune != ' ' && cell->rune != '\0') {
@@ -3748,8 +3748,31 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
                     }
                 }
 
-                if (last_r != -1) break;
+                if (last_r == r) break;
             }
+
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+            for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
+                sfte_img_placement *p = &ctx->term.img_placements[i];
+                if (p->alt_screen != ctx->term.alt_active) continue;
+
+                sfte_img *img = NULL;
+                for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
+                    if (ctx->term.img_pool[j].id == p->img_id) {
+                        img = &ctx->term.img_pool[j];
+                        break;
+                    }
+
+                if (img) {
+                    int img_rows = (img->height + p->y_off + ctx->font.cell_height - 1) /
+                                   ctx->font.cell_height;
+                    int img_bot = p->start_row + img_rows - 1;
+                    if (img_bot > last_r) last_r = img_bot;
+                }
+            }
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+
+            if (last_r >= ctx->term.rows) last_r = ctx->term.rows - 1;
             int lines_to_push = last_r + 1;
 
             // temporarily bypass scroll margins to ensure full-screen push
@@ -3757,6 +3780,7 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
             int old_bot = ctx->term.scroll_bottom;
             ctx->term.scroll_top = 0;
             ctx->term.scroll_bottom = ctx->term.rows - 1;
+
             if (lines_to_push > 0) _sfte_grid_scroll(ctx, lines_to_push);
 
             ctx->term.scroll_top = old_top;
