@@ -675,6 +675,7 @@ typedef struct {
 // placement of an image onto the terminal grid
 typedef struct {
     uint32_t img_id;
+    uint32_t placement_id;
     int start_col;
     int start_row;
     int x_off;
@@ -739,6 +740,7 @@ typedef struct {
     int crop_y;
     int crop_w;
     int crop_h;
+    uint32_t placement_id;
 } sfte_kitty_state;
 #endif  // SFTE_KITTY_GRAPHICS
 
@@ -1242,7 +1244,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         ctx->kitty.action = 'T';
         ctx->kitty.id = 0;
         ctx->kitty.z_idx = 0;
-        ctx->kitty.format = 32 /* RGBA */;
+        ctx->kitty.format = SFTE_KITTY_FMT_RGBA;
         ctx->kitty.width = 0;
         ctx->kitty.height = 0;
         ctx->kitty.t_medium = 'd';
@@ -1255,6 +1257,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         ctx->kitty.crop_y = 0;
         ctx->kitty.crop_w = 0;
         ctx->kitty.crop_h = 0;
+        ctx->kitty.placement_id = 0;
     }
 
     // parse params into state
@@ -1282,6 +1285,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         case 'y': ctx->kitty.crop_y = atoi(val); break;
         case 'w': ctx->kitty.crop_w = atoi(val); break;
         case 'h': ctx->kitty.crop_h = atoi(val); break;
+        case 'p': ctx->kitty.placement_id = (uint32_t)atoi(val); break;
         default: break;
         }
 
@@ -1317,30 +1321,73 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
     } else if (ctx->kitty.action == 'd') {
         for (uint32_t j = 0; j < ctx->term.img_placements_len;) {
             sfte_img_placement *p = &ctx->term.img_placements[j];
-            if (p->alt_screen != ctx->term.alt_active) {
+            if (p->alt_screen != ctx->term.alt_active || p->is_sixel) {
                 j++;
                 continue;
             }
 
-            int should_del = 0;
-            if (ctx->kitty.d_action == 'A' || ctx->kitty.d_action == 'a')
+            sfte_img *img = NULL;
+            for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i)
+                if (ctx->term.img_pool[i].id == p->img_id) {
+                    img = &ctx->term.img_pool[i];
+                    break;
+                }
+
+            uint8_t should_del = 0;
+            char d_act = ctx->kitty.d_action;
+
+            uint8_t matches_id = (ctx->kitty.id == 0 || p->img_id == ctx->kitty.id);
+
+            int img_rows = img ? ((img->height + p->y_off + ctx->font.cell_height - 1) /
+                                  ctx->font.cell_height)
+                               : 1;
+            int img_cols = img ? ((img->width + p->x_off + ctx->font.cell_width - 1) /
+                                  ctx->font.cell_width)
+                               : 1;
+
+            // X and Y are 1-based, map to 0-based grid
+            int target_c = ctx->kitty.crop_x - 1;
+            int target_r = ctx->kitty.crop_y - 1;
+
+            int intersects_x = (target_c >= p->start_col && target_c < p->start_col + img_cols);
+            int intersects_y = (target_r >= p->start_row && target_r < p->start_row + img_rows);
+
+            if (d_act == 'A' || d_act == 'a')
                 should_del = 1;  // delete all
-            else if ((ctx->kitty.d_action == 'I' || ctx->kitty.d_action == 'i') &&
-                     p->img_id == ctx->kitty.id)
-                should_del = 1;  // delete specific id
+            else if (d_act == 'I' || d_act == 'i') {
+                // delete by image id,
+                // if placement_id>0 restrict to just that placement
+                if (p->img_id == ctx->kitty.id &&
+                    (ctx->kitty.placement_id == 0 || ctx->kitty.placement_id == p->placement_id))
+                    should_del = 1;  // delete specific image id
+            } else if (d_act == 'C' || d_act == 'c') {
+                // delete intersecting cursor
+                if (matches_id && ctx->term.cursor_x >= p->start_col &&
+                    ctx->term.cursor_x < p->start_col + img_cols &&
+                    ctx->term.cursor_y >= p->start_row &&
+                    ctx->term.cursor_y < p->start_row + img_rows)
+                    should_del = 1;
+            } else if (d_act == 'P' || d_act == 'p') {
+                // delete intersecting cell (x, y)
+                if (matches_id && intersects_x && intersects_y) should_del = 1;
+            } else if (d_act == 'X' || d_act == 'x') {
+                // delete intersecting column (x)
+                if (matches_id && intersects_x) should_del = 1;
+            } else if (d_act == 'Y' || d_act == 'y') {
+                // delete intersecting row (y)
+                if (matches_id && intersects_y) should_del = 1;
+            } else if (d_act == 'Z' || d_act == 'z') {
+                // delete by z index
+                if (matches_id && p->z_idx == ctx->kitty.z_idx) should_del = 1;
+            } else if (d_act == 'Q' || d_act == 'q') {
+                // delete intersecting cell (x, y) AND matching z index
+                if (matches_id && intersects_x && intersects_y && p->z_idx == ctx->kitty.z_idx)
+                    should_del = 1;
+            }
 
             if (should_del) {
-                // find image to get its dims for dirtying
-                sfte_img *img = NULL;
-                for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i)
-                    if (ctx->term.img_pool[i].id == p->img_id) {
-                        img = &ctx->term.img_pool[i];
-                        break;
-                    }
-
                 if (img) {
-                    int img_rows = (img->height / ctx->font.cell_height) + 1;
-                    int img_cols = (img->width / ctx->font.cell_width) + 1;
+                    img->ref_cnt--;
 
                     for (int r = p->start_row; r < p->start_row + img_rows; ++r) {
                         if (r >= ctx->term.rows || r < 0) continue;
@@ -1557,6 +1604,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
                         ctx->term
                             .img_placements[ctx->term.img_placements_len++] = (sfte_img_placement){
                             .img_id = ctx->kitty.id,
+                            .placement_id = ctx->kitty.placement_id,
                             .start_col = ctx->term.cursor_x,
                             .start_row = ctx->term.cursor_y,
                             .x_off = ctx->kitty.x_off,
@@ -1612,6 +1660,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
                 img->ref_cnt++;
                 ctx->term.img_placements[ctx->term.img_placements_len++] = (sfte_img_placement){
                     .img_id = ctx->kitty.id,
+                    .placement_id = ctx->kitty.placement_id,
                     .start_col = ctx->term.cursor_x,
                     .start_row = ctx->term.cursor_y,
                     .x_off = ctx->kitty.x_off,
@@ -5027,6 +5076,7 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
                     // add to placement pool
                     ctx->term.img_placements[ctx->term.img_placements_len++] = (sfte_img_placement){
                         .img_id = id,
+                        .placement_id = 0,
                         .start_col = ctx->sixel.start_col,
                         .start_row = ctx->sixel.start_row,
                         .z_idx = 1,
