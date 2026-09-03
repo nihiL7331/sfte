@@ -734,6 +734,10 @@ typedef struct {
     int rows;
     int x_off;
     int y_off;
+    int crop_x;
+    int crop_y;
+    int crop_w;
+    int crop_h;
 } sfte_kitty_state;
 #endif  // SFTE_KITTY_GRAPHICS
 
@@ -1246,6 +1250,10 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         ctx->kitty.rows = 0;
         ctx->kitty.x_off = 0;
         ctx->kitty.y_off = 0;
+        ctx->kitty.crop_x = 0;
+        ctx->kitty.crop_y = 0;
+        ctx->kitty.crop_w = 0;
+        ctx->kitty.crop_h = 0;
     }
 
     // parse params into state
@@ -1269,6 +1277,10 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         case 'r': ctx->kitty.rows = atoi(val); break;
         case 'X': ctx->kitty.x_off = atoi(val); break;
         case 'Y': ctx->kitty.y_off = atoi(val); break;
+        case 'x': ctx->kitty.crop_x = atoi(val); break;
+        case 'y': ctx->kitty.crop_y = atoi(val); break;
+        case 'w': ctx->kitty.crop_w = atoi(val); break;
+        case 'h': ctx->kitty.crop_h = atoi(val); break;
         default: break;
         }
 
@@ -1418,6 +1430,38 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
             if (is_file) SFTE_FREE(file_path);
 
             if (pxs) {
+                int cx = ctx->kitty.crop_x;
+                int cy = ctx->kitty.crop_y;
+                int cw = ctx->kitty.crop_w > 0 ? ctx->kitty.crop_w : (w - cx);
+                int ch = ctx->kitty.crop_h > 0 ? ctx->kitty.crop_h : (h - cy);
+
+                cx = _SFTE_CLAMP(cx, 0, w);
+                cy = _SFTE_CLAMP(cy, 0, h);
+                if (cx + cw > w) cw = w - cx;
+                if (cy + ch > h) ch = h - cy;
+
+                // if crop trims image, reallocate and copy whats left
+                if (cw > 0 && ch > 0 && (cw != w || ch != h || cx != 0 || cy != 0)) {
+                    uint32_t *cropped = (uint32_t *)SFTE_MALLOC(cw * ch * sizeof(uint32_t));
+                    if (cropped) {
+                        for (int y_idx = 0; y_idx < ch; ++y_idx)
+                            memcpy(&cropped[y_idx * cw], &pxs[(cy + y_idx) * w + cx],
+                                   cw * sizeof(uint32_t));
+                        SFTE_FREE(pxs);
+                        pxs = cropped;
+                        w = cw;
+                        h = ch;
+                    } else {  // oom
+                        SFTE_FREE(pxs);
+                        pxs = NULL;
+                    }
+                } else if (cw == 0 || ch == 0) {
+                    SFTE_FREE(pxs);
+                    pxs = NULL;
+                }
+            }
+
+            if (pxs) {
                 if (ctx->kitty.id == 0) ctx->kitty.id = ++ctx->term.next_img_id;
 
                 // c and r scaling
@@ -1493,8 +1537,10 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
                         .alt_screen = ctx->term.alt_active};
 
                     // dirty cells covered by image
-                    int img_rows = (h / ctx->font.cell_height) + 1;
-                    int img_cols = (w / ctx->font.cell_width) + 1;
+                    int img_rows = (h + ctx->kitty.y_off + ctx->font.cell_height - 1) /
+                                   ctx->font.cell_height;
+                    int img_cols = (w + ctx->kitty.x_off + ctx->font.cell_width - 1) /
+                                   ctx->font.cell_width;
 
                     for (int r = ctx->term.cursor_y; r < ctx->term.cursor_y + img_rows; ++r) {
                         if (r >= ctx->term.rows) break;
@@ -3235,7 +3281,7 @@ static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt)
             } else
                 j++;
         }
-#endif  // SFTE_SIXEL
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
     }
 }
 
@@ -3265,7 +3311,9 @@ static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
                 break;
             }
 
-        int img_rows = img ? (img->height / ctx->font.cell_height) + 1 : 1;
+        int img_rows = img ? (img->height + p->y_off + ctx->font.cell_height - 1) /
+                                 ctx->font.cell_height
+                           : 1;
 
         // if it scrolled out of visible area, delete it
         if (p->start_row + img_rows <= -SFTE_SCROLLBACK_CAP) {
