@@ -669,6 +669,7 @@ typedef struct {
     int height;     // in pxs
     uint32_t *pxs;  // ARGB8888
     int ref_cnt;    // how many placements are using this img
+    uint8_t is_sixel;
 } sfte_img;
 
 // placement of an image onto the terminal grid
@@ -1357,6 +1358,26 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
             } else
                 j++;
         }
+
+        for (uint32_t k = 0; k < ctx->term.img_pool_len;) {
+            sfte_img *img = &ctx->term.img_pool[k];
+
+            if (!img->is_sixel && img->ref_cnt <= 0) {
+                int should_del_img = 0;
+                if (ctx->kitty.d_action == 'A' || ctx->kitty.d_action == 'a')
+                    should_del_img = 1;
+                else if ((ctx->kitty.d_action == 'I' || ctx->kitty.d_action == 'i') &&
+                         img->id == ctx->kitty.id)
+                    should_del_img = 1;
+
+                if (should_del_img) {
+                    if (img->pxs) SFTE_FREE(img->pxs);
+                    ctx->term.img_pool[k] = ctx->term.img_pool[--ctx->term.img_pool_len];
+                    continue;
+                }
+            }
+            k++;
+        }
     } else if (ctx->kitty.action == 'T') {
         size_t raw_len = 0;
         uint8_t *raw_data = _sfte_b64_decode((uint8_t *)ctx->kitty.b64_buf, ctx->kitty.b64_len,
@@ -1523,8 +1544,12 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
                 if (oom)
                     SFTE_FREE(pxs);
                 else {
-                    ctx->term.img_pool[ctx->term.img_pool_len++] = (sfte_img){
-                        .id = ctx->kitty.id, .width = w, .height = h, .pxs = pxs, .ref_cnt = 1};
+                    ctx->term.img_pool[ctx->term.img_pool_len++] = (sfte_img){.id = ctx->kitty.id,
+                                                                              .width = w,
+                                                                              .height = h,
+                                                                              .pxs = pxs,
+                                                                              .ref_cnt = 1,
+                                                                              .is_sixel = 0};
 
                     ctx->term.img_placements[ctx->term.img_placements_len++] = (sfte_img_placement){
                         .img_id = ctx->kitty.id,
@@ -3274,8 +3299,9 @@ static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt)
         }
 
         // free memory for imgs with no placements
+        // only auto-free sixel images, kitty images require explicit a=d commands.
         for (uint32_t j = 0; j < ctx->term.img_pool_len;) {
-            if (ctx->term.img_pool[j].ref_cnt <= 0) {
+            if (ctx->term.img_pool[j].ref_cnt <= 0 && ctx->term.img_pool[j].is_sixel) {
                 if (ctx->term.img_pool[j].pxs) SFTE_FREE(ctx->term.img_pool[j].pxs);
                 ctx->term.img_pool[j] = ctx->term.img_pool[--ctx->term.img_pool_len];
             } else
@@ -4937,6 +4963,7 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
                         .height = ctx->sixel.height,
                         .pxs = final_pxs,
                         .ref_cnt = 1,
+                        .is_sixel = 1,
                     };
 
                     // add to placement pool
