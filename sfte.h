@@ -1217,6 +1217,23 @@ static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b) {
         break;
     }
 }
+
+static void _sfte_sixel_deinit(sfte_ctx *ctx) {
+    if (ctx->term.img_pool) {
+        for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i)
+            if (ctx->term.img_pool[i].pxs) SFTE_FREE(ctx->term.img_pool[i].pxs);
+        SFTE_FREE(ctx->term.img_pool);
+        ctx->term.img_pool = NULL;
+    }
+    if (ctx->term.img_placements) {
+        SFTE_FREE(ctx->term.img_placements);
+        ctx->term.img_placements = NULL;
+    }
+    if (ctx->sixel.pxs) {
+        SFTE_FREE(ctx->sixel.pxs);
+        ctx->sixel.pxs = NULL;
+    }
+}
 #endif  // SFTE_SIXEL
 // =================================================================================================
 // >>kitty
@@ -1642,6 +1659,22 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
     ctx->kitty.b64_len = 0;
 }
 
+static void _sfte_kitty_deinit(sfte_ctx *ctx) {
+    if (ctx->term.img_pool) {
+        for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i)
+            if (ctx->term.img_pool[i].pxs) SFTE_FREE(ctx->term.img_pool[i].pxs);
+        SFTE_FREE(ctx->term.img_pool);
+        ctx->term.img_pool = NULL;
+    }
+    if (ctx->term.img_placements) {
+        SFTE_FREE(ctx->term.img_placements);
+        ctx->term.img_placements = NULL;
+    }
+    if (ctx->kitty.b64_buf) {
+        SFTE_FREE(ctx->kitty.b64_buf);
+        ctx->kitty.b64_buf = NULL;
+    }
+}
 #endif  // SFTE_KITTY_GRAPHICS
 // =================================================================================================
 // >>font
@@ -5683,19 +5716,11 @@ void sfte_free(sfte_ctx *ctx) {
 #endif  // SFTE_HYPERLINKS
 
 #if SFTE_SIXEL
-    if (ctx->sixel.pxs) SFTE_FREE(ctx->sixel.pxs);
+    _sfte_sixel_deinit(ctx);
 #endif  // SFTE_SIXEL
 #if SFTE_KITTY_GRAPHICS
-    if (ctx->kitty.b64_buf) SFTE_FREE(ctx->kitty.b64_buf);
+    _sfte_kitty_deinit(ctx);
 #endif  // SFTE_KITTY_GRAPHICS
-#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
-    if (ctx->term.img_pool) {
-        for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i)
-            if (ctx->term.img_pool[i].pxs) SFTE_FREE(ctx->term.img_pool[i].pxs);
-        SFTE_FREE(ctx->term.img_pool);
-    }
-    if (ctx->term.img_placements) SFTE_FREE(ctx->term.img_placements);
-#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 
     SFTE_FREE(ctx);
 }
