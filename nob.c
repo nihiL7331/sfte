@@ -32,6 +32,11 @@ bool build_amalgamation(const char *input_path, const char *output_path) {
                 &out,
                 "/*=== stb_truetype.h ======================================================*/\n");
             if (!nob_read_entire_file("stb_truetype.h", &out)) return false;
+        } else if (nob_sv_eq(trimmed, nob_sv_from_cstr("#include \"stb_image.h\""))) {
+            nob_sb_append_cstr(
+                &out,
+                "/*=== stb_image.h =========================================================*/\n");
+            if (!nob_read_entire_file("stb_image.h", &out)) return false;
         } else {
             nob_sb_append_buf(&out, line.data, line.count);
             nob_sb_append_cstr(&out, "\n");

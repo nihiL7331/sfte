@@ -3,16 +3,7 @@
 
     Project URL: https://github.com/nihiL7331/sfte
 
-    Optionally provide the following defines with your own implementations:
-
-    WHAT
-    ====
-
-    HOW
-    ===
-
-    FUTURE PLANS
-    ============
+    FIXME: docs
 
     LICENSE
     =======
@@ -46,6 +37,11 @@ typedef stbtt_fontinfo sfte_font_backend_info;
 #else
 typedef struct sfte_font_backend_info sfte_font_backend_info;
 #endif  // SFTE_CUSTOM_FONT_BACKEND
+
+// default value for SFTE_KITTY_GRAPHICS is 1, so if it's undefined its 1
+#if !defined(SFTE_KITTY_GRAPHICS) || SFTE_KITTY_GRAPHICS
+#include "stb_image.h"
+#endif  // !defined(SFTE_KITTY_GRAPHICS) || SFTE_KITTY_GRAPHICS
 
 #include <stddef.h>  // size_t
 #include <stdint.h>
@@ -272,6 +268,34 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #define SFTE_SIXEL 1
 #endif  // SFTE_SIXEL
 
+#ifndef SFTE_KITTY_GRAPHICS
+#define SFTE_KITTY_GRAPHICS 1
+#endif  // SFTE_KITTY_GRAPHICS
+
+#ifndef SFTE_KITTY_B64_INIT_CAP
+#define SFTE_KITTY_B64_INIT_CAP 4096
+#endif  // SFTE_KITTY_B64_INIT_CAP
+
+#ifndef SFTE_KITTY_B64_MAX_CAP
+#define SFTE_KITTY_B64_MAX_CAP (16 * 1024 * 1024)
+#endif  // SFTE_KITTY_B64_MAX_CAP
+
+#ifndef SFTE_IMG_POOL_INIT_CAP
+#define SFTE_IMG_POOL_INIT_CAP 16
+#endif  // SFTE_IMG_POOL_INIT_CAP
+
+#ifndef SFTE_IMG_POOL_MAX_CAP
+#define SFTE_IMG_POOL_MAX_CAP 1024
+#endif  // SFTE_IMG_POOL_MAX_CAP
+
+#ifndef SFTE_IMG_PLACEMENT_INIT_CAP
+#define SFTE_IMG_PLACEMENT_INIT_CAP 32
+#endif  // SFTE_IMG_PLACEMENT_INIT_CAP
+
+#ifndef SFTE_IMG_PLACEMENT_MAX_CAP
+#define SFTE_IMG_PLACEMENT_MAX_CAP 4096
+#endif  // SFTE_IMG_PLACEMENT_MAX_CAP
+
 #ifndef SFTE_KITTY_KB
 #define SFTE_KITTY_KB 1
 #endif  // SFTE_KITTY_KB
@@ -309,6 +333,10 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #undef SFTE_MOUSE
 #define SFTE_MOUSE 1
 #endif  // SFTE_SELECTION
+
+#define SFTE_KITTY_FMT_RGB 24
+#define SFTE_KITTY_FMT_RGBA 32
+#define SFTE_KITTY_FMT_PNG_JPEG 100
 
 #define SFTE_MOD_CTRL 0b0001
 #define SFTE_MOD_ALT 0b0010
@@ -542,6 +570,12 @@ int sfte_wayland_run(sfte_wayland_app *app);
 #include "stb_truetype.h"
 #endif  // !SFTE_FONT_CUSTOM_BACKEND
 
+#if SFTE_KITTY_GRAPHICS
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_STATIC
+#include "stb_image.h"
+#endif  // SFTE_KITTY_GRAPHICS
+
 #include <fcntl.h>
 #include <locale.h>  // LC_ALL
 #include <poll.h>
@@ -619,6 +653,89 @@ typedef struct {
     int xadvance;
 } sfte_glyph;
 
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+typedef struct {
+    uint32_t id;
+    int width;      // in pxs
+    int height;     // in pxs
+    uint32_t *pxs;  // ARGB8888
+    int ref_cnt;    // how many placements are using this img
+    uint8_t is_sixel;
+} sfte_img;
+
+// placement of an image onto the terminal grid
+typedef struct {
+    uint32_t img_id;
+    uint32_t placement_id;
+    int start_col;
+    int start_row;
+    int x_off;
+    int y_off;
+    int z_idx;  // <0=below text, >=0=above text
+    uint8_t is_sixel;
+    uint8_t alt_screen;  // 0=main, 1=alt
+} sfte_img_placement;
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+
+#if SFTE_SIXEL
+typedef enum {
+    SIXEL_GROUND,
+    SIXEL_REPEAT,       // !
+    SIXEL_COLOR_INTRO,  // #
+    SIXEL_COLOR_PARAM   // col definition
+} sfte_sixel_state_enum;
+
+typedef struct {
+    sfte_sixel_state_enum state;
+    int x, y;  // in pxs
+
+    // grid placement
+    int start_col;  // grid col where parsing started
+    int start_row;  // grid row where parsing started
+
+    // dynamic img buf
+    uint32_t *pxs;      // dynamic buffer for the in-progress img
+    int width, height;  // max bounds actually touched
+    int cap_w, cap_h;   // allocated cap
+
+    // sixel parsing state
+    uint8_t col_idx;
+    uint32_t palette[256];
+    int repeat_cnt;
+
+    // color def
+    int params[5];
+    uint8_t param_idx;
+} sfte_sixel_state;
+#endif  // SFTE_SIXEL
+
+#if SFTE_KITTY_GRAPHICS
+typedef struct {
+    char *b64_buf;
+    size_t b64_len;
+    size_t b64_cap;
+
+    int action;
+    uint32_t id;
+    int z_idx;
+    int format;
+    int width;
+    int height;
+    char t_medium;
+    char d_action;
+    int cols;
+    int rows;
+    int x_off;
+    int y_off;
+    int crop_x;
+    int crop_y;
+    int crop_w;
+    int crop_h;
+    uint32_t placement_id;
+    uint8_t quiet;  // 0=always, 1=error, 2=never
+} sfte_kitty_state;
+#endif  // SFTE_KITTY_GRAPHICS
+
 typedef struct {
     sfte_cell *cells;
     int cols;
@@ -667,7 +784,7 @@ typedef struct {
 #endif                     // SFTE_CURSOR_DYNAMIC
 // alt screen state
 #if SFTE_ALT_SCREEN
-    int alt_active;  // tracks if in alt buffer
+    uint8_t alt_active;  // tracks if in alt buffer
     sfte_cell *alt_cells;
 #endif  // SFTE_ALT_SCREEN
 
@@ -688,7 +805,6 @@ typedef struct {
     int kitty_kb_stack[2][16];  // 0=main, 1=alt
     int kitty_kb_idx[2];
 #endif  // SFTE_KITTY_KB
-
     int scroll_top;
     int scroll_bottom;
     // osc
@@ -705,6 +821,16 @@ typedef struct {
 #if SFTE_COLOR_UNDERLINE
     uint32_t cur_ul_color;
 #endif  // SFTE_COLOR_UNDERLINE
+// sixel
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+    sfte_img *img_pool;
+    uint32_t img_pool_cap;
+    uint32_t img_pool_len;
+    sfte_img_placement *img_placements;
+    uint32_t img_placements_cap;
+    uint32_t img_placements_len;
+    uint32_t next_img_id;
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
     // parser
     int vt_state;
     int vt_params[16];  // stores nums from esc sequences
@@ -758,29 +884,6 @@ typedef struct {
 #endif  // SFTE_FONT_BOLD_ITALIC
 } sfte_font;
 
-#if SFTE_SIXEL
-typedef enum {
-    SIXEL_GROUND,
-    SIXEL_REPEAT,       // !
-    SIXEL_COLOR_INTRO,  // #
-    SIXEL_COLOR_PARAM   // col definition
-} sfte_sixel_state_enum;
-
-typedef struct {
-    uint8_t active;
-    sfte_sixel_state_enum state;
-    int x, y;     // in pxs
-    int start_x;  // tracks init cursor indent
-    uint8_t col_idx;
-    uint32_t palette[256];
-    int repeat_cnt;
-
-    // color def
-    int params[5];
-    uint8_t param_idx;
-} sfte_sixel_state;
-#endif  // SFTE_SIXEL
-
 struct sfte_ctx {
     sfte_term term;
     sfte_font font;
@@ -789,11 +892,10 @@ struct sfte_ctx {
 #endif  // !SFTE_NO_LOGGING
 #if SFTE_SIXEL
     sfte_sixel_state sixel;
-    // NOTE: definitions below will go in #if SFTE_SIXEL && SFTE_KITTY when kitty gets implemented
-    uint32_t *img_layer;
-    int px_wid;
-    int px_hei;
 #endif  // SFTE_SIXEL
+#if SFTE_KITTY_GRAPHICS
+    sfte_kitty_state kitty;
+#endif  // SFTE_KITTY_GRAPHICS
 
     int width;
     int height;
@@ -826,10 +928,33 @@ static const float _sfte_font_scales[SFTE_FONT_MAX_COUNT] = SFTE_FONT_SCALES;
 #define _SFTE_CLAMP(val, min, max) ((val) < (min) ? (min) : ((val) > (max) ? (max) : (val)))
 #define _SFTE_IDX(ctx, c, r) ((r) * ctx->term.cols + (c))
 
+#define SFTE_ENSURE_CAP(type, arr, len, cap, add, init_cap, max_cap, oom_flag)                     \
+    do {                                                                                           \
+        if ((len) + (add) > (cap)) {                                                               \
+            size_t _new = (cap) == 0 ? (init_cap) : (cap) * 2;                                     \
+            while (_new < (len) + (add)) _new *= 2;                                                \
+            if (_new > (max_cap))                                                                  \
+                (oom_flag) = 1;                                                                    \
+            else {                                                                                 \
+                (cap) = _new;                                                                      \
+                (arr) = (type *)SFTE_REALLOC((arr), (cap) * sizeof(type));                         \
+            }                                                                                      \
+        }                                                                                          \
+    } while (0)
+
+static inline void _sfte_dirty_rect(sfte_ctx *ctx, int start_c, int start_r, int cols, int rows) {
+    for (int r = start_r; r < start_r + rows; ++r) {
+        if (r < 0 || r >= ctx->term.rows) continue;
+        for (int c = start_c; c < start_c + cols; ++c) {
+            if (c < 0 || c >= ctx->term.cols) continue;
+            ctx->term.cells[_SFTE_IDX(ctx, c, r)].dirty = 1;
+        }
+    }
+}
+
 static inline void _sfte_dirty_range(sfte_ctx *ctx, int start_idx, int cnt) {
     for (int i = 0; i < cnt; ++i) ctx->term.cells[start_idx + i].dirty = 1;
 }
-
 // =================================================================================================
 // >>logging
 // =================================================================================================
@@ -913,23 +1038,85 @@ static void _sfte_log(sfte_ctx *ctx, _sfte_log_item_t log_item, uint32_t log_lev
 #endif  // !SFTE_NO_LOGGING
 
 // =================================================================================================
+// >>b64
+// =================================================================================================
+#if (SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD) || SFTE_KITTY_GRAPHICS
+static const int8_t _sfte_b64_table[256] = {
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63,
+    52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1, -1, 0,  1,  2,  3,  4,  5,  6,
+    7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, -1,
+    -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+    49, 50, 51, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+};
+
+static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len) {
+    // strip trailing pad
+    while (len > 0 && src[len - 1] == '=') len--;
+
+    *out_len = (len * 3) / 4;
+    uint8_t *dst = (uint8_t *)SFTE_MALLOC(*out_len);
+    if (!dst) return NULL;
+
+    size_t i = 0, j = 0;
+    uint32_t acc = 0;
+    int bits = 0;
+
+    while (i < len) {
+        int8_t v = _sfte_b64_table[src[i++]];
+        if (v == -1) continue;
+
+        acc = (acc << 6) | (v & 0x3F);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            if (j < *out_len) dst[j++] = (acc >> bits) & 0xFF;
+        }
+    }
+
+    *out_len = j;
+    return dst;
+}
+#endif  // (SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD) || SFTE_KITTY_GRAPHICS
+// =================================================================================================
+// >>img
+// =================================================================================================
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+// returns a pointer to a new image, or NULL if pool is at max cap
+static inline sfte_img *_sfte_img_pool_insert(sfte_ctx *ctx, sfte_img img) {
+    uint8_t oom = 0;
+    SFTE_ENSURE_CAP(sfte_img, ctx->term.img_pool, ctx->term.img_pool_len, ctx->term.img_pool_cap, 1,
+                    SFTE_IMG_POOL_INIT_CAP, SFTE_IMG_POOL_MAX_CAP, oom);
+    if (oom) {
+        if (img.pxs) SFTE_FREE(img.pxs);
+        return NULL;
+    }
+
+    ctx->term.img_pool[ctx->term.img_pool_len] = img;
+    return &ctx->term.img_pool[ctx->term.img_pool_len++];
+}
+
+// returns a pointer to a new placement, or NULL if placements are at max cap
+static inline sfte_img_placement *_sfte_img_placement_insert(sfte_ctx *ctx, sfte_img_placement p) {
+    uint8_t oom = 0;
+    SFTE_ENSURE_CAP(sfte_img_placement, ctx->term.img_placements, ctx->term.img_placements_len,
+                    ctx->term.img_placements_cap, 1, SFTE_IMG_PLACEMENT_INIT_CAP,
+                    SFTE_IMG_PLACEMENT_MAX_CAP, oom);
+    if (oom) return NULL;
+
+    ctx->term.img_placements[ctx->term.img_placements_len] = p;
+    return &ctx->term.img_placements[ctx->term.img_placements_len++];
+}
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+// =================================================================================================
 // >>sixel
 // =================================================================================================
 #if SFTE_SIXEL
-static void _sfte_sixel_resize_img_layer(sfte_ctx *ctx) {
-    int new_pw = ctx->term.cols * ctx->font.cell_width;
-    int new_ph = ctx->term.rows * ctx->font.cell_height;
-
-    if (ctx->px_wid == new_pw && ctx->px_hei == new_ph) return;
-
-    ctx->px_wid = new_pw;
-    ctx->px_hei = new_ph;
-
-    if (ctx->img_layer) SFTE_FREE(ctx->img_layer);
-    ctx->img_layer = (uint32_t *)SFTE_MALLOC(new_pw * new_ph * sizeof(uint32_t));
-    memset(ctx->img_layer, 0, new_pw * new_ph * sizeof(uint32_t));
-}
-
 static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b) {
     switch (ctx->sixel.state) {
     case SIXEL_GROUND:
@@ -938,26 +1125,46 @@ static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b) {
             int repeats = ctx->sixel.repeat_cnt > 0 ? ctx->sixel.repeat_cnt : 1;
             uint32_t col = ctx->sixel.palette[ctx->sixel.col_idx];
 
+            int max_x = ctx->sixel.x + repeats - 1;
+            int max_y = ctx->sixel.y + 5;  // 6 pxs tall
+
+            if (max_x >= ctx->sixel.cap_w || max_y >= ctx->sixel.cap_h) {
+                int new_w = ctx->sixel.cap_w == 0 ? 256 : ctx->sixel.cap_w;
+                int new_h = ctx->sixel.cap_h == 0 ? 256 : ctx->sixel.cap_h;
+                while (max_x >= new_w) new_w *= 2;
+                while (max_y >= new_h) new_h *= 2;
+
+                uint32_t *new_pxs = (uint32_t *)SFTE_CALLOC(new_w * new_h, sizeof(uint32_t));
+                if (ctx->sixel.pxs) {
+                    for (int r = 0; r < ctx->sixel.height; ++r)
+                        memcpy(&new_pxs[r * new_w], &ctx->sixel.pxs[r * ctx->sixel.cap_w],
+                               ctx->sixel.width * sizeof(uint32_t));
+                    SFTE_FREE(ctx->sixel.pxs);
+                }
+                ctx->sixel.pxs = new_pxs;
+                ctx->sixel.cap_w = new_w;
+                ctx->sixel.cap_h = new_h;
+            }
+
             for (int dx = 0; dx < repeats; ++dx) {
                 int px_x = ctx->sixel.x + dx;
-
-                if (px_x >= ctx->px_wid) continue;
 
                 for (int bit = 0; bit < 6; ++bit)
                     if (pattern & (1 << bit)) {
                         int px_y = ctx->sixel.y + bit;
-                        if (px_y >= ctx->px_hei) continue;
+                        ctx->sixel.pxs[px_y * ctx->sixel.cap_w + px_x] = col;
 
-                        ctx->img_layer[px_y * ctx->px_wid + px_x] = col;
+                        if (px_x >= ctx->sixel.width) ctx->sixel.width = px_x + 1;
+                        if (px_y >= ctx->sixel.height) ctx->sixel.height = px_y + 1;
                     }
             }
 
             ctx->sixel.x += repeats;
             ctx->sixel.repeat_cnt = 0;
         } else if (b == '$')  // carriage return
-            ctx->sixel.x = ctx->sixel.start_x;
+            ctx->sixel.x = 0;
         else if (b == '-') {  // move down one band
-            ctx->sixel.x = ctx->sixel.start_x;
+            ctx->sixel.x = 0;
             ctx->sixel.y += 6;
         } else if (b == '!') {  // start repeat
             ctx->sixel.state = SIXEL_REPEAT;
@@ -1010,7 +1217,465 @@ static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b) {
         break;
     }
 }
+
+static void _sfte_sixel_deinit(sfte_ctx *ctx) {
+    if (ctx->term.img_pool) {
+        for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i)
+            if (ctx->term.img_pool[i].pxs) SFTE_FREE(ctx->term.img_pool[i].pxs);
+        SFTE_FREE(ctx->term.img_pool);
+        ctx->term.img_pool = NULL;
+    }
+    if (ctx->term.img_placements) {
+        SFTE_FREE(ctx->term.img_placements);
+        ctx->term.img_placements = NULL;
+    }
+    if (ctx->sixel.pxs) {
+        SFTE_FREE(ctx->sixel.pxs);
+        ctx->sixel.pxs = NULL;
+    }
+}
 #endif  // SFTE_SIXEL
+// =================================================================================================
+// >>kitty
+// =================================================================================================
+#if SFTE_KITTY_GRAPHICS
+static void _sfte_grid_scroll(sfte_ctx *ctx, int lines);
+static inline int _sfte_grid_span(int px_len, int px_off, int cell_px);
+
+static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int sw, int sh, int dw, int dh) {
+    uint32_t *dst = (uint32_t *)SFTE_MALLOC(dw * dh * sizeof(uint32_t));
+    if (!dst) return NULL;
+
+    float x_ratio = ((float)(sw - 1)) / dw;
+    float y_ratio = ((float)(sh - 1)) / dh;
+
+    for (int i = 0; i < dh; ++i)
+        for (int j = 0; j < dw; ++j) {
+            int x = (int)(x_ratio * j);
+            int y = (int)(y_ratio * i);
+            float x_diff = (x_ratio * j) - x;
+            float y_diff = (y_ratio * i) - y;
+            // 4 nearest pxs
+            int idx = y * sw + x;
+            uint32_t p1 = src[idx];
+            uint32_t p2 = (x + 1 < sw) ? src[idx + 1] : p1;
+            uint32_t p3 = (y + 1 < sh) ? src[idx + sw] : p1;
+            uint32_t p4 = (x + 1 < sw && y + 1 < sh) ? src[idx + sw + 1] : p1;
+            // weights
+            float w1 = (1.0f - x_diff) * (1.0f - y_diff);
+            float w2 = x_diff * (1.0f - y_diff);
+            float w3 = (1.0f - x_diff) * y_diff;
+            float w4 = x_diff * y_diff;
+            // interpolate
+            uint32_t r = (uint32_t)(((p1 >> 16) & 0xFF) * w1 + ((p2 >> 16) & 0xFF) * w2 +
+                                    ((p3 >> 16) & 0xFF) * w3 + ((p4 >> 16) & 0xFF) * w4);
+            uint32_t g = (uint32_t)(((p1 >> 8) & 0xFF) * w1 + ((p2 >> 8) & 0xFF) * w2 +
+                                    ((p3 >> 8) & 0xFF) * w3 + ((p4 >> 8) & 0xFF) * w4);
+            uint32_t b = (uint32_t)((p1 & 0xFF) * w1 + (p2 & 0xFF) * w2 + (p3 & 0xFF) * w3 +
+                                    (p4 & 0xFF) * w4);
+            uint32_t a = (uint32_t)(((p1 >> 24) & 0xFF) * w1 + ((p2 >> 24) & 0xFF) * w2 +
+                                    ((p3 >> 24) & 0xFF) * w3 + ((p4 >> 24) & 0xFF) * w4);
+            // store
+            dst[i * dw + j] = (a << 24) | (r << 16) | (g << 8) | b;
+        }
+
+    return dst;
+}
+
+static uint32_t *_sfte_kitty_decode_payload(sfte_ctx *ctx, uint8_t *raw_data, size_t raw_len,
+                                            uint8_t is_file, const char *file_path, int *w,
+                                            int *h) {
+    uint32_t *pxs = NULL;
+
+    if (ctx->kitty.format == SFTE_KITTY_FMT_PNG_JPEG) {
+        int channels = 0;
+        uint8_t *stb_pxs = is_file ? stbi_load(file_path, w, h, &channels, 4)
+                                   : stbi_load_from_memory(raw_data, raw_len, w, h, &channels, 4);
+
+        if (stb_pxs && *w && *h) {
+            pxs = (uint32_t *)SFTE_MALLOC(*w * *h * sizeof(uint32_t));
+            for (int i = 0; i < *w * *h; ++i)
+                pxs[i] = (stb_pxs[i * 4 + 3] << 24) | (stb_pxs[i * 4 + 0] << 16) |
+                         (stb_pxs[i * 4 + 1] << 8) | stb_pxs[i * 4 + 2];
+            stbi_image_free(stb_pxs);
+        }
+    } else if ((ctx->kitty.format == SFTE_KITTY_FMT_RGB ||
+                ctx->kitty.format == SFTE_KITTY_FMT_RGBA) &&
+               *w && *h) {
+        int bpp = (ctx->kitty.format == SFTE_KITTY_FMT_RGB) ? 3 : 4;
+        uint8_t *pixel_src = raw_data;
+        size_t pixel_len = raw_len;
+
+        if (is_file) {
+            FILE *f = fopen(file_path, "rb");
+            if (f) {
+                fseek(f, 0, SEEK_END);
+                pixel_len = ftell(f);
+                fseek(f, 0, SEEK_SET);
+                pixel_src = (uint8_t *)SFTE_MALLOC(pixel_len);
+                fread(pixel_src, 1, pixel_len, f);
+                fclose(f);
+            } else
+                pixel_src = NULL;
+        }
+
+        if (pixel_src && raw_len >= (size_t)(*w * *h * bpp)) {
+            pxs = (uint32_t *)SFTE_MALLOC(*w * *h * sizeof(uint32_t));
+            for (int i = 0; i < *w * *h; ++i) {
+                uint8_t a = (bpp == 4) ? pixel_src[i * bpp + 3] : 255;
+                pxs[i] = (a << 24) | (pixel_src[i * bpp + 0] << 16) |
+                         (pixel_src[i * bpp + 1] << 8) | pixel_src[i * bpp + 2];
+            }
+        }
+        if (is_file && pixel_src) SFTE_FREE(pixel_src);
+    }
+    return pxs;
+}
+
+static uint32_t *_sfte_kitty_apply_crop(sfte_ctx *ctx, uint32_t *pxs, int *w, int *h) {
+    int cx = (unsigned int)_SFTE_CLAMP(ctx->kitty.crop_x, 0, *w);
+    int cy = (unsigned int)_SFTE_CLAMP(ctx->kitty.crop_y, 0, *h);
+    int cw = ctx->kitty.crop_w ? ctx->kitty.crop_w : (*w - cx);
+    int ch = ctx->kitty.crop_h ? ctx->kitty.crop_h : (*h - cy);
+    if (cx + cw > *w) cw = *w - cx;
+    if (cy + ch > *h) ch = *h - cy;
+    if (cw == *w && ch == *h && !cx && !cy) return pxs;
+    if (cw <= 0 || ch <= 0) {
+        SFTE_FREE(pxs);
+        return NULL;
+    }
+    uint32_t *cropped = (uint32_t *)SFTE_MALLOC(cw * ch * sizeof(uint32_t));
+    if (cropped) {
+        for (int y = 0; y < ch; ++y)
+            memcpy(&cropped[y * cw], &pxs[(cy + y) * *w + cx], cw * sizeof(uint32_t));
+        *w = cw;
+        *h = ch;
+    }
+    SFTE_FREE(pxs);
+    return cropped;
+}
+
+static uint32_t *_sfte_kitty_apply_scale(sfte_ctx *ctx, uint32_t *pxs, int *w, int *h) {
+    if (ctx->kitty.cols <= 0 && ctx->kitty.rows <= 0) return pxs;
+    int target_w = *w;
+    int target_h = *h;
+    if (ctx->kitty.cols && !ctx->kitty.rows) {
+        target_w = ctx->kitty.cols * ctx->font.cell_width;
+        target_h = (target_w * *h) / *w;
+    } else if (!ctx->kitty.cols && ctx->kitty.rows) {
+        target_h = ctx->kitty.rows * ctx->font.cell_height;
+        target_w = (target_h * *w) / *h;
+    } else {
+        target_w = ctx->kitty.cols * ctx->font.cell_width;
+        target_h = ctx->kitty.rows * ctx->font.cell_height;
+    }
+
+    if (target_w <= 0 || target_h <= 0 || (target_w == *w && target_h == *h)) return pxs;
+
+    uint32_t *scaled = _sfte_kitty_scale_image_bilinear(pxs, *w, *h, target_w, target_h);
+    if (scaled) {
+        SFTE_FREE(pxs);
+        *w = target_w;
+        *h = target_h;
+        return scaled;
+    }
+
+    // fall back to returning the unscaled image on 'scaled' allocation fail
+    return pxs;
+}
+
+static uint8_t _sfte_kitty_should_delete(sfte_ctx *ctx, sfte_img_placement *p, sfte_img *img) {
+    uint8_t matches_id = (!ctx->kitty.id || ctx->kitty.id == p->img_id);
+    if (!matches_id) return 0;
+    int cols = _sfte_grid_span(img->width, p->x_off, ctx->font.cell_width);
+    int rows = _sfte_grid_span(img->height, p->y_off, ctx->font.cell_height);
+    int target_c = ctx->kitty.crop_x - 1;
+    int target_r = ctx->kitty.crop_y - 1;
+    uint8_t intersects_x = (target_c >= p->start_col && target_c < p->start_col + cols);
+    uint8_t intersects_y = (target_r >= p->start_row && target_r < p->start_row + rows);
+    switch (ctx->kitty.d_action) {
+    case 'A':
+    case 'a': return 1;
+    case 'I':
+    case 'i': return !ctx->kitty.placement_id || ctx->kitty.placement_id == p->placement_id;
+    case 'C':
+    case 'c':
+        return ctx->term.cursor_x >= p->start_col && ctx->term.cursor_x < p->start_col + cols &&
+               ctx->term.cursor_y >= p->start_row && ctx->term.cursor_y < p->start_row + rows;
+    case 'P':
+    case 'p': return intersects_x && intersects_y;
+    case 'X':
+    case 'x': return intersects_x;
+    case 'Y':
+    case 'y': return intersects_y;
+    case 'Z':
+    case 'z': return p->z_idx == ctx->kitty.z_idx;
+    case 'Q':
+    case 'q': return intersects_x && intersects_y && p->z_idx == ctx->kitty.z_idx;
+    default: return 0;
+    }
+}
+
+static void _sfte_kitty_gc_pool(sfte_ctx *ctx) {
+    for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i) {
+        sfte_img *img = &ctx->term.img_pool[i];
+        if (img->is_sixel || img->ref_cnt) continue;
+        uint8_t should_del = (ctx->kitty.d_action == 'A' || ctx->kitty.d_action == 'a') ||
+                             ((ctx->kitty.d_action == 'I' || ctx->kitty.d_action == 'i') &&
+                              img->id == ctx->kitty.id);
+        if (!should_del) continue;
+        if (img->pxs) SFTE_FREE(img->pxs);
+        ctx->term.img_pool[i--] = ctx->term.img_pool[--ctx->term.img_pool_len];
+    }
+}
+
+static const char *_sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img) {
+    if (!img) return "EINVAL: cannot apply placement to NULL image";
+    sfte_img_placement *p = _sfte_img_placement_insert(ctx,
+                                                       (sfte_img_placement){
+                                                           .img_id = img->id,
+                                                           .placement_id = ctx->kitty.placement_id,
+                                                           .start_col = ctx->term.cursor_x,
+                                                           .start_row = ctx->term.cursor_y,
+                                                           .x_off = ctx->kitty.x_off,
+                                                           .y_off = ctx->kitty.y_off,
+                                                           .z_idx = ctx->kitty.z_idx,
+                                                           .alt_screen = ctx->term.alt_active,
+                                                       });
+
+    if (!p) return "ENOMEM: placement pool capacity reached";
+
+    img->ref_cnt++;
+    int cols = _sfte_grid_span(img->width, ctx->kitty.x_off, ctx->font.cell_width);
+    int rows = _sfte_grid_span(img->height, ctx->kitty.y_off, ctx->font.cell_height);
+    _sfte_dirty_rect(ctx, ctx->term.cursor_x, ctx->term.cursor_y, cols, rows);
+    return NULL;
+}
+
+static const char *_sfte_kitty_exec_query(sfte_ctx *ctx) {
+    char reply[64];
+    int len = snprintf(reply, sizeof(reply), "\033_Gi=%u;OK\033\\", ctx->kitty.id);
+    if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
+    return NULL;
+}
+
+static const char *_sfte_kitty_exec_delete(sfte_ctx *ctx) {
+    for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
+        sfte_img_placement *p = &ctx->term.img_placements[i];
+        if (p->alt_screen != ctx->term.alt_active || p->is_sixel) continue;
+
+        sfte_img *img = NULL;
+        for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
+            if (ctx->term.img_pool[j].id == p->img_id) {
+                img = &ctx->term.img_pool[j];
+                break;
+            }
+        if (!img) return "EINVAL: failed to find image to delete";
+
+        if (_sfte_kitty_should_delete(ctx, p, img)) {
+            if (img) {
+                img->ref_cnt--;
+                int cols = _sfte_grid_span(img->width, p->x_off, ctx->font.cell_width);
+                int rows = _sfte_grid_span(img->height, p->y_off, ctx->font.cell_height);
+                _sfte_dirty_rect(ctx, p->start_col, p->start_row, cols, rows);
+            }
+            ctx->term.img_placements[i--] = ctx->term
+                                                .img_placements[--ctx->term.img_placements_len];
+        }
+    }
+
+    _sfte_kitty_gc_pool(ctx);
+    return NULL;
+}
+
+static const char *_sfte_kitty_exec_transmit(sfte_ctx *ctx, sfte_img **out_img) {
+    size_t raw_len = 0;
+    uint8_t *raw_data = _sfte_b64_decode((uint8_t *)ctx->kitty.b64_buf, ctx->kitty.b64_len,
+                                         &raw_len);
+    if (!raw_data) return "ENOMEM: base64 decode failed";
+
+    int is_file = (ctx->kitty.t_medium == 'f' || ctx->kitty.t_medium == 't');
+    char *file_path = NULL;
+    if (is_file) {
+        file_path = (char *)SFTE_MALLOC(raw_len + 1);
+        memcpy(file_path, raw_data, raw_len);
+        file_path[raw_len] = '\0';
+    }
+
+    int w = ctx->kitty.width;
+    int h = ctx->kitty.height;
+    uint32_t *pxs = _sfte_kitty_decode_payload(ctx, raw_data, raw_len, is_file, file_path, &w, &h);
+
+    // if t=t, term should delete the temp file
+    if (ctx->kitty.t_medium == 't' && is_file) remove(file_path);
+    if (is_file) SFTE_FREE(file_path);
+    SFTE_FREE(raw_data);
+    if (!pxs) return "EBADFMT: failed to decode image data";
+
+    pxs = _sfte_kitty_apply_crop(ctx, pxs, &w, &h);
+    if (!pxs) return "EINVAL: invalid crop dimensions";
+
+    pxs = _sfte_kitty_apply_scale(ctx, pxs, &w, &h);
+
+    if (!ctx->kitty.id) ctx->kitty.id = ++ctx->term.next_img_id;
+    sfte_img *new_img = _sfte_img_pool_insert(ctx, (sfte_img){
+                                                       .id = ctx->kitty.id,
+                                                       .width = w,
+                                                       .height = h,
+                                                       .pxs = pxs,
+                                                   });
+
+    if (!new_img) return "ENOMEM: image pool capacity reached";
+    if (out_img) *out_img = new_img;
+    return NULL;
+}
+
+static const char *_sfte_kitty_exec_place(sfte_ctx *ctx) {
+    for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
+        if (ctx->term.img_pool[j].id == ctx->kitty.id)
+            return _sfte_kitty_apply_placement(ctx, &ctx->term.img_pool[j]);
+    return "ENOENT: image id not found in pool";
+}
+
+static void _sfte_kitty_send_ack(sfte_ctx *ctx, const char *err_msg) {
+    if (err_msg && (ctx->kitty.quiet == 0 || ctx->kitty.quiet == 1)) {
+        char reply[256];
+        int len = ctx->kitty.id > 0 ? snprintf(reply, sizeof(reply), "\033_Gi=%u;%s\033\\",
+                                               ctx->kitty.id, err_msg)
+                                    : snprintf(reply, sizeof(reply), "\033_G;%s\033\\", err_msg);
+        if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
+    } else if (!err_msg && !ctx->kitty.quiet) {
+        char reply[64];
+        int len = ctx->kitty.id > 0
+                      ? snprintf(reply, sizeof(reply), "\033_Gi=%u;OK\033\\", ctx->kitty.id)
+                      : snprintf(reply, sizeof(reply), "\033_G;OK\033\\");
+        if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
+    }
+}
+
+static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
+    const char *semi = strchr(payload, ';');
+    // if there's no semicolon, the dictionary spans the entire payload
+    const char *dict_end = semi ? semi : payload + strlen(payload);
+
+    uint8_t more = 0;
+
+    // lookahead to check if its a new transmission
+    uint8_t is_new = 0;
+    for (const char *p = payload; p < semi; ++p) {
+        if (*p == 'a' || *p == 'f' || *p == 'i' || *p == 's' || *p == 'v' || *p == 'z')
+            if (p + 1 < dict_end && p[1] == '=') {
+                is_new = 1;
+                break;
+            }
+    }
+
+    // reset state if fresh
+    if (is_new || !ctx->kitty.action) {
+        char *saved_buf = ctx->kitty.b64_buf;
+        size_t saved_cap = ctx->kitty.b64_cap;
+        ctx->kitty = (sfte_kitty_state){
+            .b64_buf = saved_buf,
+            .b64_cap = saved_cap,
+            .action = 'T',
+            .format = SFTE_KITTY_FMT_RGBA,
+            .t_medium = 'd',
+            .quiet = 1,
+            // rest 0-initialized
+        };
+    }
+
+    // parse params into state
+    const char *p = payload;
+    while (p && p < dict_end) {
+        char key = p[0];
+        if (p + 1 >= dict_end || p[1] != '=') break;
+        const char *val = p + 2;
+
+        switch (key) {
+        case 'a': ctx->kitty.action = val[0]; break;
+        case 'i': ctx->kitty.id = (uint32_t)atoi(val); break;
+        case 'z': ctx->kitty.z_idx = atoi(val); break;
+        case 'f': ctx->kitty.format = atoi(val); break;
+        case 's': ctx->kitty.width = atoi(val); break;
+        case 'v': ctx->kitty.height = atoi(val); break;
+        case 'm': more = atoi(val); break;
+        case 't': ctx->kitty.t_medium = val[0]; break;
+        case 'd': ctx->kitty.d_action = val[0]; break;
+        case 'c': ctx->kitty.cols = atoi(val); break;
+        case 'r': ctx->kitty.rows = atoi(val); break;
+        case 'X': ctx->kitty.x_off = atoi(val); break;
+        case 'Y': ctx->kitty.y_off = atoi(val); break;
+        case 'x': ctx->kitty.crop_x = atoi(val); break;
+        case 'y': ctx->kitty.crop_y = atoi(val); break;
+        case 'w': ctx->kitty.crop_w = atoi(val); break;
+        case 'h': ctx->kitty.crop_h = atoi(val); break;
+        case 'p': ctx->kitty.placement_id = (uint32_t)atoi(val); break;
+        case 'q': ctx->kitty.quiet = (uint8_t)atoi(val); break;
+        default: break;
+        }
+
+        p = strchr(p, ',');
+        if (!p || p >= dict_end) break;
+        p++;  // skip comma
+    }
+
+    if (semi) {
+        const char *b64_start = semi + 1;
+        size_t b64_len = strlen(b64_start);
+
+        uint8_t oom = 0;
+        SFTE_ENSURE_CAP(char, ctx->kitty.b64_buf, ctx->kitty.b64_len, ctx->kitty.b64_cap,
+                        b64_len + 1, SFTE_KITTY_B64_INIT_CAP, SFTE_KITTY_B64_MAX_CAP, oom);
+
+        if (oom) return;
+
+        memcpy(ctx->kitty.b64_buf + ctx->kitty.b64_len, b64_start, b64_len);
+        ctx->kitty.b64_len += b64_len;
+    }
+
+    if (more) return;  // abort and wait for next sequence
+
+    ctx->kitty.b64_buf[ctx->kitty.b64_len] = '\0';
+    const char *err_msg = NULL;
+
+    switch (ctx->kitty.action) {
+    case 'q': err_msg = _sfte_kitty_exec_query(ctx); break;
+    case 'd': err_msg = _sfte_kitty_exec_delete(ctx); break;
+    case 't': err_msg = _sfte_kitty_exec_transmit(ctx, NULL); break;
+    case 'T': {
+        sfte_img *img = NULL;
+        err_msg = _sfte_kitty_exec_transmit(ctx, &img);
+        if (err_msg || !img) break;
+        _sfte_kitty_apply_placement(ctx, img);
+        break;
+    }
+    case 'p': _sfte_kitty_exec_place(ctx); break;
+    default: err_msg = "EINVAL: unknown action"; break;
+    }
+
+    _sfte_kitty_send_ack(ctx, err_msg);
+
+    ctx->kitty.b64_len = 0;
+}
+
+static void _sfte_kitty_deinit(sfte_ctx *ctx) {
+    if (ctx->term.img_pool) {
+        for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i)
+            if (ctx->term.img_pool[i].pxs) SFTE_FREE(ctx->term.img_pool[i].pxs);
+        SFTE_FREE(ctx->term.img_pool);
+        ctx->term.img_pool = NULL;
+    }
+    if (ctx->term.img_placements) {
+        SFTE_FREE(ctx->term.img_placements);
+        ctx->term.img_placements = NULL;
+    }
+    if (ctx->kitty.b64_buf) {
+        SFTE_FREE(ctx->kitty.b64_buf);
+        ctx->kitty.b64_buf = NULL;
+    }
+}
+#endif  // SFTE_KITTY_GRAPHICS
 // =================================================================================================
 // >>font
 // =================================================================================================
@@ -1204,10 +1869,6 @@ static void _sfte_font_reset_cache(sfte_ctx *ctx) {
     sfte_font_cache *dummy = &ctx->font.regular;
     sfte_glyph *m = _sfte_font_get_glyph(ctx, &dummy, 'M');
     ctx->font.cell_width = m->xadvance;
-
-#if SFTE_SIXEL
-    _sfte_sixel_resize_img_layer(ctx);
-#endif  // SFTE_SIXEL
 }
 
 // =================================================================================================
@@ -2669,6 +3330,10 @@ static void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old,
 // =================================================================================================
 // >>grid
 // =================================================================================================
+static inline int _sfte_grid_span(int px_len, int px_off, int cell_px) {
+    return (px_len + px_off + cell_px - 1) / cell_px;
+}
+
 static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt) {
     for (int i = 0; i < cnt; ++i) {
         ctx->term.cells[start_idx + i].rune = ' ';
@@ -2688,6 +3353,49 @@ static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt)
 #if SFTE_HYPERLINKS
         ctx->term.cells[start_idx + i].link_idx = 0;
 #endif  // SFTE_HYPERLINKS
+
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+        // erase overlapping sixel img placements
+        for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
+            sfte_img_placement *p = &ctx->term.img_placements[i];
+            if (!p->is_sixel) continue;
+
+            sfte_img *img = NULL;
+            for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
+                if (ctx->term.img_pool[j].id == p->img_id) {
+                    img = &ctx->term.img_pool[j];
+                    break;
+                }
+
+            int cols = _sfte_grid_span(img->width, p->x_off, ctx->font.cell_width);
+            int rows = _sfte_grid_span(img->height, p->y_off, ctx->font.cell_height);
+
+            // check if 2D image bbox overlaps the 1D cleared range
+            int overlap = 0;
+            for (int r = p->start_row; r < p->start_row + rows && !overlap; ++r)
+                for (int c = p->start_col; c < p->start_col + cols; ++c) {
+                    int cell_idx = r * ctx->term.cols + c;
+                    if (cell_idx >= start_idx && cell_idx < start_idx + cnt) {
+                        overlap = 1;
+                        break;
+                    }
+                }
+
+            if (overlap) {
+                if (img) img->ref_cnt--;
+                ctx->term.img_placements[i--] = ctx->term
+                                                    .img_placements[--ctx->term.img_placements_len];
+            }
+        }
+
+        // free memory for imgs with no placements
+        // only auto-free sixel images, kitty images require explicit a=d commands.
+        for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i) {
+            if (ctx->term.img_pool[i].ref_cnt || !ctx->term.img_pool[i].is_sixel) continue;
+            if (ctx->term.img_pool[i].pxs) SFTE_FREE(ctx->term.img_pool[i].pxs);
+            ctx->term.img_pool[i--] = ctx->term.img_pool[--ctx->term.img_pool_len];
+        }
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
     }
 }
 
@@ -2697,25 +3405,33 @@ static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
     int height = bot - top + 1;
     int cols = ctx->term.cols;
 
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+    for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
+        sfte_img_placement *p = &ctx->term.img_placements[i];
+        if (p->alt_screen != ctx->term.alt_active) continue;
+        // scroll the image if its in active region, or its in the scrollback buffer and we're
+        // pushing new lines into scrollback.
+        if ((p->start_row >= top && p->start_row <= bot + 1) || (top == 0 && p->start_row < 0))
+            p->start_row -= lines;
+
+        sfte_img *img = NULL;
+        for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
+            if (ctx->term.img_pool[j].id == p->img_id) {
+                img = &ctx->term.img_pool[j];
+                break;
+            }
+        // if it scrolled out of visible area, delete it
+        int rows = _sfte_grid_span(img->height, p->y_off, ctx->font.cell_height);
+        if (p->start_row + rows <= -SFTE_SCROLLBACK_CAP) {
+            img->ref_cnt--;
+            ctx->term.img_placements[i--] = ctx->term
+                                                .img_placements[--ctx->term.img_placements_len];
+        }
+    }
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+
     if (lines > 0) {  // scroll up
         if (lines > height) lines = height;
-
-#if SFTE_SIXEL
-        if (ctx->img_layer) {
-            int px_lines = lines * ctx->font.cell_height;
-            int px_top = top * ctx->font.cell_height;
-            int px_hei = height * ctx->font.cell_height;
-            int px_move = px_hei - px_lines;
-
-            if (px_move > 0)
-                memmove(&ctx->img_layer[px_top * ctx->px_wid],
-                        &ctx->img_layer[(px_top + px_lines) * ctx->px_wid],
-                        px_move * ctx->px_wid * sizeof(uint32_t));
-
-            memset(&ctx->img_layer[(px_top + px_move) * ctx->px_wid], 0,
-                   px_lines * ctx->px_wid * sizeof(uint32_t));
-        }
-#endif  // SFTE_SIXEL
 
 #if SFTE_SCROLLBACK_CAP
         if (top == 0
@@ -2745,23 +3461,6 @@ static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
     } else if (lines < 0) {                                    // scroll down
         lines = -lines;
         if (lines > height) lines = height;
-
-#if SFTE_SIXEL
-        if (ctx->img_layer) {
-            int px_lines = lines * ctx->font.cell_height;
-            int px_top = top * ctx->font.cell_height;
-            int px_hei = height * ctx->font.cell_height;
-            int px_move = px_hei - px_lines;
-
-            if (px_move > 0)
-                memmove(&ctx->img_layer[(px_top + px_lines) * ctx->px_wid],
-                        &ctx->img_layer[px_top * ctx->px_wid],
-                        px_move * ctx->px_wid * sizeof(uint32_t));
-
-            memset(&ctx->img_layer[px_top * ctx->px_wid], 0,
-                   px_lines * ctx->px_wid * sizeof(uint32_t));
-        }
-#endif  // SFTE_SIXEL
 
         int move_cnt = height - lines;
         if (move_cnt > 0)
@@ -3139,13 +3838,13 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
          */
         int mode = (cnt > 0) ? p[0] : 0;
 
-        // if we clear entire screen and scrollback exists, push the data to scrollback instead
-        // of erasing it in its entirety
+        // if we clear entire screen and scrollback exists, push the data to scrollback
+        // instead of erasing it in its entirety
         if (mode == 2 || (mode == 0 && ctx->term.cursor_x == 0 && ctx->term.cursor_y == 0)) {
 #if SFTE_SCROLLBACK_CAP
             // find last populated row
-            int last_r = -1;
-            for (int r = ctx->term.rows - 1; r >= 0; --r) {
+            int last_r = ctx->term.cursor_y;
+            for (int r = ctx->term.rows - 1; r > last_r; --r) {
                 for (int c = 0; c < ctx->term.cols; ++c) {
                     sfte_cell *cell = &ctx->term.cells[r * ctx->term.cols + c];
                     if (cell->rune != ' ' && cell->rune != '\0') {
@@ -3154,8 +3853,28 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
                     }
                 }
 
-                if (last_r != -1) break;
+                if (last_r == r) break;
             }
+
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+            for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
+                sfte_img_placement *p = &ctx->term.img_placements[i];
+                if (p->alt_screen != ctx->term.alt_active) continue;
+
+                sfte_img *img = NULL;
+                for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
+                    if (ctx->term.img_pool[j].id == p->img_id) {
+                        img = &ctx->term.img_pool[j];
+                        break;
+                    }
+
+                int rows = _sfte_grid_span(img->height, p->y_off, ctx->font.cell_height);
+                int img_bot = p->start_row + rows - 1;
+                if (img_bot > last_r) last_r = img_bot;
+            }
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+
+            if (last_r >= ctx->term.rows) last_r = ctx->term.rows - 1;
             int lines_to_push = last_r + 1;
 
             // temporarily bypass scroll margins to ensure full-screen push
@@ -3163,6 +3882,7 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
             int old_bot = ctx->term.scroll_bottom;
             ctx->term.scroll_top = 0;
             ctx->term.scroll_bottom = ctx->term.rows - 1;
+
             if (lines_to_push > 0) _sfte_grid_scroll(ctx, lines_to_push);
 
             ctx->term.scroll_top = old_top;
@@ -3487,6 +4207,20 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
                         ctx->term.alt_cells = tmp;
                         _sfte_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
                     }
+
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+                    // destroy all imgs created on alt screen
+                    for (uint32_t j = 0; j < ctx->term.img_placements_len; ++j) {
+                        if (!ctx->term.img_placements[j].alt_screen) continue;
+                        for (uint32_t k = 0; k < ctx->term.img_pool_len; ++k)
+                            if (ctx->term.img_pool[k].id == ctx->term.img_placements[j].img_id) {
+                                ctx->term.img_pool[k].ref_cnt--;
+                                break;
+                            }
+                        ctx->term.img_placements[j--] = ctx->term.img_placements
+                                                            [--ctx->term.img_placements_len];
+                    }
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
                 }
 #endif  // SFTE_ALT_SCREEN
 
@@ -3948,52 +4682,6 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
     }
 }
 // =================================================================================================
-// >>b64
-// =================================================================================================
-#if SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
-static const int8_t _sfte_b64_table[256] = {
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63,
-    52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1, -1, 0,  1,  2,  3,  4,  5,  6,
-    7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, -1,
-    -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
-    49, 50, 51, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-};
-
-static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len) {
-    // strip trailing pad
-    while (len > 0 && src[len - 1] == '=') len--;
-
-    *out_len = (len * 3) / 4;
-    uint8_t *dst = (uint8_t *)SFTE_MALLOC(*out_len);
-    if (!dst) return NULL;
-
-    size_t i = 0, j = 0;
-    uint32_t acc = 0;
-    int bits = 0;
-
-    while (i < len) {
-        int8_t v = _sfte_b64_table[src[i++]];
-        if (v == -1) continue;
-
-        acc = (acc << 6) | v;
-        bits += 6;
-        if (bits >= 8) {
-            bits -= 8;
-            dst[j++] = (acc >> bits);
-        }
-    }
-
-    *out_len = j;
-    return dst;
-}
-#endif  // SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD
-// =================================================================================================
 // >>parser
 // =================================================================================================
 typedef enum {
@@ -4235,13 +4923,19 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
     case VT_DCS:
         if (b == '\x07' || b == '\x1b') {
             const char *term = (b == '\x1b') ? "\033\\" : "\x07";
+            ctx->term.osc_payload[ctx->term.osc_len] = '\0';
 
-            if (strncmp(ctx->term.osc_payload, "+q", 2) == 0) {
-                char reply[128];
-                int len = snprintf(reply, sizeof(reply), "\033P0+r%s%s", ctx->term.osc_payload + 2,
-                                   term);
-                ctx->write_cb(ctx->user_data, reply, len);
-            }
+#if SFTE_KITTY_GRAPHICS
+            if (ctx->term.osc_payload[0] == 'G')
+                _sfte_kitty_parse_graphics(ctx, ctx->term.osc_payload + 1);
+            else
+#endif  // SFTE_KITTY_GRAPHICS
+                if (strncmp(ctx->term.osc_payload, "+q", 2) == 0) {
+                    char reply[128];
+                    int len = snprintf(reply, sizeof(reply), "\033P0+r%s%s",
+                                       ctx->term.osc_payload + 2, term);
+                    ctx->write_cb(ctx->user_data, reply, len);
+                }
 
             ctx->term.vt_state = (b == '\x1b') ? VT_ESCAPE : VT_GROUND;
         }
@@ -4260,12 +4954,26 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
             if (is_sixel) {
                 ctx->term.vt_state = VT_SIXEL;
                 ctx->sixel.state = SIXEL_GROUND;
-                ctx->sixel.x = ctx->term.cursor_x * ctx->font.cell_width;
-                ctx->sixel.y = ctx->term.cursor_y * ctx->font.cell_height;
-                ctx->sixel.start_x = ctx->sixel.x;
+                ctx->sixel.start_col = ctx->term.cursor_x;
+                ctx->sixel.start_row = ctx->term.cursor_y;
+                ctx->sixel.x = 0;
+                ctx->sixel.y = 0;
+                ctx->sixel.pxs = NULL;
+                ctx->sixel.width = 0;
+                ctx->sixel.height = 0;
+                ctx->sixel.cap_w = 0;
+                ctx->sixel.cap_h = 0;
                 break;  // skip adding q to payload
-            } else if (ctx->term.osc_len < (int)sizeof(ctx->term.osc_payload) - 1)
-                ctx->term.osc_payload[ctx->term.osc_len++] = b;
+            } else {
+                if (ctx->term.osc_len + 1 >= ctx->term.osc_cap &&
+                    ctx->term.osc_cap < SFTE_OSC_MAX_CAP) {
+                    ctx->term.osc_cap *= 2;
+                    ctx->term.osc_payload = (char *)SFTE_REALLOC(ctx->term.osc_payload,
+                                                                 ctx->term.osc_cap);
+                }
+                if (ctx->term.osc_len + 1 < ctx->term.osc_cap)
+                    ctx->term.osc_payload[ctx->term.osc_len++] = b;
+            }
         }
 #endif  // SFTE_SIXEL
         else {
@@ -4281,11 +4989,63 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
         break;
 #if SFTE_SIXEL
     case VT_SIXEL:
-        if (b == '\x1b')
-            ctx->term.vt_state = VT_ESCAPE;
-        else if (b == '\x07')
-            ctx->term.vt_state = VT_GROUND;
-        else
+        if (b == '\x1b' || b == '\x07') {
+            // sequence ended, commit image to obj pool
+            if (ctx->sixel.width > 0 && ctx->sixel.height > 0) {
+                uint32_t *final_pxs = (uint32_t *)SFTE_MALLOC(ctx->sixel.width * ctx->sixel.height *
+                                                              sizeof(uint32_t));
+                for (int y = 0; y < ctx->sixel.height; ++y)
+                    memcpy(&final_pxs[y * ctx->sixel.width], &ctx->sixel.pxs[y * ctx->sixel.cap_w],
+                           ctx->sixel.width * sizeof(uint32_t));
+                SFTE_FREE(ctx->sixel.pxs);
+
+                sfte_img *img = _sfte_img_pool_insert(ctx, (sfte_img){
+                                                               .id = ++ctx->term.next_img_id,
+                                                               .width = ctx->sixel.width,
+                                                               .height = ctx->sixel.height,
+                                                               .pxs = final_pxs,
+                                                               .is_sixel = 1,
+                                                           });
+                if (img) {
+                    sfte_img_placement *p = _sfte_img_placement_insert(
+                        ctx, (sfte_img_placement){
+                                 .img_id = img->id,
+                                 .start_col = ctx->sixel.start_col,
+                                 .start_row = ctx->sixel.start_row,
+                                 .z_idx = 1,
+                                 .is_sixel = 1,
+                                 .alt_screen = ctx->term.alt_active,
+                             });
+                    if (p) {
+                        img->ref_cnt++;
+                        // dirty image area
+                        int rows = _sfte_grid_span(ctx->sixel.height, p->y_off,
+                                                   ctx->font.cell_height);
+                        if (ctx->sixel.height % ctx->font.cell_height != 0) rows++;
+
+                        // force text cursor below the image
+                        ctx->term.cursor_y = ctx->sixel.start_row + rows;
+                        ctx->term.cursor_x = 0;
+
+                        // if image pushed cursor off the screen, scroll
+                        while (ctx->term.cursor_y > ctx->term.scroll_bottom) {
+                            _sfte_grid_scroll(ctx, 1);
+                            ctx->term.cursor_y--;
+                        }
+                    } else
+                        SFTE_FREE(final_pxs);
+                }
+            }
+
+            // clean state
+            ctx->sixel.pxs = NULL;
+            ctx->sixel.cap_w = 0;
+            ctx->sixel.cap_h = 0;
+            ctx->sixel.width = 0;
+            ctx->sixel.height = 0;
+
+            ctx->term.vt_state = (b == '\x1b') ? VT_ESCAPE : VT_GROUND;
+        } else
             _sfte_sixel_parse_byte(ctx, b);
         break;
 #endif  // SFTE_SIXEL
@@ -4312,7 +5072,7 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
 }
 
 // =================================================================================================
-//  PUBLIC IMPLEMENTATION  =========================================================================
+//  PUBLIC IMPLEMENTATION
 // =================================================================================================
 
 // =================================================================================================
@@ -4331,6 +5091,8 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
 
     ctx->width = w;
     ctx->height = h;
+
+    uint8_t pad_was_dirty = ctx->padding_dirty;
 
     if (ctx->padding_dirty > 0) {
         _sfte_clear_padding_rects(ctx, px_buf);
@@ -4418,7 +5180,8 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
 
             // mark padding dirty to clear the bleed area.
             // it's not hidden behind an if (r_min == 0 || r_max == ctx->term.rows - 1)
-            // because if damage is at left or right edge, the bleed area will be visible there too.
+            // because if damage is at left or right edge, the bleed area will be visible
+            // there too.
             ctx->padding_dirty = 1;
 
             for (int y = r_min; y <= r_max; ++y)
@@ -4432,6 +5195,88 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
     for (int i = 0; i < ctx->term.rows * ctx->term.cols; ++i)
         if (ctx->term.cells[i].dirty == 2) ctx->term.cells[i].dirty = 1;
 #endif  // SFTE_FONT_BLEED
+
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+    for (uint32_t i = 1; i < ctx->term.img_placements_len; ++i) {
+        sfte_img_placement key = ctx->term.img_placements[i];
+        int j = i - 1;
+        while (j >= 0 && ctx->term.img_placements[j].z_idx > key.z_idx) {
+            ctx->term.img_placements[j + 1] = ctx->term.img_placements[j];
+            j--;
+        }
+        ctx->term.img_placements[j + 1] = key;
+    }
+
+    int base_y_off = 0;
+#if SFTE_SCROLLBACK_CAP
+    base_y_off = ctx->term.sb_offset * ctx->font.cell_height;
+#endif  // SFTE_SCROLLBACK_CAP
+
+#define SFTE_RENDER_IMG_PASS(is_bg_pass)                                                           \
+    for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {                                  \
+        sfte_img_placement *p = &ctx->term.img_placements[i];                                      \
+        if (p->alt_screen != ctx->term.alt_active) continue;                                       \
+        int is_bg_img = (p->z_idx < 0);                                                            \
+        if (is_bg_img != (is_bg_pass)) continue;                                                   \
+                                                                                                   \
+        sfte_img *img = NULL;                                                                      \
+        for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)                                      \
+            if (ctx->term.img_pool[j].id == p->img_id) {                                           \
+                img = &ctx->term.img_pool[j];                                                      \
+                break;                                                                             \
+            }                                                                                      \
+        if (!img) continue;                                                                        \
+                                                                                                   \
+        int base_x = (p->start_col * ctx->font.cell_width) + SFTE_PAD_X + p->x_off;                \
+        int base_y = (p->start_row * ctx->font.cell_height) + SFTE_PAD_Y + p->y_off;               \
+        base_y += base_y_off;                                                                      \
+                                                                                                   \
+        int draw_w = _SFTE_CLAMP(img->width, 0, ctx->width - base_x);                              \
+        int draw_h = _SFTE_CLAMP(img->height, 0, ctx->height - base_y);                            \
+                                                                                                   \
+        int dmg_x = base_x;                                                                        \
+        int dmg_y = base_y;                                                                        \
+        int dmg_w = draw_w;                                                                        \
+        int dmg_h = draw_h;                                                                        \
+                                                                                                   \
+        if (dmg_y < 0) {                                                                           \
+            dmg_h += dmg_y;                                                                        \
+            dmg_y = 0;                                                                             \
+        }                                                                                          \
+        if (dmg_x < 0) {                                                                           \
+            dmg_w += dmg_x;                                                                        \
+            dmg_x = 0;                                                                             \
+        }                                                                                          \
+                                                                                                   \
+        if (dmg_h && dmg_w) DAMAGE_ADD(dmg_x, dmg_y, dmg_w, dmg_h);                                \
+                                                                                                   \
+        for (int iy = 0; iy < img->height; ++iy) {                                                 \
+            int out_y = base_y + iy;                                                               \
+            if (out_y < 0 || out_y >= ctx->height) continue;                                       \
+                                                                                                   \
+            for (int ix = 0; ix < img->width; ++ix) {                                              \
+                int out_x = base_x + ix;                                                           \
+                if (out_x < 0 || out_x >= ctx->width) continue;                                    \
+                                                                                                   \
+                uint8_t is_dirty = 0;                                                              \
+                if (out_x < SFTE_PAD_X || out_y < SFTE_PAD_Y ||                                    \
+                    out_x >= ctx->width - SFTE_PAD_X || out_y >= ctx->height - SFTE_PAD_Y)         \
+                    is_dirty = pad_was_dirty;                                                      \
+                else {                                                                             \
+                    int grid_c = (out_x - SFTE_PAD_X) / ctx->font.cell_width;                      \
+                    int grid_r = (out_y - SFTE_PAD_Y) / ctx->font.cell_height;                     \
+                    is_dirty = ctx->term.cells[_SFTE_IDX(ctx, grid_c, grid_r)].dirty;              \
+                }                                                                                  \
+                if (!is_dirty) continue;                                                           \
+                                                                                                   \
+                uint32_t img_pxs = img->pxs[iy * img->width + ix];                                 \
+                if (!(img_pxs & 0xFF000000)) continue;                                             \
+                px_buf[out_y * ctx->width + out_x] = _sfte_render_blend_argb(                      \
+                    px_buf[out_y * ctx->width + out_x], img_pxs, (uint8_t)(img_pxs >> 24));        \
+            }                                                                                      \
+        }                                                                                          \
+    }
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 
     for (int r = 0; r < ctx->term.rows; ++r) {
         for (int c = 0; c < ctx->term.cols; ++c) {
@@ -4477,6 +5322,10 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
                 _sfte_render_bg(ctx, px_buf, c, r, bg);
         }
     }
+
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+    SFTE_RENDER_IMG_PASS(1);
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 
     for (int r = 0; r < ctx->term.rows; ++r) {
         for (int c = 0; c < ctx->term.cols; ++c) {
@@ -4546,7 +5395,6 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
             } else if (r == ctx->term.rows - 1)
                 dmg_ch += ctx->height - (dmg_cy + dmg_ch);
             DAMAGE_ADD(0, dmg_cy, ctx->width, dmg_ch);
-            ctx->term.cells[idx].dirty = 0;
         }
     }
 
@@ -4645,25 +5493,10 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
         ctx->term.trail_damage_w = 0;
 #endif  // SFTE_CURSOR_TRAIL
 
-#if SFTE_SIXEL
-
-    for (int y = 0; y < ctx->px_hei; ++y)
-        for (int x = 0; x < ctx->px_wid; ++x) {
-            uint32_t img_px = ctx->img_layer[y * ctx->px_wid + x];
-            if ((img_px & 0xFF000000) == 0) continue;
-
-            int out_x = x + SFTE_PAD_X;
-            int out_y = y + SFTE_PAD_Y
-#if SFTE_SCROLLBACK_CAP
-                        + ctx->term.sb_offset * ctx->font.cell_height
-#endif  // SFTE_SCROLLBACK_CAP
-                ;
-
-            if (out_y >= ctx->height) continue;
-
-            px_buf[out_y * ctx->width + out_x] = img_px;
-        }
-#endif  // SFTE_SIXEL
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+    SFTE_RENDER_IMG_PASS(0);
+#undef SFTE_RENDER_IMG_PASS
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 
     if (dmg_x0 < dmg_x1 && dmg_y0 < dmg_y1) {
         dmg_x0 = _SFTE_CLAMP(dmg_x0, 0, w);
@@ -4674,6 +5507,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
         out_dmg->y = dmg_y0;
         out_dmg->w = dmg_x1 - dmg_x0;
         out_dmg->h = dmg_y1 - dmg_y0;
+        for (int i = 0; i < ctx->term.rows * ctx->term.cols; ++i) ctx->term.cells[i].dirty = 0;
     } else {
         out_dmg->w = 0;
         out_dmg->h = 0;
@@ -4703,10 +5537,6 @@ void sfte_resize(sfte_ctx *ctx, int w, int h) {
         ctx->term.trail_damage_w = 0;
 #endif  // SFTE_CURSOR_TRAIL
     }
-
-#if SFTE_SIXEL
-    _sfte_sixel_resize_img_layer(ctx);
-#endif  // SFTE_SIXEL
 }
 
 void sfte_get_ideal_size(sfte_ctx *ctx, int cols, int rows, int *out_w, int *out_h) {
@@ -4769,7 +5599,7 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
 
 #if SFTE_SIXEL
     for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_ansi_palette); ++i)
-        ctx->sixel.palette[i] = _sfte_ansi_palette[i];
+        ctx->sixel.palette[i] = 0xFF000000 | _sfte_ansi_palette[i];
 #endif  // SFTE_SIXEL
 
     ctx->term.cols = 80;
@@ -4884,6 +5714,13 @@ void sfte_free(sfte_ctx *ctx) {
         SFTE_FREE(ctx->term.link_pool);
     }
 #endif  // SFTE_HYPERLINKS
+
+#if SFTE_SIXEL
+    _sfte_sixel_deinit(ctx);
+#endif  // SFTE_SIXEL
+#if SFTE_KITTY_GRAPHICS
+    _sfte_kitty_deinit(ctx);
+#endif  // SFTE_KITTY_GRAPHICS
 
     SFTE_FREE(ctx);
 }
@@ -5294,14 +6131,14 @@ sfte_ctx *sfte_wayland_get_ctx(sfte_wayland_app *app) {
 
 int sfte_wayland_run(sfte_wayland_app *app) {
 #ifdef SFTE_FONT_BOLD
-    SFTE_ASSERT(
-        app->ctx->font.bold.glyphs && app->ctx->font.bold.atlas_pxs,
-        "if SFTE_FONT_BOLD is defined, a bold font must be provided using sfte_font_load_*");
+    SFTE_ASSERT(app->ctx->font.bold.glyphs && app->ctx->font.bold.atlas_pxs,
+                "if SFTE_FONT_BOLD is defined, a bold font must be provided using "
+                "sfte_font_load_*");
 #endif  // SFTE_FONT_BOLD
 #ifdef SFTE_FONT_ITALIC
-    SFTE_ASSERT(
-        app->ctx->font.italic.glyphs && app->ctx->font.italic.atlas_pxs,
-        "if SFTE_FONT_ITALIC is defined, an italic font must be provided using sfte_font_load_*");
+    SFTE_ASSERT(app->ctx->font.italic.glyphs && app->ctx->font.italic.atlas_pxs,
+                "if SFTE_FONT_ITALIC is defined, an italic font must be provided using "
+                "sfte_font_load_*");
 #endif  // SFTE_FONT_ITALIC
 #ifdef SFTE_FONT_BOLD_ITALIC
     SFTE_ASSERT(app->ctx->font.bold_italic.glyphs && app->ctx->font.bold_italic.atlas_pxs,
