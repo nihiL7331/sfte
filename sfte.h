@@ -3,16 +3,7 @@
 
     Project URL: https://github.com/nihiL7331/sfte
 
-    Optionally provide the following defines with your own implementations:
-
-    WHAT
-    ====
-
-    HOW
-    ===
-
-    FUTURE PLANS
-    ============
+    FIXME: docs
 
     LICENSE
     =======
@@ -741,6 +732,7 @@ typedef struct {
     int crop_w;
     int crop_h;
     uint32_t placement_id;
+    uint8_t quiet;  // 0=always, 1=error, 2=never
 } sfte_kitty_state;
 #endif  // SFTE_KITTY_GRAPHICS
 
@@ -1420,8 +1412,8 @@ static void _sfte_kitty_gc_pool(sfte_ctx *ctx) {
     }
 }
 
-static void _sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img) {
-    if (!img) return;
+static const char *_sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img) {
+    if (!img) return "EINVAL: cannot apply placement to NULL image";
     sfte_img_placement *p = _sfte_img_placement_insert(ctx,
                                                        (sfte_img_placement){
                                                            .img_id = img->id,
@@ -1434,21 +1426,23 @@ static void _sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img) {
                                                            .alt_screen = ctx->term.alt_active,
                                                        });
 
-    if (p) {
-        img->ref_cnt++;
-        int cols = _sfte_grid_span(img->width, ctx->kitty.x_off, ctx->font.cell_width);
-        int rows = _sfte_grid_span(img->height, ctx->kitty.y_off, ctx->font.cell_height);
-        _sfte_dirty_rect(ctx, ctx->term.cursor_x, ctx->term.cursor_y, cols, rows);
-    }
+    if (!p) return "ENOMEM: placement pool capacity reached";
+
+    img->ref_cnt++;
+    int cols = _sfte_grid_span(img->width, ctx->kitty.x_off, ctx->font.cell_width);
+    int rows = _sfte_grid_span(img->height, ctx->kitty.y_off, ctx->font.cell_height);
+    _sfte_dirty_rect(ctx, ctx->term.cursor_x, ctx->term.cursor_y, cols, rows);
+    return NULL;
 }
 
-static void _sfte_kitty_exec_query(sfte_ctx *ctx) {
+static const char *_sfte_kitty_exec_query(sfte_ctx *ctx) {
     char reply[64];
     int len = snprintf(reply, sizeof(reply), "\033_Gi=%u;OK\033\\", ctx->kitty.id);
     if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
+    return NULL;
 }
 
-static void _sfte_kitty_exec_delete(sfte_ctx *ctx) {
+static const char *_sfte_kitty_exec_delete(sfte_ctx *ctx) {
     for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
         sfte_img_placement *p = &ctx->term.img_placements[i];
         if (p->alt_screen != ctx->term.alt_active || p->is_sixel) continue;
@@ -1459,6 +1453,7 @@ static void _sfte_kitty_exec_delete(sfte_ctx *ctx) {
                 img = &ctx->term.img_pool[j];
                 break;
             }
+        if (!img) return "EINVAL: failed to find image to delete";
 
         if (_sfte_kitty_should_delete(ctx, p, img)) {
             if (img) {
@@ -1473,13 +1468,14 @@ static void _sfte_kitty_exec_delete(sfte_ctx *ctx) {
     }
 
     _sfte_kitty_gc_pool(ctx);
+    return NULL;
 }
 
-static sfte_img *_sfte_kitty_exec_transmit(sfte_ctx *ctx) {
+static const char *_sfte_kitty_exec_transmit(sfte_ctx *ctx, sfte_img **out_img) {
     size_t raw_len = 0;
     uint8_t *raw_data = _sfte_b64_decode((uint8_t *)ctx->kitty.b64_buf, ctx->kitty.b64_len,
                                          &raw_len);
-    if (!raw_data) return NULL;
+    if (!raw_data) return "ENOMEM: base64 decode failed";
 
     int is_file = (ctx->kitty.t_medium == 'f' || ctx->kitty.t_medium == 't');
     char *file_path = NULL;
@@ -1497,28 +1493,47 @@ static sfte_img *_sfte_kitty_exec_transmit(sfte_ctx *ctx) {
     if (ctx->kitty.t_medium == 't' && is_file) remove(file_path);
     if (is_file) SFTE_FREE(file_path);
     SFTE_FREE(raw_data);
-    if (!pxs) return NULL;
+    if (!pxs) return "EBADFMT: failed to decode image data";
 
     pxs = _sfte_kitty_apply_crop(ctx, pxs, &w, &h);
-    if (!pxs) return NULL;
+    if (!pxs) return "EINVAL: invalid crop dimensions";
 
     pxs = _sfte_kitty_apply_scale(ctx, pxs, &w, &h);
 
     if (!ctx->kitty.id) ctx->kitty.id = ++ctx->term.next_img_id;
-    return _sfte_img_pool_insert(ctx, (sfte_img){
-                                          .id = ctx->kitty.id,
-                                          .width = w,
-                                          .height = h,
-                                          .pxs = pxs,
-                                      });
+    sfte_img *new_img = _sfte_img_pool_insert(ctx, (sfte_img){
+                                                       .id = ctx->kitty.id,
+                                                       .width = w,
+                                                       .height = h,
+                                                       .pxs = pxs,
+                                                   });
+
+    if (!new_img) return "ENOMEM: image pool capacity reached";
+    if (out_img) *out_img = new_img;
+    return NULL;
 }
 
-static void _sfte_kitty_exec_place(sfte_ctx *ctx) {
+static const char *_sfte_kitty_exec_place(sfte_ctx *ctx) {
     for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
-        if (ctx->term.img_pool[j].id == ctx->kitty.id) {
-            _sfte_kitty_apply_placement(ctx, &ctx->term.img_pool[j]);
-            return;
-        }
+        if (ctx->term.img_pool[j].id == ctx->kitty.id)
+            return _sfte_kitty_apply_placement(ctx, &ctx->term.img_pool[j]);
+    return "ENOENT: image id not found in pool";
+}
+
+static void _sfte_kitty_send_ack(sfte_ctx *ctx, const char *err_msg) {
+    if (err_msg && (ctx->kitty.quiet == 0 || ctx->kitty.quiet == 1)) {
+        char reply[256];
+        int len = ctx->kitty.id > 0 ? snprintf(reply, sizeof(reply), "\033_Gi=%u;%s\033\\",
+                                               ctx->kitty.id, err_msg)
+                                    : snprintf(reply, sizeof(reply), "\033_G;%s\033\\", err_msg);
+        if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
+    } else if (!err_msg && !ctx->kitty.quiet) {
+        char reply[64];
+        int len = ctx->kitty.id > 0
+                      ? snprintf(reply, sizeof(reply), "\033_Gi=%u;OK\033\\", ctx->kitty.id)
+                      : snprintf(reply, sizeof(reply), "\033_G;OK\033\\");
+        if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
+    }
 }
 
 static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
@@ -1548,6 +1563,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
             .action = 'T',
             .format = SFTE_KITTY_FMT_RGBA,
             .t_medium = 'd',
+            .quiet = 1,
             // rest 0-initialized
         };
     }
@@ -1578,6 +1594,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         case 'w': ctx->kitty.crop_w = atoi(val); break;
         case 'h': ctx->kitty.crop_h = atoi(val); break;
         case 'p': ctx->kitty.placement_id = (uint32_t)atoi(val); break;
+        case 'q': ctx->kitty.quiet = (uint8_t)atoi(val); break;
         default: break;
         }
 
@@ -1603,15 +1620,24 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
     if (more) return;  // abort and wait for next sequence
 
     ctx->kitty.b64_buf[ctx->kitty.b64_len] = '\0';
+    const char *err_msg = NULL;
 
     switch (ctx->kitty.action) {
-    case 'q': _sfte_kitty_exec_query(ctx); break;
-    case 'd': _sfte_kitty_exec_delete(ctx); break;
-    case 't': _sfte_kitty_exec_transmit(ctx); break;
-    case 'T': _sfte_kitty_apply_placement(ctx, _sfte_kitty_exec_transmit(ctx)); break;
-    case 'p': _sfte_kitty_exec_place(ctx); break;
-    default: break;
+    case 'q': err_msg = _sfte_kitty_exec_query(ctx); break;
+    case 'd': err_msg = _sfte_kitty_exec_delete(ctx); break;
+    case 't': err_msg = _sfte_kitty_exec_transmit(ctx, NULL); break;
+    case 'T': {
+        sfte_img *img = NULL;
+        err_msg = _sfte_kitty_exec_transmit(ctx, &img);
+        if (err_msg || !img) break;
+        _sfte_kitty_apply_placement(ctx, img);
+        break;
     }
+    case 'p': _sfte_kitty_exec_place(ctx); break;
+    default: err_msg = "EINVAL: unknown action"; break;
+    }
+
+    _sfte_kitty_send_ack(ctx, err_msg);
 
     ctx->kitty.b64_len = 0;
 }
