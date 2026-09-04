@@ -1097,7 +1097,7 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
 #if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 // returns a pointer to a new image, or NULL if pool is at max cap
 static inline sfte_img *_sfte_img_pool_insert(sfte_ctx *ctx, sfte_img img) {
-    int oom = 0;
+    uint8_t oom = 0;
     SFTE_ENSURE_CAP(sfte_img, ctx->term.img_pool, ctx->term.img_pool_len, ctx->term.img_pool_cap, 1,
                     SFTE_IMG_POOL_INIT_CAP, SFTE_IMG_POOL_MAX_CAP, oom);
     if (oom) {
@@ -1111,7 +1111,7 @@ static inline sfte_img *_sfte_img_pool_insert(sfte_ctx *ctx, sfte_img img) {
 
 // returns a pointer to a new placement, or NULL if placements are at max cap
 static inline sfte_img_placement *_sfte_img_placement_insert(sfte_ctx *ctx, sfte_img_placement p) {
-    int oom = 0;
+    uint8_t oom = 0;
     SFTE_ENSURE_CAP(sfte_img_placement, ctx->term.img_placements, ctx->term.img_placements_len,
                     ctx->term.img_placements_cap, 1, SFTE_IMG_PLACEMENT_INIT_CAP,
                     SFTE_IMG_PLACEMENT_MAX_CAP, oom);
@@ -1421,6 +1421,7 @@ static void _sfte_kitty_gc_pool(sfte_ctx *ctx) {
 }
 
 static void _sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img) {
+    if (!img) return;
     sfte_img_placement *p = _sfte_img_placement_insert(ctx,
                                                        (sfte_img_placement){
                                                            .img_id = img->id,
@@ -1474,11 +1475,11 @@ static void _sfte_kitty_exec_delete(sfte_ctx *ctx) {
     _sfte_kitty_gc_pool(ctx);
 }
 
-static void _sfte_kitty_exec_transmit(sfte_ctx *ctx) {
+static sfte_img *_sfte_kitty_exec_transmit(sfte_ctx *ctx) {
     size_t raw_len = 0;
     uint8_t *raw_data = _sfte_b64_decode((uint8_t *)ctx->kitty.b64_buf, ctx->kitty.b64_len,
                                          &raw_len);
-    if (!raw_data) return;
+    if (!raw_data) return NULL;
 
     int is_file = (ctx->kitty.t_medium == 'f' || ctx->kitty.t_medium == 't');
     char *file_path = NULL;
@@ -1496,20 +1497,20 @@ static void _sfte_kitty_exec_transmit(sfte_ctx *ctx) {
     if (ctx->kitty.t_medium == 't' && is_file) remove(file_path);
     if (is_file) SFTE_FREE(file_path);
     SFTE_FREE(raw_data);
-    if (!pxs) return;
+    if (!pxs) return NULL;
 
     pxs = _sfte_kitty_apply_crop(ctx, pxs, &w, &h);
-    if (!pxs) return;
+    if (!pxs) return NULL;
 
     pxs = _sfte_kitty_apply_scale(ctx, pxs, &w, &h);
 
     if (!ctx->kitty.id) ctx->kitty.id = ++ctx->term.next_img_id;
-    _sfte_img_pool_insert(ctx, (sfte_img){
-                                   .id = ctx->kitty.id,
-                                   .width = w,
-                                   .height = h,
-                                   .pxs = pxs,
-                               });
+    return _sfte_img_pool_insert(ctx, (sfte_img){
+                                          .id = ctx->kitty.id,
+                                          .width = w,
+                                          .height = h,
+                                          .pxs = pxs,
+                                      });
 }
 
 static void _sfte_kitty_exec_place(sfte_ctx *ctx) {
@@ -1589,7 +1590,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         const char *b64_start = semi + 1;
         size_t b64_len = strlen(b64_start);
 
-        int oom = 0;
+        uint8_t oom = 0;
         SFTE_ENSURE_CAP(char, ctx->kitty.b64_buf, ctx->kitty.b64_len, ctx->kitty.b64_cap,
                         b64_len + 1, SFTE_KITTY_B64_INIT_CAP, SFTE_KITTY_B64_MAX_CAP, oom);
 
@@ -1607,10 +1608,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
     case 'q': _sfte_kitty_exec_query(ctx); break;
     case 'd': _sfte_kitty_exec_delete(ctx); break;
     case 't': _sfte_kitty_exec_transmit(ctx); break;
-    case 'T':
-        _sfte_kitty_exec_transmit(ctx);
-        _sfte_kitty_exec_place(ctx);
-        break;
+    case 'T': _sfte_kitty_apply_placement(ctx, _sfte_kitty_exec_transmit(ctx)); break;
     case 'p': _sfte_kitty_exec_place(ctx); break;
     default: break;
     }
