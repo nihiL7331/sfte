@@ -606,6 +606,13 @@ int sfte_wayland_run(sfte_wayland_app *app);
 // =================================================================================================
 // >>infrastructure macros
 // =================================================================================================
+
+// Retrieves the number of elements in a statically allocated array.
+#define _SFTE_ARRAY_LEN(x) (sizeof(x) / sizeof((x)[0]))
+
+// Constraints a value within a specified inclusive range [min, max].
+#define _SFTE_CLAMP(val, min, max) ((val) < (min) ? (min) : ((val) > (max) ? (max) : (val)))
+
 #ifndef SFTE_NO_LOGGING
 
 #define _SFTE_LOG_ITEMS                                                                            \
@@ -1043,8 +1050,9 @@ static const float _sfte_font_scales[SFTE_FONT_MAX_COUNT] = SFTE_FONT_SCALES;
 // -------------------------------------------------------------------------------------------------
 // >memory
 // -------------------------------------------------------------------------------------------------
-static inline void _sfte_dirty_rect(sfte_ctx *ctx, int start_c, int start_r, int cols, int rows);
-static inline void _sfte_dirty_range(sfte_ctx *ctx, int start_idx, int cnt);
+static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int start_c, int start_r, int cols,
+                                         int rows);
+static inline void _sfte_grid_dirty_range(sfte_ctx *ctx, int start_idx, int cnt);
 
 // -------------------------------------------------------------------------------------------------
 // >logging
@@ -1064,11 +1072,54 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
 #endif  // (SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD) || SFTE_KITTY_GRAPHICS
 
 // -------------------------------------------------------------------------------------------------
+// >utf8
+// -------------------------------------------------------------------------------------------------
+static int _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b);
+static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune);
+
+// -------------------------------------------------------------------------------------------------
+// >grid
+// -------------------------------------------------------------------------------------------------
+#define _SFTE_GRID_IDX(ctx, c, r) ((r) * ctx->term.cols + (c))
+static inline int _sfte_grid_span(int px_len, int px_off, int cell_px);
+static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt);
+static void _sfte_grid_scroll(sfte_ctx *ctx, int lines);
+static inline void _sfte_grid_check_wrap(sfte_ctx *ctx);
+static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows);
+
+// -------------------------------------------------------------------------------------------------
 // >img
 // -------------------------------------------------------------------------------------------------
 #if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 static inline sfte_img_placement *_sfte_img_placement_insert(sfte_ctx *ctx, sfte_img_placement p);
 #endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+
+// -------------------------------------------------------------------------------------------------
+// >state
+// -------------------------------------------------------------------------------------------------
+#if SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL
+static inline uint64_t _sfte_time_ms(void);
+#endif  // SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL
+static inline sfte_cell *_sfte_get_view_cell(sfte_ctx *ctx, int c, int r);
+#if SFTE_SELECTION
+static void _sfte_dirty_selection_rows(sfte_ctx *ctx, int y1, int y2);
+static inline int _sfte_is_selected(sfte_ctx *ctx, int c, int logical_r);
+#endif  // SFTE_SELECTION
+#if SFTE_MOUSE
+static void _sfte_mouse_send_event(sfte_ctx *ctx, int btn, int is_release, int c, int r,
+                                   int is_motion);
+#endif  // SFTE_MOUSE
+static void _sfte_px_to_grid(sfte_ctx *ctx, int px_x, int px_y, int *out_c, int *out_r);
+static void _sfte_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf);
+
+// -------------------------------------------------------------------------------------------------
+// >reflow
+// -------------------------------------------------------------------------------------------------
+#if SFTE_REFLOW
+static void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell c, int is_cursor);
+static void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old,
+                                          sfte_reflow_state *st);
+#endif  // SFTE_REFLOW
 
 // -------------------------------------------------------------------------------------------------
 // >sixel
@@ -1100,6 +1151,19 @@ static void _sfte_kitty_deinit(sfte_ctx *ctx);
 #endif  // SFTE_KITTY_GRAPHICS
 
 // -------------------------------------------------------------------------------------------------
+// >csi
+// -------------------------------------------------------------------------------------------------
+#if SFTE_TRUE_COLOR
+static inline uint32_t _sfte_csi_parse_truecolor(int *p, int i);
+#endif  // SFTE_TRUE_COLOR
+static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd);
+
+// -------------------------------------------------------------------------------------------------
+// >parser
+// -------------------------------------------------------------------------------------------------
+static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b);
+
+// -------------------------------------------------------------------------------------------------
 // >font
 // -------------------------------------------------------------------------------------------------
 #ifndef SFTE_CUSTOM_FONT_BACKEND
@@ -1125,24 +1189,6 @@ static void _sfte_render_fg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, u
                             uint32_t fg, sfte_font_cache *target_cache);
 static void _sfte_render_decorations(sfte_ctx *ctx, uint32_t *px_buf, int c, int r,
                                      sfte_cell *vcell, int is_cursor, int w, int h);
-
-// -------------------------------------------------------------------------------------------------
-// >state
-// -------------------------------------------------------------------------------------------------
-#if SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL
-static inline uint64_t _sfte_time_ms(void);
-#endif  // SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL
-static inline sfte_cell *_sfte_get_view_cell(sfte_ctx *ctx, int c, int r);
-#if SFTE_SELECTION
-static void _sfte_dirty_selection_rows(sfte_ctx *ctx, int y1, int y2);
-static inline int _sfte_is_selected(sfte_ctx *ctx, int c, int logical_r);
-#endif  // SFTE_SELECTION
-#if SFTE_MOUSE
-static void _sfte_mouse_send_event(sfte_ctx *ctx, int btn, int is_release, int c, int r,
-                                   int is_motion);
-#endif  // SFTE_MOUSE
-static void _sfte_px_to_grid(sfte_ctx *ctx, int px_x, int px_y, int *out_c, int *out_r);
-static void _sfte_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf);
 
 // -------------------------------------------------------------------------------------------------
 // >wayland
@@ -1177,43 +1223,6 @@ static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg);
 static void _sfte_wayland_loop(sfte_wayland_app *app);
 #endif  // SFTE_WAYLAND
 
-// -------------------------------------------------------------------------------------------------
-// >reflow
-// -------------------------------------------------------------------------------------------------
-#if SFTE_REFLOW
-static void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell c, int is_cursor);
-static void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old,
-                                          sfte_reflow_state *st);
-#endif  // SFTE_REFLOW
-
-// -------------------------------------------------------------------------------------------------
-// >grid
-// -------------------------------------------------------------------------------------------------
-static inline int _sfte_grid_span(int px_len, int px_off, int cell_px);
-static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt);
-static void _sfte_grid_scroll(sfte_ctx *ctx, int lines);
-static inline void _sfte_grid_check_wrap(sfte_ctx *ctx);
-static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows);
-
-// -------------------------------------------------------------------------------------------------
-// >csi
-// -------------------------------------------------------------------------------------------------
-#if SFTE_TRUE_COLOR
-static inline uint32_t _sfte_csi_parse_truecolor(int *p, int i);
-#endif  // SFTE_TRUE_COLOR
-static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd);
-
-// -------------------------------------------------------------------------------------------------
-// >utf8
-// -------------------------------------------------------------------------------------------------
-static int _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b);
-static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune);
-
-// -------------------------------------------------------------------------------------------------
-// >parser
-// -------------------------------------------------------------------------------------------------
-static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b);
-
 // #################################################################################################
 // >>>INTERNAL IMPLEMENTATION
 // #################################################################################################
@@ -1221,15 +1230,20 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b);
 // =================================================================================================
 // >>memory
 // =================================================================================================
-#define _SFTE_ARRAY_LEN(x) (sizeof(x) / sizeof((x)[0]))
-#define _SFTE_CLAMP(val, min, max) ((val) < (min) ? (min) : ((val) > (max) ? (max) : (val)))
-#define _SFTE_IDX(ctx, c, r) ((r) * ctx->term.cols + (c))
 
-#define SFTE_ENSURE_CAP(type, arr, len, cap, add, init_cap, max_cap, oom_flag)                     \
+/*
+    Dynamically resizes an 'arr' buffer of type 'type *',
+    doubling its 'cap' until the required length 'len' + 'add'
+    is met, up to a specified 'max_cap' limit.
+    Sets 'oom_flag' to 1 if 'max_cap' is exceeded.
+    If 'cap' is 0, it initializes capacity to 'init_cap'.
+*/
+#define _SFTE_MEM_ENSURE_CAP(type, arr, len, cap, add, init_cap, max_cap, oom_flag)                \
     do {                                                                                           \
-        if ((len) + (add) > (cap)) {                                                               \
+        size_t _req = (len) + (add);                                                               \
+        if (_req > (cap)) {                                                                        \
             size_t _new = (cap) == 0 ? (init_cap) : (cap) * 2;                                     \
-            while (_new < (len) + (add)) _new *= 2;                                                \
+            while (_new < _req) _new *= 2;                                                         \
             if (_new > (max_cap))                                                                  \
                 (oom_flag) = 1;                                                                    \
             else {                                                                                 \
@@ -1239,19 +1253,6 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b);
         }                                                                                          \
     } while (0)
 
-static inline void _sfte_dirty_rect(sfte_ctx *ctx, int start_c, int start_r, int cols, int rows) {
-    for (int r = start_r; r < start_r + rows; ++r) {
-        if (r < 0 || r >= ctx->term.rows) continue;
-        for (int c = start_c; c < start_c + cols; ++c) {
-            if (c < 0 || c >= ctx->term.cols) continue;
-            ctx->term.cells[_SFTE_IDX(ctx, c, r)].dirty = 1;
-        }
-    }
-}
-
-static inline void _sfte_dirty_range(sfte_ctx *ctx, int start_idx, int cnt) {
-    for (int i = 0; i < cnt; ++i) ctx->term.cells[start_idx + i].dirty = 1;
-}
 // =================================================================================================
 // >>logging
 // =================================================================================================
@@ -1342,14 +1343,549 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
 }
 #endif  // (SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD) || SFTE_KITTY_GRAPHICS
 // =================================================================================================
+// >>utf8
+// =================================================================================================
+#if SFTE_WIDE_CHARS
+#include <wchar.h>
+#define _SFTE_CHAR_WIDTH(rune) wcwidth(rune)
+#else
+#define _SFTE_CHAR_WIDTH(rune) 1
+#endif
+
+// returns 1 if a full UTF-8 rune has been successfully decoded
+static int _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b) {
+    if (ctx->term.utf8_bytes_left > 0) {
+        if ((b & 0xC0) == 0x80) {  // continuation byte
+            ctx->term.utf8_rune = (ctx->term.utf8_rune << 6) | (b & 0x3F);
+            ctx->term.utf8_bytes_left--;
+            if (ctx->term.utf8_bytes_left == 0) return 1;
+            return 0;
+        } else
+            ctx->term.utf8_bytes_left = 0;  // invalid sequence, abort
+    }
+
+    // start of a new rune
+    if ((b & 0x80) == 0) {
+        ctx->term.utf8_rune = b;
+        ctx->term.utf8_bytes_left = 0;
+        return 1;
+    } else if ((b & 0xE0) == 0xC0) {
+        ctx->term.utf8_rune = b & 0x1F;
+        ctx->term.utf8_bytes_left = 1;
+    } else if ((b & 0xF0) == 0xE0) {
+        ctx->term.utf8_rune = b & 0x0F;
+        ctx->term.utf8_bytes_left = 2;
+    } else if ((b & 0xF8) == 0xF0) {
+        ctx->term.utf8_rune = b & 0x07;
+        ctx->term.utf8_bytes_left = 3;
+    }
+
+    return 0;
+}
+
+static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
+    int w = _SFTE_CHAR_WIDTH(rune);
+    if (w < 0) w = 1;
+
+    if (w == 0) {
+#if SFTE_WIDE_CHARS
+        if (ctx->term.cursor_x > 0) {
+            int prev_idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x - 1, ctx->term.cursor_y);
+            sfte_cell *prev = &ctx->term.cells[prev_idx];
+
+            if (prev->attr & ATTR_DUMMY && ctx->term.cursor_x > 1) {
+                prev_idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x - 2, ctx->term.cursor_y);
+                prev = &ctx->term.cells[prev_idx];
+            }
+
+            if (prev->num_combining < SFTE_MAX_COMBINING) {
+                prev->combining[prev->num_combining++] = rune;
+                prev->dirty = 1;
+            }
+        }
+#endif  // SFTE_WIDE_CHARS
+        return;
+    }
+
+    // evaluate line wrapping before drawing
+    // ensures chars placed in the final col enter a pending wrap state
+    // instead of immediately dropping to the next line
+    _sfte_grid_check_wrap(ctx);
+
+#if SFTE_WIDE_CHARS
+    if (w == 2) {
+        // wide char cannot be split across lines,
+        // if in last column, leave it blank and wrap early
+        if (ctx->term.cursor_x == ctx->term.cols - 1) {
+            int idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y);
+            ctx->term.cells[idx].rune = ' ';
+            ctx->term.cells[idx].fg = 0xFFFFFF;
+            ctx->term.cells[idx].bg = SFTE_BG_COLOR;
+            ctx->term.cells[idx].attr = 0;
+#if SFTE_HYPERLINKS
+            ctx->term.cells[idx].link_idx = ctx->term.cur_link_idx;
+#endif  // SFTE_HYPERLINKS
+            ctx->term.cells[idx].dirty = 1;
+            ctx->term.cursor_x++;
+            _sfte_grid_check_wrap(ctx);
+        }
+
+        if (ctx->term.cursor_x == ctx->term.cols - 1) return;
+
+        int idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y);
+        ctx->term.cells[idx].rune = rune;
+        ctx->term.cells[idx].fg = ctx->term.cur_fg;
+        ctx->term.cells[idx].bg = ctx->term.cur_bg;
+        ctx->term.cells[idx].attr = ctx->term.cur_attr | ATTR_WIDE;
+#if SFTE_HYPERLINKS
+        ctx->term.cells[idx].link_idx = ctx->term.cur_link_idx;
+#endif  // SFTE_HYPERLINKS
+#if SFTE_EXT_UNDERLINES
+        ctx->term.cells[idx].ul_style = ctx->term.cur_ul_style;
+#endif  // SFTE_EXT_UNDERLINES
+#if SFTE_COLOR_UNDERLINE
+        ctx->term.cells[idx].ul_color = ctx->term.cur_ul_color;
+#endif  // SFTE_COLOR_UNDERLINE
+        ctx->term.cells[idx].dirty = 1;
+
+        int dummy_idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x + 1, ctx->term.cursor_y);
+        ctx->term.cells[dummy_idx].rune = ' ';
+        ctx->term.cells[dummy_idx].fg = ctx->term.cur_fg;
+        ctx->term.cells[dummy_idx].bg = ctx->term.cur_bg;
+        ctx->term.cells[dummy_idx].attr = ctx->term.cur_attr | ATTR_DUMMY;
+#if SFTE_HYPERLINKS
+        ctx->term.cells[dummy_idx].link_idx = ctx->term.cur_link_idx;
+#endif  // SFTE_HYPERLINKS
+        ctx->term.cells[dummy_idx].dirty = 1;
+
+        ctx->term.cursor_x += 2;
+    } else
+#endif  // SFTE_WIDE_CHARS
+    {
+        int idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y);
+        ctx->term.cells[idx].rune = rune;
+        ctx->term.cells[idx].fg = ctx->term.cur_fg;
+        ctx->term.cells[idx].bg = ctx->term.cur_bg;
+        ctx->term.cells[idx].attr = ctx->term.cur_attr;
+#if SFTE_HYPERLINKS
+        ctx->term.cells[idx].link_idx = ctx->term.cur_link_idx;
+#endif  // SFTE_HYPERLINKS
+#if SFTE_EXT_UNDERLINES
+        ctx->term.cells[idx].ul_style = ctx->term.cur_ul_style;
+#endif  // SFTE_EXT_UNDERLINES
+#if SFTE_COLOR_UNDERLINE
+        ctx->term.cells[idx].ul_color = ctx->term.cur_ul_color;
+#endif  // SFTE_COLOR_UNDERLINE
+        ctx->term.cells[idx].dirty = 1;
+
+        ctx->term.cursor_x++;
+    }
+}
+
+// =================================================================================================
+// >>grid
+// =================================================================================================
+static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int start_c, int start_r, int cols,
+                                         int rows) {
+    for (int r = start_r; r < start_r + rows; ++r) {
+        if (r < 0 || r >= ctx->term.rows) continue;
+        for (int c = start_c; c < start_c + cols; ++c) {
+            if (c < 0 || c >= ctx->term.cols) continue;
+            ctx->term.cells[_SFTE_GRID_IDX(ctx, c, r)].dirty = 1;
+        }
+    }
+}
+
+static inline void _sfte_grid_dirty_range(sfte_ctx *ctx, int start_idx, int cnt) {
+    for (int i = 0; i < cnt; ++i) ctx->term.cells[start_idx + i].dirty = 1;
+}
+
+static inline int _sfte_grid_span(int px_len, int px_off, int cell_px) {
+    return (px_len + px_off + cell_px - 1) / cell_px;
+}
+
+static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt) {
+    for (int i = 0; i < cnt; ++i) {
+        ctx->term.cells[start_idx + i].rune = ' ';
+        ctx->term.cells[start_idx + i].fg = ctx->term.cur_fg;
+        ctx->term.cells[start_idx + i].bg = ctx->term.cur_bg;
+        ctx->term.cells[start_idx + i].attr = 0;
+#if SFTE_EXT_UNDERLINES
+        ctx->term.cells[start_idx + i].ul_style = 0;
+#endif  // SFTE_EXT_UNDERLINES
+#if SFTE_COLOR_UNDERLINE
+        ctx->term.cells[start_idx + i].ul_color = 0xFFFFFFFF;
+#endif  // SFTE_COLOR_UNDERLINE
+        ctx->term.cells[start_idx + i].dirty = 1;
+#if SFTE_REFLOW
+        ctx->term.cells[start_idx + i].wrapped = 0;
+#endif  // SFTE_REFLOW
+#if SFTE_HYPERLINKS
+        ctx->term.cells[start_idx + i].link_idx = 0;
+#endif  // SFTE_HYPERLINKS
+
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+        // erase overlapping sixel img placements
+        for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
+            sfte_img_placement *p = &ctx->term.img_placements[i];
+            if (!p->is_sixel) continue;
+
+            sfte_img *img = NULL;
+            for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
+                if (ctx->term.img_pool[j].id == p->img_id) {
+                    img = &ctx->term.img_pool[j];
+                    break;
+                }
+
+            int cols = _sfte_grid_span(img->width, p->x_off, ctx->font.cell_width);
+            int rows = _sfte_grid_span(img->height, p->y_off, ctx->font.cell_height);
+
+            // check if 2D image bbox overlaps the 1D cleared range
+            int overlap = 0;
+            for (int r = p->start_row; r < p->start_row + rows && !overlap; ++r)
+                for (int c = p->start_col; c < p->start_col + cols; ++c) {
+                    int cell_idx = r * ctx->term.cols + c;
+                    if (cell_idx >= start_idx && cell_idx < start_idx + cnt) {
+                        overlap = 1;
+                        break;
+                    }
+                }
+
+            if (overlap) {
+                if (img) img->ref_cnt--;
+                ctx->term.img_placements[i--] = ctx->term
+                                                    .img_placements[--ctx->term.img_placements_len];
+            }
+        }
+
+        // free memory for imgs with no placements
+        // only auto-free sixel images, kitty images require explicit a=d commands.
+        for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i) {
+            if (ctx->term.img_pool[i].ref_cnt || !ctx->term.img_pool[i].is_sixel) continue;
+            if (ctx->term.img_pool[i].pxs) SFTE_FREE(ctx->term.img_pool[i].pxs);
+            ctx->term.img_pool[i--] = ctx->term.img_pool[--ctx->term.img_pool_len];
+        }
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+    }
+}
+
+static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
+    int top = ctx->term.scroll_top;
+    int bot = ctx->term.scroll_bottom;
+    int height = bot - top + 1;
+    int cols = ctx->term.cols;
+
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+    for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
+        sfte_img_placement *p = &ctx->term.img_placements[i];
+        if (p->alt_screen != ctx->term.alt_active) continue;
+        // scroll the image if its in active region, or its in the scrollback buffer and we're
+        // pushing new lines into scrollback.
+        if ((p->start_row >= top && p->start_row <= bot + 1) || (top == 0 && p->start_row < 0))
+            p->start_row -= lines;
+
+        sfte_img *img = NULL;
+        for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
+            if (ctx->term.img_pool[j].id == p->img_id) {
+                img = &ctx->term.img_pool[j];
+                break;
+            }
+        // if it scrolled out of visible area, delete it
+        int rows = _sfte_grid_span(img->height, p->y_off, ctx->font.cell_height);
+        if (p->start_row + rows <= -SFTE_SCROLLBACK_CAP) {
+            img->ref_cnt--;
+            ctx->term.img_placements[i--] = ctx->term
+                                                .img_placements[--ctx->term.img_placements_len];
+        }
+    }
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+
+    if (lines > 0) {  // scroll up
+        if (lines > height) lines = height;
+
+#if SFTE_SCROLLBACK_CAP
+        if (top == 0
+#if SFTE_ALT_SCREEN
+            && !ctx->term.alt_active
+#endif  // SFTE_ALT_SCREEN
+        ) {
+            for (int i = 0; i < lines; ++i) {
+                int ring_idx = ctx->term.sb_head * cols;
+                int screen_idx = i * cols;
+                memcpy(&ctx->term.scrollback[ring_idx], &ctx->term.cells[screen_idx],
+                       cols * sizeof(sfte_cell));
+
+                ctx->term.sb_head = (ctx->term.sb_head + 1) % ctx->term.sb_cap;
+                if (ctx->term.sb_len < ctx->term.sb_cap) ctx->term.sb_len++;
+            }
+        }
+#endif  // SFTE_SCROLLBACK_CAP
+
+        int move_cnt = height - lines;
+        if (move_cnt > 0)
+            memmove(&ctx->term.cells[top * cols], &ctx->term.cells[(top + lines) * cols],
+                    move_cnt * cols * sizeof(sfte_cell));
+
+        int start_idx = (bot - lines + 1) * cols;
+        _sfte_grid_clear_cells(ctx, start_idx, lines * cols);  // clear lines at bot
+    } else if (lines < 0) {                                    // scroll down
+        lines = -lines;
+        if (lines > height) lines = height;
+
+        int move_cnt = height - lines;
+        if (move_cnt > 0)
+            memmove(&ctx->term.cells[(top + lines) * cols], &ctx->term.cells[top * cols],
+                    move_cnt * cols * sizeof(sfte_cell));
+
+        int start_idx = top * cols;
+        _sfte_grid_clear_cells(ctx, start_idx, lines * cols);
+    }
+
+    _sfte_grid_dirty_range(ctx, top * cols, height * cols);
+}
+
+static inline void _sfte_grid_check_wrap(sfte_ctx *ctx) {
+    if (ctx->term.cursor_x >= ctx->term.cols) {
+        if (ctx->term.auto_wrap) {
+#if SFTE_REFLOW
+            ctx->term.cells[_SFTE_GRID_IDX(ctx, ctx->term.cols - 1, ctx->term.cursor_y)]
+                .wrapped = 1;
+#endif  // SFTE_REFLOW
+            ctx->term.cursor_x = 0;
+            if (ctx->term.cursor_y == ctx->term.scroll_bottom) {
+                uint32_t saved_bg = ctx->term.cur_bg;
+                ctx->term.cur_bg = SFTE_BG_COLOR;
+                _sfte_grid_scroll(ctx, 1);
+                ctx->term.cur_bg = saved_bg;
+            } else if (ctx->term.cursor_y < ctx->term.rows - 1)
+                ctx->term.cursor_y++;
+        } else
+            ctx->term.cursor_x = ctx->term.cols - 1;
+    }
+}
+
+static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
+    if (new_cols < 1 || new_rows < 1) return;
+#if SFTE_ALT_SCREEN
+    sfte_cell *main_old = ctx->term.alt_active ? ctx->term.alt_cells : ctx->term.cells;
+    sfte_cell *alt_old = ctx->term.alt_active ? ctx->term.cells : NULL;
+
+    int target_cx = ctx->term.alt_active ? ctx->term.saved_x[0] : ctx->term.cursor_x;
+    int target_cy = ctx->term.alt_active ? ctx->term.saved_y[0] : ctx->term.cursor_y;
+#else
+    sfte_cell *main_old = ctx->term.cells;
+    sfte_cell *alt_old = NULL;
+
+    int target_cx = ctx->term.cursor_x;
+    int target_cy = ctx->term.cursor_y;
+#endif  // !SFTE_ALT_SCREEN
+
+    int max_temp_rows = (
+#if SFTE_SCROLLBACK_CAP
+                            ctx->term.sb_len +
+#endif  // SFTE_SCROLLBACK_CAP
+                            ctx->term.rows) *
+                        (ctx->term.cols / new_cols + 2);
+    if (max_temp_rows < new_rows) max_temp_rows = new_rows;
+    sfte_cell *temp_rows = (sfte_cell *)SFTE_CALLOC(max_temp_rows * new_cols, sizeof(sfte_cell));
+    SFTE_ASSERT(temp_rows, "failed to allocate temporary row data");
+
+    sfte_reflow_state st = {.temp_rows = temp_rows,
+                            .new_cols = new_cols,
+                            .tr = 0,
+                            .tc = 0,
+                            .new_cx = 0,
+                            .new_cy = 0,
+                            .target_old_cx = target_cx,
+                            .target_old_cy = target_cy,
+                            .is_live = 0};
+
+    _sfte_reflow_grid_into_linear(ctx, main_old, &st);
+
+    int total_lines = st.tr + (st.tc > 0 ? 1 : 0);
+
+    // map into new layout arrays
+    sfte_cell *new_main = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
+    SFTE_ASSERT(new_main, "failed to allocate resized terminal grid");
+
+    int screen_top = st.new_cy - target_cy;
+    if (screen_top < 0) screen_top = 0;
+
+    if (st.new_cy >= screen_top + new_rows) screen_top = st.new_cy - new_rows + 1;
+
+    if (screen_top + new_rows > total_lines) {
+        screen_top = total_lines - new_rows;
+        if (screen_top < 0) screen_top = 0;
+    }
+
+#if SFTE_SCROLLBACK_CAP
+    sfte_cell *new_sb = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
+    SFTE_ASSERT(new_sb, "failed to allocate resized scrollback");
+
+    int sb_lines = screen_top;
+    if (sb_lines > ctx->term.sb_cap) sb_lines = ctx->term.sb_cap;
+    int sb_start = screen_top - sb_lines;
+
+    for (int i = 0; i < sb_lines; ++i)
+        memcpy(&new_sb[i * new_cols], &temp_rows[(sb_start + i) * new_cols],
+               new_cols * sizeof(sfte_cell));
+#endif  // SFTE_SCROLLBACK_CAP
+
+    int copy_lines = total_lines - screen_top;
+    if (copy_lines > new_rows) copy_lines = new_rows;
+    for (int i = 0; i < copy_lines; ++i)
+        memcpy(&new_main[i * new_cols], &temp_rows[(screen_top + i) * new_cols],
+               new_cols * sizeof(sfte_cell));
+
+// anchor cursors
+#if SFTE_ALT_SCREEN
+    if (ctx->term.alt_active) {
+        ctx->term.saved_x[0] = st.new_cx;
+        ctx->term.saved_y[0] = _SFTE_CLAMP(st.new_cy - screen_top, 0, new_rows - 1);
+    } else {
+#endif  // SFTE_ALT_SCREEN
+        ctx->term.cursor_x = st.new_cx;
+        ctx->term.cursor_y = _SFTE_CLAMP(st.new_cy - screen_top, 0, new_rows - 1);
+#if SFTE_ALT_SCREEN
+    }
+#endif  // SFTE_ALT_SCREEN
+
+#if SFTE_ALT_SCREEN
+    // hard copy alt grid
+    // NOTE: alt grid gets no reflow, it destroys visuals of alt-screen based interfaces
+    sfte_cell *new_alt = NULL;
+    if (alt_old) {
+        new_alt = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
+        SFTE_ASSERT(new_alt, "failed to allocate resized alt grid");
+
+        int min_cols = new_cols < ctx->term.cols ? new_cols : ctx->term.cols;
+        int min_rows = new_rows < ctx->term.rows ? new_rows : ctx->term.rows;
+        for (int r = 0; r < min_rows; ++r)
+            for (int c = 0; c < min_cols; ++c)
+                new_alt[r * new_cols + c] = alt_old[r * ctx->term.cols + c];
+
+        if (ctx->term.cursor_x >= new_cols) ctx->term.cursor_x = new_cols - 1;
+        if (ctx->term.cursor_y >= new_rows) ctx->term.cursor_y = new_rows - 1;
+    }
+#endif  // SFTE_ALT_SCREEN
+
+    SFTE_FREE(ctx->term.cells);
+    SFTE_FREE(temp_rows);
+
+#if SFTE_ALT_SCREEN
+    if (ctx->term.alt_cells) SFTE_FREE(ctx->term.alt_cells);
+    ctx->term.cells = ctx->term.alt_active ? new_alt : new_main;
+    ctx->term.alt_cells = ctx->term.alt_active ? new_main : NULL;
+#else
+    ctx->term.cells = new_main;
+#endif  // !SFTE_ALT_SCREEN
+
+#if SFTE_SCROLLBACK_CAP
+    if (ctx->term.scrollback) SFTE_FREE(ctx->term.scrollback);
+    ctx->term.scrollback = new_sb;
+    ctx->term.sb_head = sb_lines % ctx->term.sb_cap;
+    ctx->term.sb_offset = 0;
+    ctx->term.sb_len = sb_lines;
+#endif  // SFTE_SCROLLBACK_CAP
+
+    int old_cols = ctx->term.cols;
+
+    ctx->term.cols = new_cols;
+    ctx->term.rows = new_rows;
+    ctx->term.scroll_top = 0;
+    ctx->term.scroll_bottom = new_rows - 1;
+
+    _sfte_grid_dirty_range(ctx, 0, new_cols * new_rows);
+
+    uint8_t *new_tabs = (uint8_t *)SFTE_MALLOC(new_cols);
+    SFTE_ASSERT(new_tabs, "failed to allocate new tab stops");
+    for (int i = 0; i < new_cols; ++i)
+        if (i < old_cols)
+            new_tabs[i] = ctx->term.tab_stops[i];
+        else
+            new_tabs[i] = (i % SFTE_TAB_WIDTH == 0);
+    SFTE_FREE(ctx->term.tab_stops);
+    ctx->term.tab_stops = new_tabs;
+
+    _SFTE_INFO(ctx, TERM_RESIZE, new_cols, new_rows);
+}
+#else  // !SFTE_REFLOW
+static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
+    sfte_cell *new_cells = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
+    SFTE_ASSERT(new_cells, "failed to allocate resized terminal grid");
+
+    sfte_cell *new_alt_cells = NULL;
+#if SFTE_ALT_SCREEN
+    if (ctx->term.alt_cells) {
+        new_alt_cells = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
+        SFTE_ASSERT(new_alt_cells, "failed to allocate resized alt grid");
+    }
+#endif  // SFTE_ALT_SCREEN
+
+#if SFTE_SCROLLBACK_CAP
+    if (ctx->term.scrollback) SFTE_FREE(ctx->term.scrollback);
+    ctx->term.scrollback = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
+    ctx->term.sb_head = 0;
+    ctx->term.sb_offset = 0;
+    ctx->term.sb_len = 0;
+#endif  // SFTE_SCROLLBACK_CAP
+
+    uint8_t *new_tabs = (uint8_t *)SFTE_MALLOC(new_cols);
+    SFTE_ASSERT(new_tabs, "failed to allocate new tab stops");
+    for (int i = 0; i < new_cols; ++i)
+        if (i < ctx->term.cols)
+            new_tabs[i] = ctx->term.tab_stops[i];
+        else
+            new_tabs[i] = (i % SFTE_TAB_WIDTH == 0);
+    SFTE_FREE(ctx->term.tab_stops);
+    ctx->term.tab_stops = new_tabs;
+
+    int min_cols = new_cols < ctx->term.cols ? new_cols : ctx->term.cols;
+    int min_rows = new_rows < ctx->term.rows ? new_rows : ctx->term.rows;
+
+    for (int r = 0; r < min_rows; ++r) {
+        for (int c = 0; c < min_cols; ++c) {
+            new_cells[r * new_cols + c] = ctx->term.cells[r * ctx->term.cols + c];
+#if SFTE_ALT_SCREEN
+            if (new_alt_cells)
+                new_alt_cells[r * new_cols + c] = ctx->term.alt_cells[r * ctx->term.cols + c];
+#endif  // SFTE_ALT_SCREEN
+        }
+    }
+
+    SFTE_FREE(ctx->term.cells);
+    ctx->term.cells = new_cells;
+#if SFTE_ALT_SCREEN
+    if (ctx->term.alt_cells) {
+        SFTE_FREE(ctx->term.alt_cells);
+        ctx->term.alt_cells = new_alt_cells;
+    }
+#endif  // SFTE_ALT_SCREEN
+
+    ctx->term.cols = new_cols;
+    ctx->term.rows = new_rows;
+
+    ctx->term.scroll_top = 0;
+    ctx->term.scroll_bottom = new_rows - 1;
+
+    if (ctx->term.cursor_x >= new_cols) ctx->term.cursor_x = new_cols - 1;
+    if (ctx->term.cursor_y >= new_rows) ctx->term.cursor_y = new_rows - 1;
+
+    _sfte_grid_dirty_range(ctx, 0, new_cols * new_rows);
+
+    _SFTE_INFO(ctx, TERM_RESIZE, new_cols, new_rows);
+}
+#endif  // !SFTE_REFLOW
+// =================================================================================================
 // >>img
 // =================================================================================================
 #if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 // returns a pointer to a new image, or NULL if pool is at max cap
 static inline sfte_img *_sfte_img_pool_insert(sfte_ctx *ctx, sfte_img img) {
     uint8_t oom = 0;
-    SFTE_ENSURE_CAP(sfte_img, ctx->term.img_pool, ctx->term.img_pool_len, ctx->term.img_pool_cap, 1,
-                    SFTE_IMG_POOL_INIT_CAP, SFTE_IMG_POOL_MAX_CAP, oom);
+    _SFTE_MEM_ENSURE_CAP(sfte_img, ctx->term.img_pool, ctx->term.img_pool_len,
+                         ctx->term.img_pool_cap, 1, SFTE_IMG_POOL_INIT_CAP, SFTE_IMG_POOL_MAX_CAP,
+                         oom);
     if (oom) {
         if (img.pxs) SFTE_FREE(img.pxs);
         return NULL;
@@ -1362,15 +1898,265 @@ static inline sfte_img *_sfte_img_pool_insert(sfte_ctx *ctx, sfte_img img) {
 // returns a pointer to a new placement, or NULL if placements are at max cap
 static inline sfte_img_placement *_sfte_img_placement_insert(sfte_ctx *ctx, sfte_img_placement p) {
     uint8_t oom = 0;
-    SFTE_ENSURE_CAP(sfte_img_placement, ctx->term.img_placements, ctx->term.img_placements_len,
-                    ctx->term.img_placements_cap, 1, SFTE_IMG_PLACEMENT_INIT_CAP,
-                    SFTE_IMG_PLACEMENT_MAX_CAP, oom);
+    _SFTE_MEM_ENSURE_CAP(sfte_img_placement, ctx->term.img_placements, ctx->term.img_placements_len,
+                         ctx->term.img_placements_cap, 1, SFTE_IMG_PLACEMENT_INIT_CAP,
+                         SFTE_IMG_PLACEMENT_MAX_CAP, oom);
     if (oom) return NULL;
 
     ctx->term.img_placements[ctx->term.img_placements_len] = p;
     return &ctx->term.img_placements[ctx->term.img_placements_len++];
 }
 #endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+// =================================================================================================
+// >>state
+// =================================================================================================
+#if SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL
+static inline uint64_t _sfte_time_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+#endif  // SFTE_CURSOR_BLINK
+
+static inline sfte_cell *_sfte_get_view_cell(sfte_ctx *ctx, int c, int r) {
+#if SFTE_SCROLLBACK_CAP
+    int logical_r = r - ctx->term.sb_offset;
+    if (logical_r >= 0)
+        return &ctx->term.cells[_SFTE_GRID_IDX(ctx, c, logical_r)];
+    else {
+        int hist_idx = -logical_r;
+        int ring_r = (ctx->term.sb_head - hist_idx + (100 * ctx->term.sb_cap)) % ctx->term.sb_cap;
+        return &ctx->term.scrollback[ring_r * ctx->term.cols + c];
+    }
+#else
+    return &ctx->term.cells[_SFTE_GRID_IDX(ctx, c, r)];
+#endif  // !SFTE_SCROLLBACK_CAP
+}
+
+#if SFTE_SELECTION
+static void _sfte_dirty_selection_rows(sfte_ctx *ctx, int y1, int y2) {
+    int min_y = y1 < y2 ? y1 : y2;
+    int max_y = y1 > y2 ? y1 : y2;
+
+#if SFTE_SCROLLBACK_CAP
+    min_y += ctx->term.sb_offset;
+    max_y += ctx->term.sb_offset;
+#endif  // SFTE_SCROLLBACK_CAP
+
+    if (min_y < 0) min_y = 0;
+    if (max_y >= ctx->term.rows) max_y = ctx->term.rows - 1;
+
+    if (min_y <= max_y) {
+        _sfte_grid_dirty_range(ctx, min_y * ctx->term.cols, (max_y - min_y + 1) * ctx->term.cols);
+    }
+}
+
+static inline int _sfte_is_selected(sfte_ctx *ctx, int c, int logical_r) {
+    if (!ctx->term.mouse_sel_active) return 0;
+
+    int sx = ctx->term.mouse_sel_start_x;
+    int sy = ctx->term.mouse_sel_start_y;
+    int ex = ctx->term.mouse_sel_end_x;
+    int ey = ctx->term.mouse_sel_end_y;
+
+    // if dragging backwards, flip start/end pnts
+    if (sy > ey || (sy == ey && sx > ex)) {
+        int tmp = sy;
+        sy = ey;
+        ey = tmp;
+        tmp = sx;
+        sx = ex;
+        ex = tmp;
+    }
+
+    if (logical_r < sy || logical_r > ey) return 0;
+    if (sy == ey) return (c >= sx && c <= ex);  // same line
+    if (logical_r == sy) return c >= sx;        // first line
+    if (logical_r == ey) return c <= ex;        // last line
+    return 1;                                   // middle lines
+}
+#endif  // SFTE_SELECTION
+
+#if SFTE_MOUSE
+static void _sfte_mouse_send_event(sfte_ctx *ctx, int btn, int is_release, int c, int r,
+                                   int is_motion) {
+    if (!ctx->term.mouse_mode) return;
+
+    // 0=LMB, 1=MMB, 2=RMB, 3=release, 64/65=scroll
+    int encoded_btn = btn;
+
+    if (is_release && ctx->term.mouse_ext != 1006) {
+        encoded_btn = 3;  // in x10 mode we don't know which button is released
+    }
+
+    if (is_motion) {
+        if (ctx->term.mouse_mode == 1002 && ctx->term.mouse_btn_state != 3)
+            encoded_btn = ctx->term.mouse_btn_state + 32;  // dragging
+        else if (ctx->term.mouse_mode == 1003)
+            encoded_btn = ctx->term.mouse_btn_state + 32;  // hover/dragging
+        else
+            return;  // 1000 ignores motion
+    }
+
+    char buf[32];
+    int len = 0;
+
+    int tc = c + 1;
+    int tr = r + 1;
+
+    if (ctx->term.mouse_ext == 1006) {
+        // SGR: ESC [ < btn ; x ; y M/m
+        char end_char = is_release ? 'm' : 'M';
+        len = snprintf(buf, sizeof(buf), "\033[<%d;%d;%d%c", encoded_btn, tc, tr, end_char);
+    } else {
+        // X10: ESC [ <btn+32> <x+32> <y+32>
+        // caps out at coord 223
+        if (tc > 223 || tr > 223) return;
+        len = snprintf(buf, sizeof(buf), "\033[M%c%c%c", encoded_btn + 32, tc + 32, tr + 32);
+    }
+
+    ctx->write_cb(ctx->user_data, buf, len);
+}
+#endif  // SFTE_MOUSE
+
+// convert raw pxs to grid coordinates
+static void _sfte_px_to_grid(sfte_ctx *ctx, int px_x, int px_y, int *out_c, int *out_r) {
+    int c = (px_x - SFTE_PAD_X) / ctx->font.cell_width;
+    int r = (px_y - SFTE_PAD_Y) / ctx->font.cell_height;
+
+    c = _SFTE_CLAMP(c, 0, ctx->term.cols - 1);
+    r = _SFTE_CLAMP(r, 0, ctx->term.rows - 1);
+
+#if SFTE_SCROLLBACK_CAP
+    r -= ctx->term.sb_offset;
+#endif  // SFTE_SCROLLBACK_CAP
+
+    if (out_c) *out_c = c;
+    if (out_r) *out_r = r;
+}
+
+static void _sfte_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf) {
+    int w = ctx->width;
+    int h = ctx->height;
+
+    int grid_w = ctx->term.cols * ctx->font.cell_width;
+    int grid_h = ctx->term.rows * ctx->font.cell_height;
+
+    uint32_t bg = (SFTE_BG_OPACITY << 24) | SFTE_BG_COLOR;
+
+#if SFTE_PAD_Y
+    for (int y = 0; y < SFTE_PAD_Y && y < h; ++y)
+        for (int x = 0; x < w; ++x) px_buf[y * w + x] = bg;
+
+    for (int y = SFTE_PAD_Y + grid_h; y < h; ++y)
+        for (int x = 0; x < w; ++x) px_buf[y * w + x] = bg;
+#endif  // SFTE_PAD_Y
+
+#if SFTE_PAD_X
+    for (int y = SFTE_PAD_Y; y < SFTE_PAD_Y + grid_h && y < h; ++y)
+        for (int x = 0; x < SFTE_PAD_X && x < w; ++x) px_buf[y * w + x] = bg;
+
+    for (int y = SFTE_PAD_Y; y < SFTE_PAD_Y + grid_h && y < h; ++y)
+        for (int x = SFTE_PAD_X + grid_w; x < w; ++x) px_buf[y * w + x] = bg;
+#endif  // SFTE_PAD_X
+}
+// =================================================================================================
+// >>reflow
+// =================================================================================================
+#if SFTE_REFLOW
+static void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell c, int is_cursor) {
+#if SFTE_WIDE_CHARS
+    // if we're pushing a wide char and we're at last column, wrap early
+    if ((c.attr & ATTR_WIDE) && st->tc == st->new_cols - 1) {
+        sfte_cell space = c;
+        space.rune = ' ';
+        space.fg = 0xFFFFFF;
+        space.bg = SFTE_BG_COLOR;
+        space.attr = 0;
+        space.wrapped = 1;
+        st->temp_rows[st->tr * st->new_cols + st->tc] = space;
+        st->tc = 0;
+        st->tr++;
+    }
+#endif  // SFTE_WIDE_CHARS
+
+    if (st->tc == st->new_cols) {
+        st->temp_rows[st->tr * st->new_cols + st->new_cols - 1].wrapped = 1;
+        st->tc = 0;
+        st->tr++;
+    }
+
+    if (is_cursor) {
+        st->new_cx = st->tc;
+        st->new_cy = st->tr;
+    }
+
+    c.wrapped = 0;
+    st->temp_rows[st->tr * st->new_cols + st->tc] = c;
+    st->tc++;
+}
+
+static void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old,
+                                          sfte_reflow_state *st) {
+#if SFTE_SCROLLBACK_CAP
+    for (int i = 0; i < ctx->term.sb_len; ++i) {
+        int ring_idx = (ctx->term.sb_head - ctx->term.sb_len + i + ctx->term.sb_cap) %
+                       ctx->term.sb_cap;
+        sfte_cell *row = &ctx->term.scrollback[ring_idx * ctx->term.cols];
+        int is_wrapped = row[ctx->term.cols - 1].wrapped;
+
+        int len = ctx->term.cols;
+        if (!is_wrapped)
+            while (len > 0 && (row[len - 1].rune == ' ' || row[len - 1].rune == 0) &&
+                   row[len - 1].bg == SFTE_BG_COLOR)
+                len--;
+
+        for (int c = 0; c < len; ++c) _sfte_reflow_push(st, row[c], 0);
+        if (!is_wrapped) {
+            st->tc = 0;
+            st->tr++;
+        }
+    }
+#endif  // SFTE_SCROLLBACK_CAP
+
+    // reflow live grid
+    st->is_live = 1;
+    for (int r = 0; r < ctx->term.rows; ++r) {
+        sfte_cell *row = &main_old[r * ctx->term.cols];
+        int is_wrapped = row[ctx->term.cols - 1].wrapped;
+
+        int len = ctx->term.cols;
+        if (!is_wrapped) {
+            while (len > 0 && (row[len - 1].rune == ' ' || row[len - 1].rune == 0) &&
+                   row[len - 1].bg == SFTE_BG_COLOR) {
+                if (r == st->target_old_cy && len - 1 == st->target_old_cx) break;
+                len--;
+            }
+            if (r == st->target_old_cy && len <= st->target_old_cx) len = st->target_old_cx + 1;
+        }
+
+        for (int c = 0; c < len; ++c) {
+            int is_cursor = (r == st->target_old_cy && c == st->target_old_cx);
+            _sfte_reflow_push(st, row[c], is_cursor);
+        }
+
+        if (r == st->target_old_cy && st->target_old_cx >= len) {
+            if (st->tc == st->new_cols) {
+                st->temp_rows[st->tr * st->new_cols + st->new_cols - 1].wrapped = 1;
+                st->tc = 0;
+                st->tr++;
+            }
+            st->new_cx = st->tc;
+            st->new_cy = st->tr;
+        }
+
+        if (!is_wrapped) {
+            st->tc = 0;
+            st->tr++;
+        }
+    }
+}
+
 // =================================================================================================
 // >>sixel
 // =================================================================================================
@@ -1703,7 +2489,7 @@ static const char *_sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img) {
     img->ref_cnt++;
     int cols = _sfte_grid_span(img->width, ctx->kitty.x_off, ctx->font.cell_width);
     int rows = _sfte_grid_span(img->height, ctx->kitty.y_off, ctx->font.cell_height);
-    _sfte_dirty_rect(ctx, ctx->term.cursor_x, ctx->term.cursor_y, cols, rows);
+    _sfte_grid_dirty_rect(ctx, ctx->term.cursor_x, ctx->term.cursor_y, cols, rows);
     return NULL;
 }
 
@@ -1732,7 +2518,7 @@ static const char *_sfte_kitty_exec_delete(sfte_ctx *ctx) {
                 img->ref_cnt--;
                 int cols = _sfte_grid_span(img->width, p->x_off, ctx->font.cell_width);
                 int rows = _sfte_grid_span(img->height, p->y_off, ctx->font.cell_height);
-                _sfte_dirty_rect(ctx, p->start_col, p->start_row, cols, rows);
+                _sfte_grid_dirty_rect(ctx, p->start_col, p->start_row, cols, rows);
             }
             ctx->term.img_placements[i--] = ctx->term
                                                 .img_placements[--ctx->term.img_placements_len];
@@ -1880,8 +2666,8 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         size_t b64_len = strlen(b64_start);
 
         uint8_t oom = 0;
-        SFTE_ENSURE_CAP(char, ctx->kitty.b64_buf, ctx->kitty.b64_len, ctx->kitty.b64_cap,
-                        b64_len + 1, SFTE_KITTY_B64_INIT_CAP, SFTE_KITTY_B64_MAX_CAP, oom);
+        _SFTE_MEM_ENSURE_CAP(char, ctx->kitty.b64_buf, ctx->kitty.b64_len, ctx->kitty.b64_cap,
+                             b64_len + 1, SFTE_KITTY_B64_INIT_CAP, SFTE_KITTY_B64_MAX_CAP, oom);
 
         if (oom) return;
 
@@ -1932,1972 +2718,6 @@ static void _sfte_kitty_deinit(sfte_ctx *ctx) {
 }
 #endif  // SFTE_KITTY_GRAPHICS
 // =================================================================================================
-// >>font
-// =================================================================================================
-#ifndef SFTE_CUSTOM_FONT_BACKEND
-static inline void _sfte_stb_init(sfte_font_backend_info *info, const uint8_t *data) {
-    stbtt_InitFont(info, data, 0);
-}
-
-static inline float _sfte_stb_get_scale(sfte_font_backend_info *info, float px_hei) {
-    return stbtt_ScaleForPixelHeight(info, px_hei);
-}
-
-static inline void _sfte_stb_vmetrics(sfte_font_backend_info *info, int *ascent, int *descent,
-                                      int *linegap) {
-    stbtt_GetFontVMetrics(info, ascent, descent, linegap);
-}
-
-static inline int _sfte_stb_bounds(sfte_font_backend_info *info, uint32_t rune, float scale,
-                                   int *adv, int *x0, int *y0, int *x1, int *y1) {
-    int glyph_idx = stbtt_FindGlyphIndex(info, rune);
-    if (glyph_idx == 0) return 0;
-
-    int lsb;
-    stbtt_GetGlyphHMetrics(info, glyph_idx, adv, &lsb);
-    stbtt_GetGlyphBitmapBox(info, glyph_idx, scale, scale, x0, y0, x1, y1);
-
-    return glyph_idx;
-}
-
-static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, float scale,
-                                  uint8_t *atlas_ptr, int gw, int gh, int atlas_stride) {
-    stbtt_MakeGlyphBitmap(info, atlas_ptr, gw, gh, atlas_stride, scale, scale, glyph_idx);
-}
-#endif  // !SFTE_CUSTOM_FONT_BACKEND
-
-static sfte_font_cache *_sfte_font_get_cache(sfte_ctx *ctx, int style) {
-    if (style == SFTE_FONT_STYLE_REGULAR) return &ctx->font.regular;
-#ifdef SFTE_FONT_BOLD
-    if (style == SFTE_FONT_STYLE_BOLD) return &ctx->font.bold;
-#endif  // SFTE_FONT_BOLD
-#ifdef SFTE_FONT_ITALIC
-    if (style == SFTE_FONT_STYLE_ITALIC) return &ctx->font.italic;
-#endif  // SFTE_FONT_ITALIC
-#ifdef SFTE_FONT_BOLD_ITALIC
-    if (style == SFTE_FONT_STYLE_BOLD_ITALIC) return &ctx->font.bold_italic;
-#endif  // SFTE_FONT_BOLD_ITALIC
-    return NULL;
-}
-
-static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_ptr, uint32_t rune) {
-    sfte_font_cache *cache = *cache_ptr;
-
-    if (rune == 0) rune = ' ';
-
-    uint32_t h = rune;
-    h %= SFTE_FONT_GLYPH_CAP;
-
-    // hash map logic
-    for (int i = 0; i < SFTE_FONT_GLYPH_CAP; ++i) {
-        int idx = (h + i) % SFTE_FONT_GLYPH_CAP;
-
-        if (cache->glyphs[idx].rune == rune) return &cache->glyphs[idx];
-
-        if (cache->glyphs[idx].rune != 0) continue;  // cache miss, taken, continue
-
-        // fallback check
-        int font_idx = 0;
-        int glyph_idx = 0;
-
-        int advance_width = 0, x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-
-        // start in primary font [0]
-        // then, look through fallback fonts [1-SFTE_FONTS_MAX_COUNT]
-        for (int i = 0; i < cache->num_fonts; ++i) {
-            glyph_idx = SFTE_FONT_BOUNDS(&cache->info[i], rune, cache->scales[i], &advance_width,
-                                         &x0, &y0, &x1, &y1);
-            if (glyph_idx != 0) {
-                font_idx = i;
-                break;
-            }
-        }
-
-        // if glyph was not found and cache isn't regular, look in regular
-        // this is useful e.g. when a certain app tries to draw nerd symbols
-        // in bold/italic/bold italic instead of regular.
-        if (glyph_idx == 0 && cache != &ctx->font.regular) {
-            *cache_ptr = &ctx->font.regular;
-            return _sfte_font_get_glyph(ctx, cache_ptr, rune);
-        }
-
-        sfte_font_backend_info *info = &cache->info[font_idx];
-        float font_scale = cache->scales[font_idx];
-
-        // cache miss, free, take space
-        sfte_glyph *g = &cache->glyphs[idx];
-        g->rune = rune;
-        g->xadvance = (int)(advance_width * font_scale + 0.5f);
-
-        int glyph_width = x1 - x0;
-        int glyph_height = y1 - y0;
-
-        // wrap to next row if out of horizontal space
-        if (cache->atlas_x + glyph_width >= SFTE_FONT_ATLAS_SIZE) {
-            cache->atlas_x = 0;
-            cache->atlas_y += cache->atlas_row_h + 1;
-            cache->atlas_row_h = 0;
-        }
-
-        SFTE_ASSERT(cache->atlas_y + glyph_height < SFTE_FONT_ATLAS_SIZE, "glyph atlas full");
-
-        if (glyph_height > cache->atlas_row_h) cache->atlas_row_h = glyph_height;
-
-        g->x0 = cache->atlas_x;
-        g->y0 = cache->atlas_y;
-        g->x1 = g->x0 + glyph_width;
-        g->y1 = g->y0 + glyph_height;
-        g->xoff = x0;
-        g->yoff = y0;
-
-        if (glyph_width > 0 && glyph_height > 0) {
-            int byte_off = g->y0 * SFTE_FONT_ATLAS_SIZE + g->x0;
-            SFTE_FONT_BAKE(info, glyph_idx, font_scale, &cache->atlas_pxs[byte_off], glyph_width,
-                           glyph_height, SFTE_FONT_ATLAS_SIZE);
-        }
-
-        cache->atlas_x += glyph_width + 1;  // padding to prevent bleeding
-
-        return g;
-    }
-
-    return NULL;  // out of space
-}
-
-static void _sfte_font_reset_cache(sfte_ctx *ctx) {
-#define CLEAR_CACHE(type)                                                                          \
-    do {                                                                                           \
-        if (type.atlas_pxs)                                                                        \
-            memset(type.atlas_pxs, 0, SFTE_FONT_ATLAS_SIZE * SFTE_FONT_ATLAS_SIZE);                \
-        if (type.glyphs) memset(type.glyphs, 0, SFTE_FONT_GLYPH_CAP * sizeof(sfte_glyph));         \
-        type.atlas_x = 0;                                                                          \
-        type.atlas_y = 0;                                                                          \
-        type.atlas_row_h = 0;                                                                      \
-    } while (0)
-
-    CLEAR_CACHE(ctx->font.regular);
-#ifdef SFTE_FONT_BOLD
-    CLEAR_CACHE(ctx->font.bold);
-#endif  // SFTE_FONT_BOLD
-#ifdef SFTE_FONT_ITALIC
-    CLEAR_CACHE(ctx->font.italic);
-#endif  // SFTE_FONT_ITALIC
-#ifdef SFTE_FONT_BOLD_ITALIC
-    CLEAR_CACHE(ctx->font.bold_italic);
-#endif  // SFTE_FONT_BOLD_ITALIC
-
-#undef CLEAR_CACHE
-
-#define SET_SCALES(type)                                                                           \
-    for (int i = 0; i < type.num_fonts; ++i) {                                                     \
-        float tweak = _sfte_font_scales[i];                                                        \
-        if (tweak <= 0.0f) tweak = 1.0f;                                                           \
-        type.scales[i] = SFTE_FONT_GET_SCALE(&type.info[i], ctx->font.cur_size * tweak);           \
-    }
-
-    SET_SCALES(ctx->font.regular);
-#ifdef SFTE_FONT_BOLD
-    SET_SCALES(ctx->font.bold);
-#endif  // SFTE_FONT_BOLD
-#ifdef SFTE_FONT_ITALIC
-    SET_SCALES(ctx->font.italic);
-#endif  // SFTE_FONT_ITALIC
-#ifdef SFTE_FONT_BOLD_ITALIC
-    SET_SCALES(ctx->font.bold_italic);
-#endif  // SFTE_FONT_BOLD_ITALIC
-
-#undef SET_SCALES
-
-    int unscaled_ascent, unscaled_descent, unscaled_line_gap;
-    SFTE_FONT_VMETRICS(&ctx->font.regular.info[0], &unscaled_ascent, &unscaled_descent,
-                       &unscaled_line_gap);
-
-    float primary_scale = ctx->font.regular.scales[0];
-    ctx->font.ascent = (int)(unscaled_ascent * primary_scale + 0.5f);
-    ctx->font.descent = (int)(unscaled_descent * primary_scale -
-                              0.5f);  // descent is usually negative
-    ctx->font.line_gap = (int)(unscaled_line_gap * primary_scale + 0.5f);
-
-    ctx->font.cell_height = ctx->font.ascent - ctx->font.descent + ctx->font.line_gap;
-
-    // monospace grid using standard 'M' glyph
-    sfte_font_cache *dummy = &ctx->font.regular;
-    sfte_glyph *m = _sfte_font_get_glyph(ctx, &dummy, 'M');
-    ctx->font.cell_width = m->xadvance;
-}
-
-// =================================================================================================
-// >>render
-// =================================================================================================
-#if SFTE_CURSOR_DYNAMIC
-#define _SFTE_CUR_STYLE(ctx) (ctx->term.cursor_style)
-#else
-#define _SFTE_CUR_STYLE(ctx) (SFTE_CURSOR_STYLE)
-#endif  // !SFTE_CURSOR_DYNAMIC
-
-static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, uint8_t src_a) {
-    if (src_a == 0) return dst;                                    // no trail
-    if (src_a == 255) return (0xFF << 24) | (src_col & 0xFFFFFF);  // solid trail
-
-    // unpack dest
-    uint8_t da = (dst >> 24) & 0xFF;
-    uint8_t dr = (dst >> 16) & 0xFF;
-    uint8_t dg = (dst >> 8) & 0xFF;
-    uint8_t db = dst & 0xFF;
-
-    // unpack src
-    uint8_t sr = (src_col >> 16) & 0xFF;
-    uint8_t sg = (src_col >> 8) & 0xFF;
-    uint8_t sb = src_col & 0xFF;
-
-    uint8_t out_r = (sr * src_a + dr * (255 - src_a)) >> 8;
-    uint8_t out_g = (sg * src_a + dg * (255 - src_a)) >> 8;
-    uint8_t out_b = (sb * src_a + db * (255 - src_a)) >> 8;
-    uint8_t out_a = da + ((src_a * (255 - da)) >> 8);
-
-    return (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
-}
-
-static void _sfte_render_bg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, uint32_t bg) {
-    int cx = col * ctx->font.cell_width + SFTE_PAD_X;
-    int cy = row * ctx->font.cell_height + SFTE_PAD_Y;
-    uint32_t final_bg = (bg & 0x00FFFFFF) | (SFTE_BG_OPACITY << 24);
-
-    for (int y = 0; y < ctx->font.cell_height; ++y) {
-        for (int x = 0; x < ctx->font.cell_width; ++x) {
-            int px_idx = (cy + y) * ctx->width + (cx + x);
-            if (px_idx < ctx->width * ctx->height) px_buf[px_idx] = final_bg;
-        }
-    }
-}
-
-static void _sfte_render_fg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, uint32_t rune,
-                            uint32_t fg, sfte_font_cache *target_cache) {
-    if (rune == ' ') return;
-
-    sfte_font_cache *actual_cache = target_cache;
-    sfte_glyph *g = _sfte_font_get_glyph(ctx, &actual_cache, rune);
-    if (!g) return;
-
-    int cx = col * ctx->font.cell_width + SFTE_PAD_X;
-    int cy = row * ctx->font.cell_height + SFTE_PAD_Y;
-
-    int glyph_width = g->x1 - g->x0;
-    int glyph_height = g->y1 - g->y0;
-
-    int baseline = ctx->font.ascent;
-    int draw_x = cx + (int)g->xoff;
-    int draw_y = cy + baseline + (int)g->yoff;
-
-    uint8_t fg_r = (fg >> 16) & 0xFF, fg_g = (fg >> 8) & 0xFF, fg_b = fg & 0xFF;
-
-    for (int y = 0; y < glyph_height; ++y) {
-        for (int x = 0; x < glyph_width; ++x) {
-            int screen_x = draw_x + x;
-            int screen_y = draw_y + y;
-            if (screen_x < 0 || screen_x >= ctx->width || screen_y < 0 || screen_y >= ctx->height)
-                continue;
-
-            uint8_t alpha = actual_cache
-                                ->atlas_pxs[(g->y0 + y) * SFTE_FONT_ATLAS_SIZE + (g->x0 + x)];
-            if (alpha == 0) continue;
-
-            int px_idx = screen_y * ctx->width + screen_x;
-
-            if (alpha == 255)
-                px_buf[px_idx] = (0xFF << 24) | (fg & 0x00FFFFFF);
-            else {
-                uint32_t dst = px_buf[px_idx];
-                uint8_t bg_r = (dst >> 16) & 0xFF;
-                uint8_t bg_g = (dst >> 8) & 0xFF;
-                uint8_t bg_b = dst & 0xFF;
-
-                uint8_t col_r = (fg_r * alpha + bg_r * (255 - alpha)) >> 8;
-                uint8_t col_g = (fg_g * alpha + bg_g * (255 - alpha)) >> 8;
-                uint8_t col_b = (fg_b * alpha + bg_b * (255 - alpha)) >> 8;
-
-                px_buf[px_idx] = (SFTE_BG_OPACITY << 24) | (col_r << 16) | (col_g << 8) | col_b;
-            }
-        }
-    }
-}
-
-static void _sfte_render_decorations(sfte_ctx *ctx, uint32_t *px_buf, int c, int r,
-                                     sfte_cell *vcell, int is_cursor, int w, int h) {
-    uint16_t attr = vcell->attr;
-    uint32_t text_fg = vcell->fg;
-
-    int cx = c * ctx->font.cell_width + SFTE_PAD_X;
-    int cy = r * ctx->font.cell_height + SFTE_PAD_Y;
-
-    int render_w = ctx->font.cell_width;
-#if SFTE_WIDE_CHARS
-    render_w *= (attr & ATTR_WIDE) ? 2 : 1;
-#endif  // SFTE_WIDE_CHARS
-
-    if (attr & ATTR_UNDERLINE) {
-        uint32_t base_ul_col = text_fg;
-#if SFTE_COLOR_UNDERLINE
-        if (vcell->ul_color != 0xFFFFFFFF) base_ul_col = vcell->ul_color;
-#endif
-        uint32_t underline_col = (base_ul_col & 0x00FFFFFF) | (0xFF << 24);
-
-        int thickness = (int)(ctx->font.cell_height * SFTE_UNDERLINE_THICK_RATIO);
-        if (thickness < 1) thickness = 1;
-
-        int style = 1;  // default straight line
-#if SFTE_EXT_UNDERLINES
-        style = vcell->ul_style;
-        style = _SFTE_CLAMP(style, 1, 5);
-#endif
-
-        int base_y = cy + ctx->font.ascent + 2;
-        if (base_y + thickness > cy + ctx->font.cell_height)
-            base_y = cy + ctx->font.cell_height - thickness;
-
-        for (int x = cx; x < cx + render_w; ++x) {
-            if (x >= w) break;
-
-            int grid_x = x - SFTE_PAD_X;
-            int local_x = grid_x % ctx->font.cell_width;
-
-            if (style == 4 && ((grid_x / thickness) % 2) != 0) continue;  // dotted
-
-            if (style == 5 && ((grid_x / thickness) % 5) >= 3) continue;  // dashed
-
-            if (style == 3) {  // undercurl
-                int half_w = ctx->font.cell_width / 2;
-                if (half_w == 0) half_w = 1;
-
-                int amp = thickness + 1;
-                int dist = local_x > half_w ? local_x - half_w : half_w - local_x;
-                int y_off = (dist * amp) / half_w - (amp / 2);
-
-                for (int dy = 0; dy < thickness; ++dy) {
-                    int py = base_y + y_off + dy;
-                    if (py >= 0 && py < h) px_buf[py * w + x] = underline_col;
-                }
-            } else if (style == 2) {  // double underline
-                int thin = thickness / 2;
-                if (thin < 1) thin = 1;
-                for (int dy = 0; dy < thin; ++dy) {
-                    int py1 = base_y - thin + dy;
-                    int py2 = base_y + thin + dy + 1;
-                    if (py1 >= 0 && py1 < h) px_buf[py1 * w + x] = underline_col;
-                    if (py2 >= 0 && py2 < h) px_buf[py2 * w + x] = underline_col;
-                }
-            } else {  // straight underline
-                for (int dy = 0; dy < thickness; ++dy) {
-                    int py = base_y + dy;
-                    if (py >= 0 && py < h) px_buf[py * w + x] = underline_col;
-                }
-            }
-        }
-    }
-
-    if (is_cursor && _SFTE_CUR_STYLE(ctx) != SFTE_CURSOR_BLOCK) {
-        uint32_t cur_col = (SFTE_CURSOR_COLOR & 0x00FFFFFF) | (0xFF << 24);
-
-        if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_UNDERLINE) {
-            int thickness = (int)(ctx->font.cell_height * SFTE_CURSOR_THICK_RATIO);
-            if (thickness < 1) thickness = 1;
-
-            for (int y = cy + ctx->font.cell_height - thickness; y < cy + ctx->font.cell_height;
-                 ++y)
-                for (int x = cx; x < cx + render_w; ++x)
-                    if (x < w && y < h) px_buf[y * w + x] = cur_col;
-        } else if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_BAR) {
-            int thickness = (int)(ctx->font.cell_width * SFTE_CURSOR_THICK_RATIO);
-            if (thickness < 1) thickness = 1;
-
-            for (int y = cy; y < cy + ctx->font.cell_height; ++y)
-                for (int x = cx; x < cx + thickness; ++x)
-                    if (x < w && y < h) px_buf[y * w + x] = cur_col;
-        }
-    }
-}
-
-// =================================================================================================
-// >>state
-// =================================================================================================
-#if SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL
-static inline uint64_t _sfte_time_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
-#endif  // SFTE_CURSOR_BLINK
-
-static inline sfte_cell *_sfte_get_view_cell(sfte_ctx *ctx, int c, int r) {
-#if SFTE_SCROLLBACK_CAP
-    int logical_r = r - ctx->term.sb_offset;
-    if (logical_r >= 0)
-        return &ctx->term.cells[_SFTE_IDX(ctx, c, logical_r)];
-    else {
-        int hist_idx = -logical_r;
-        int ring_r = (ctx->term.sb_head - hist_idx + (100 * ctx->term.sb_cap)) % ctx->term.sb_cap;
-        return &ctx->term.scrollback[ring_r * ctx->term.cols + c];
-    }
-#else
-    return &ctx->term.cells[_SFTE_IDX(ctx, c, r)];
-#endif  // !SFTE_SCROLLBACK_CAP
-}
-
-#if SFTE_SELECTION
-static void _sfte_dirty_selection_rows(sfte_ctx *ctx, int y1, int y2) {
-    int min_y = y1 < y2 ? y1 : y2;
-    int max_y = y1 > y2 ? y1 : y2;
-
-#if SFTE_SCROLLBACK_CAP
-    min_y += ctx->term.sb_offset;
-    max_y += ctx->term.sb_offset;
-#endif  // SFTE_SCROLLBACK_CAP
-
-    if (min_y < 0) min_y = 0;
-    if (max_y >= ctx->term.rows) max_y = ctx->term.rows - 1;
-
-    if (min_y <= max_y) {
-        _sfte_dirty_range(ctx, min_y * ctx->term.cols, (max_y - min_y + 1) * ctx->term.cols);
-    }
-}
-
-static inline int _sfte_is_selected(sfte_ctx *ctx, int c, int logical_r) {
-    if (!ctx->term.mouse_sel_active) return 0;
-
-    int sx = ctx->term.mouse_sel_start_x;
-    int sy = ctx->term.mouse_sel_start_y;
-    int ex = ctx->term.mouse_sel_end_x;
-    int ey = ctx->term.mouse_sel_end_y;
-
-    // if dragging backwards, flip start/end pnts
-    if (sy > ey || (sy == ey && sx > ex)) {
-        int tmp = sy;
-        sy = ey;
-        ey = tmp;
-        tmp = sx;
-        sx = ex;
-        ex = tmp;
-    }
-
-    if (logical_r < sy || logical_r > ey) return 0;
-    if (sy == ey) return (c >= sx && c <= ex);  // same line
-    if (logical_r == sy) return c >= sx;        // first line
-    if (logical_r == ey) return c <= ex;        // last line
-    return 1;                                   // middle lines
-}
-#endif  // SFTE_SELECTION
-
-#if SFTE_MOUSE
-static void _sfte_mouse_send_event(sfte_ctx *ctx, int btn, int is_release, int c, int r,
-                                   int is_motion) {
-    if (!ctx->term.mouse_mode) return;
-
-    // 0=LMB, 1=MMB, 2=RMB, 3=release, 64/65=scroll
-    int encoded_btn = btn;
-
-    if (is_release && ctx->term.mouse_ext != 1006) {
-        encoded_btn = 3;  // in x10 mode we don't know which button is released
-    }
-
-    if (is_motion) {
-        if (ctx->term.mouse_mode == 1002 && ctx->term.mouse_btn_state != 3)
-            encoded_btn = ctx->term.mouse_btn_state + 32;  // dragging
-        else if (ctx->term.mouse_mode == 1003)
-            encoded_btn = ctx->term.mouse_btn_state + 32;  // hover/dragging
-        else
-            return;  // 1000 ignores motion
-    }
-
-    char buf[32];
-    int len = 0;
-
-    int tc = c + 1;
-    int tr = r + 1;
-
-    if (ctx->term.mouse_ext == 1006) {
-        // SGR: ESC [ < btn ; x ; y M/m
-        char end_char = is_release ? 'm' : 'M';
-        len = snprintf(buf, sizeof(buf), "\033[<%d;%d;%d%c", encoded_btn, tc, tr, end_char);
-    } else {
-        // X10: ESC [ <btn+32> <x+32> <y+32>
-        // caps out at coord 223
-        if (tc > 223 || tr > 223) return;
-        len = snprintf(buf, sizeof(buf), "\033[M%c%c%c", encoded_btn + 32, tc + 32, tr + 32);
-    }
-
-    ctx->write_cb(ctx->user_data, buf, len);
-}
-#endif  // SFTE_MOUSE
-
-// convert raw pxs to grid coordinates
-static void _sfte_px_to_grid(sfte_ctx *ctx, int px_x, int px_y, int *out_c, int *out_r) {
-    int c = (px_x - SFTE_PAD_X) / ctx->font.cell_width;
-    int r = (px_y - SFTE_PAD_Y) / ctx->font.cell_height;
-
-    c = _SFTE_CLAMP(c, 0, ctx->term.cols - 1);
-    r = _SFTE_CLAMP(r, 0, ctx->term.rows - 1);
-
-#if SFTE_SCROLLBACK_CAP
-    r -= ctx->term.sb_offset;
-#endif  // SFTE_SCROLLBACK_CAP
-
-    if (out_c) *out_c = c;
-    if (out_r) *out_r = r;
-}
-
-static void _sfte_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf) {
-    int w = ctx->width;
-    int h = ctx->height;
-
-    int grid_w = ctx->term.cols * ctx->font.cell_width;
-    int grid_h = ctx->term.rows * ctx->font.cell_height;
-
-    uint32_t bg = (SFTE_BG_OPACITY << 24) | SFTE_BG_COLOR;
-
-#if SFTE_PAD_Y
-    for (int y = 0; y < SFTE_PAD_Y && y < h; ++y)
-        for (int x = 0; x < w; ++x) px_buf[y * w + x] = bg;
-
-    for (int y = SFTE_PAD_Y + grid_h; y < h; ++y)
-        for (int x = 0; x < w; ++x) px_buf[y * w + x] = bg;
-#endif  // SFTE_PAD_Y
-
-#if SFTE_PAD_X
-    for (int y = SFTE_PAD_Y; y < SFTE_PAD_Y + grid_h && y < h; ++y)
-        for (int x = 0; x < SFTE_PAD_X && x < w; ++x) px_buf[y * w + x] = bg;
-
-    for (int y = SFTE_PAD_Y; y < SFTE_PAD_Y + grid_h && y < h; ++y)
-        for (int x = SFTE_PAD_X + grid_w; x < w; ++x) px_buf[y * w + x] = bg;
-#endif  // SFTE_PAD_X
-}
-
-// =================================================================================================
-// >>wayland
-// =================================================================================================
-#if SFTE_WAYLAND
-
-static sfte_key _sfte_xkb_to_sfte_key(xkb_keysym_t sym) {
-    switch (sym) {
-    case XKB_KEY_Tab:
-    case XKB_KEY_ISO_Left_Tab: return SFTE_KEY_TAB;
-    case XKB_KEY_Return:
-    case XKB_KEY_Linefeed:
-    case XKB_KEY_KP_Enter: return SFTE_KEY_ENTER;
-    case XKB_KEY_BackSpace: return SFTE_KEY_BACKSPACE;
-    case XKB_KEY_Escape: return SFTE_KEY_ESCAPE;
-    case XKB_KEY_Up: return SFTE_KEY_UP;
-    case XKB_KEY_Down: return SFTE_KEY_DOWN;
-    case XKB_KEY_Left: return SFTE_KEY_LEFT;
-    case XKB_KEY_Right: return SFTE_KEY_RIGHT;
-    case XKB_KEY_Home: return SFTE_KEY_HOME;
-    case XKB_KEY_End: return SFTE_KEY_END;
-    case XKB_KEY_Page_Up: return SFTE_KEY_PAGE_UP;
-    case XKB_KEY_Page_Down: return SFTE_KEY_PAGE_DOWN;
-    case XKB_KEY_Insert: return SFTE_KEY_INSERT;
-    case XKB_KEY_Delete: return SFTE_KEY_DELETE;
-    case XKB_KEY_F1: return SFTE_KEY_F1;
-    case XKB_KEY_F2: return SFTE_KEY_F2;
-    case XKB_KEY_F3: return SFTE_KEY_F3;
-    case XKB_KEY_F4: return SFTE_KEY_F4;
-    case XKB_KEY_F5: return SFTE_KEY_F5;
-    case XKB_KEY_F6: return SFTE_KEY_F6;
-    case XKB_KEY_F7: return SFTE_KEY_F7;
-    case XKB_KEY_F8: return SFTE_KEY_F8;
-    case XKB_KEY_F9: return SFTE_KEY_F9;
-    case XKB_KEY_F10: return SFTE_KEY_F10;
-    case XKB_KEY_F11: return SFTE_KEY_F11;
-    case XKB_KEY_F12: return SFTE_KEY_F12;
-    default: return SFTE_KEY_NONE;
-    }
-}
-
-static void _sfte_wayland_write_cb(void *user_data, const char *data, size_t len) {
-    sfte_wayland_app *app = (sfte_wayland_app *)user_data;
-    if (app->pty_fd > 0) write(app->pty_fd, data, len);
-}
-
-static void _sfte_wayland_pty_spawn(sfte_wayland_app *app) {
-#ifndef SFTE_NO_POSIX
-    app->pty_pid = sfte_posix_pty_spawn(app->ctx, &app->pty_fd, app->width, app->height);
-    SFTE_ASSERT(app->pty_pid != -1, "failed to forkpty");
-#endif  // !SFTE_NO_POSIX
-}
-
-static void _sfte_wayland_pty_update(sfte_wayland_app *app) {
-#ifndef SFTE_NO_POSIX
-    sfte_posix_pty_resize(app->ctx, app->pty_fd, app->width, app->height);
-#endif  // !SFTE_NO_POSIX
-}
-
-#if SFTE_FONT_ZOOM
-static void _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg) {
-    sfte_zoom(ctx, arg->f);
-    sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
-    _sfte_wayland_pty_update(app);
-    app->needs_render = 1;
-}
-
-static void _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *dummy) {
-    (void)dummy;
-    const sfte_arg arg = {.f = SFTE_FONT_DEFAULT_SIZE - ctx->font.cur_size};
-    _sfte_wayland_font_resize(ctx, &arg);
-}
-#endif  // SFTE_FONT_ZOOM
-
-#if SFTE_SCROLLBACK_CAP
-static void _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg) {
-    sfte_view_scroll(ctx, arg->i);
-    sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
-    app->needs_render = 1;
-}
-#endif  // SFTE_SCROLLBACK_CAP
-
-static void _sfte_wayland_create_buffer(sfte_wayland_app *app) {
-    int stride = app->width * 4;  // 4B/px (ARGB)
-    app->shm_size = stride * app->height;
-
-    int fd = memfd_create("sfte-buffer", MFD_CLOEXEC);
-    SFTE_ASSERT(fd != -1, "failed to create memfd");
-    SFTE_ASSERT(ftruncate(fd, app->shm_size) != -1, "failed to truncate memfd");
-
-    app->shm_data = (uint32_t *)mmap(NULL, app->shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
-                                     0);
-    SFTE_ASSERT(app->shm_data != MAP_FAILED, "failed to mmap shm data");
-
-#if SFTE_DOUBLE_BUFFER
-    if (app->back_buffer) SFTE_FREE(app->back_buffer);
-    app->back_buffer = (uint32_t *)SFTE_MALLOC(app->shm_size);
-    SFTE_ASSERT(app->back_buffer, "failed to allocate back buffer");
-#endif  // SFTE_DOUBLE_BUFFER
-
-    struct wl_shm_pool *pool = wl_shm_create_pool(app->shm, fd, app->shm_size);
-    app->buffer = wl_shm_pool_create_buffer(pool, 0, app->width, app->height, stride,
-                                            WL_SHM_FORMAT_ARGB8888);
-    wl_shm_pool_destroy(pool);
-    close(fd);
-}
-
-#if SFTE_CLIPBOARD
-static void _sfte_wayland_data_offer_offer(void *data, struct wl_data_offer *offer,
-                                           const char *mime_type) {
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-    if (strcmp(mime_type, "text/plain;charset=utf-8") == 0 ||
-        strcmp(mime_type, "text/plain") == 0) {
-        wl_data_offer_accept(offer, app->serial, mime_type);
-    }
-}
-
-static void _sfte_wayland_data_offer_source_actions(void *data, struct wl_data_offer *offer,
-                                                    uint32_t actions) {
-    (void)data, (void)offer, (void)actions;
-}
-
-static void _sfte_wayland_data_offer_action(void *data, struct wl_data_offer *offer,
-                                            uint32_t action) {
-    (void)data, (void)offer, (void)action;
-}
-
-static const struct wl_data_offer_listener _sfte_wayland_data_offer_listener = {
-    .offer = _sfte_wayland_data_offer_offer,
-    .source_actions = _sfte_wayland_data_offer_source_actions,
-    .action = _sfte_wayland_data_offer_action,
-};
-
-static void _sfte_wayland_data_device_data_offer(void *data, struct wl_data_device *device,
-                                                 struct wl_data_offer *offer) {
-    (void)device;
-    wl_data_offer_add_listener(offer, &_sfte_wayland_data_offer_listener, data);
-}
-
-static void _sfte_wayland_data_device_enter(void *data, struct wl_data_device *device,
-                                            uint32_t serial, struct wl_surface *surface,
-                                            wl_fixed_t x, wl_fixed_t y,
-                                            struct wl_data_offer *offer) {
-    (void)data, (void)device, (void)serial, (void)surface, (void)x, (void)y, (void)offer;
-}
-
-static void _sfte_wayland_data_device_leave(void *data, struct wl_data_device *device) {
-    (void)data, (void)device;
-}
-
-static void _sfte_wayland_data_device_motion(void *data, struct wl_data_device *device,
-                                             uint32_t time, wl_fixed_t x, wl_fixed_t y) {
-    (void)data, (void)device, (void)time, (void)x, (void)y;
-}
-
-static void _sfte_wayland_data_device_drop(void *data, struct wl_data_device *device) {
-    (void)data, (void)device;
-}
-
-static void _sfte_wayland_data_device_selection(void *data, struct wl_data_device *device,
-                                                struct wl_data_offer *offer) {
-    (void)device;
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-    if (app->data_offer && app->data_offer != offer) wl_data_offer_destroy(app->data_offer);
-    app->data_offer = offer;
-}
-
-static const struct wl_data_device_listener _sfte_wayland_data_device_listener = {
-    .data_offer = _sfte_wayland_data_device_data_offer,
-    .enter = _sfte_wayland_data_device_enter,
-    .leave = _sfte_wayland_data_device_leave,
-    .motion = _sfte_wayland_data_device_motion,
-    .drop = _sfte_wayland_data_device_drop,
-    .selection = _sfte_wayland_data_device_selection,
-};
-
-static void _sfte_wayland_data_source_target(void *data, struct wl_data_source *src,
-                                             const char *mime_type) {
-    (void)data, (void)src, (void)mime_type;
-}
-
-static void _sfte_wayland_data_source_send(void *data, struct wl_data_source *src,
-                                           const char *mime_type, int32_t fd) {
-    (void)src, (void)mime_type;
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-    if (app->selection_text) write(fd, app->selection_text, strlen(app->selection_text));
-
-    close(fd);
-}
-
-static void _sfte_wayland_data_source_cancelled(void *data, struct wl_data_source *src) {
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-    wl_data_source_destroy(src);
-    if (app->selection_text) {
-        SFTE_FREE(app->selection_text);
-        app->selection_text = NULL;
-    }
-    app->data_source = NULL;
-}
-
-static void _sfte_wayland_data_source_dnd_drop_performed(void *data, struct wl_data_source *src) {
-    (void)data, (void)src;
-}
-
-static void _sfte_wayland_data_source_dnd_finished(void *data, struct wl_data_source *src) {
-    (void)data, (void)src;
-}
-
-static void _sfte_wayland_data_source_action(void *data, struct wl_data_source *src,
-                                             uint32_t action) {
-    (void)data, (void)src, (void)action;
-}
-
-static const struct wl_data_source_listener _sfte_wayland_data_source_listener = {
-    .target = _sfte_wayland_data_source_target,
-    .send = _sfte_wayland_data_source_send,
-    .cancelled = _sfte_wayland_data_source_cancelled,
-    .dnd_drop_performed = _sfte_wayland_data_source_dnd_drop_performed,
-    .dnd_finished = _sfte_wayland_data_source_dnd_finished,
-    .action = _sfte_wayland_data_source_action,
-};
-#endif  // SFTE_CLIPBOARD
-
-#if SFTE_SELECTION
-static void _sfte_wayland_pointer_enter(void *data, struct wl_pointer *pointer, uint32_t serial,
-                                        struct wl_surface *surface, wl_fixed_t surface_x,
-                                        wl_fixed_t surface_y) {
-    (void)data, (void)pointer, (void)serial, (void)surface, (void)surface_x, (void)surface_y;
-#if SFTE_MOUSE
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-    sfte_mouse_move(app->ctx, wl_fixed_to_int(surface_x), wl_fixed_to_int(surface_y));
-    app->needs_render = 1;
-#endif  // SFTE_MOUSE
-}
-
-static void _sfte_wayland_pointer_leave(void *data, struct wl_pointer *pointer, uint32_t serial,
-                                        struct wl_surface *surface) {
-    (void)data, (void)pointer, (void)serial, (void)surface;
-}
-
-static void _sfte_wayland_pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time,
-                                         wl_fixed_t surface_x, wl_fixed_t surface_y) {
-    (void)data, (void)pointer, (void)time, (void)surface_x, (void)surface_y;
-#if SFTE_MOUSE
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-    sfte_mouse_move(app->ctx, wl_fixed_to_int(surface_x), wl_fixed_to_int(surface_y));
-    app->needs_render = 1;
-#endif  // SFTE_MOUSE
-}
-
-static void _sfte_wayland_pointer_button(void *data, struct wl_pointer *pointer, uint32_t serial,
-                                         uint32_t time, uint32_t button, uint32_t state) {
-    (void)data, (void)pointer, (void)serial, (void)time, (void)button, (void)state;
-#if SFTE_MOUSE
-    if (button != 0x110) return;  // lmb
-
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-
-#if SFTE_CLIPBOARD
-    app->serial = serial;
-#endif  // SFTE_CLIPBOARD
-
-    sfte_mouse_click(app->ctx, 0, state == WL_POINTER_BUTTON_STATE_PRESSED,
-                     app->ctx->term.mouse_hover_x * app->ctx->font.cell_width + SFTE_PAD_X,
-                     app->ctx->term.mouse_hover_y * app->ctx->font.cell_height + SFTE_PAD_Y);
-    app->needs_render = 1;
-
-#if SFTE_CLIPBOARD
-    if (state == WL_POINTER_BUTTON_STATE_RELEASED) _sfte_wayland_clipboard_copy(app->ctx, NULL);
-#endif  // SFTE_CLIPBOARD
-#endif  // SFTE_MOUSE
-}
-
-static void _sfte_wayland_pointer_axis(void *data, struct wl_pointer *pointer, uint32_t time,
-                                       uint32_t axis, wl_fixed_t value) {
-    (void)data, (void)pointer, (void)time, (void)axis, (void)value;
-#if SFTE_MOUSE
-    if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL) return;
-
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-    int dir = (wl_fixed_to_double(value) < 0) ? 1 : -1;
-    sfte_mouse_scroll(app->ctx, dir,
-                      app->ctx->term.mouse_hover_x * app->ctx->font.cell_width + SFTE_PAD_X,
-                      app->ctx->term.mouse_hover_y * app->ctx->font.cell_height + SFTE_PAD_Y);
-    app->needs_render = 1;
-#endif  // SFTE_MOUSE
-}
-
-static void _sfte_wayland_pointer_frame(void *data, struct wl_pointer *pointer) {
-    (void)data, (void)pointer;
-}
-
-static void _sfte_wayland_pointer_axis_source(void *data, struct wl_pointer *pointer,
-                                              uint32_t axis_source) {
-    (void)data, (void)pointer, (void)axis_source;
-}
-
-static void _sfte_wayland_pointer_axis_stop(void *data, struct wl_pointer *pointer, uint32_t time,
-                                            uint32_t axis) {
-    (void)data, (void)pointer, (void)time, (void)axis;
-}
-
-static void _sfte_wayland_pointer_axis_discrete(void *data, struct wl_pointer *pointer,
-                                                uint32_t axis, int32_t discrete) {
-    (void)data, (void)pointer, (void)axis, (void)discrete;
-}
-
-static const struct wl_pointer_listener _sfte_wayland_pointer_listener = {
-    .enter = _sfte_wayland_pointer_enter,
-    .leave = _sfte_wayland_pointer_leave,
-    .motion = _sfte_wayland_pointer_motion,
-    .button = _sfte_wayland_pointer_button,
-    .axis = _sfte_wayland_pointer_axis,
-    .frame = _sfte_wayland_pointer_frame,
-    .axis_source = _sfte_wayland_pointer_axis_source,
-    .axis_stop = _sfte_wayland_pointer_axis_stop,
-    .axis_discrete = _sfte_wayland_pointer_axis_discrete,
-};
-#endif  // SFTE_SELECTION
-
-#if SFTE_HYPERLINKS
-static void _sfte_wayland_open_link_cb(void *user_data, const char *uri) {
-    (void)user_data;
-    if (!uri) return;
-
-    if (fork() == 0) {
-        freopen("/dev/null", "w", stdout);
-        freopen("/dev/null", "w", stderr);
-        execlp("xdg-open", "xdg-open", uri, NULL);
-        exit(1);
-    }
-}
-#endif  // SFTE_HYPERLINKS
-
-static void _sfte_wayland_keyboard_keymap(void *data, struct wl_keyboard *keyboard, uint32_t format,
-                                          int32_t fd, uint32_t size) {
-    (void)keyboard;
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-    SFTE_ASSERT(format == WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, "unsupported keymap format");
-
-    char *map_str = (char *)mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
-    SFTE_ASSERT(map_str != MAP_FAILED, "failed to mmap keyboard");
-
-    if (app->xkb_keymap) xkb_keymap_unref(app->xkb_keymap);
-    if (app->xkb_state) xkb_state_unref(app->xkb_state);
-
-    app->xkb_keymap = xkb_keymap_new_from_string(
-        app->xkb_context, map_str, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
-    app->xkb_state = xkb_state_new(app->xkb_keymap);
-
-    _SFTE_INFO(app->ctx, KEYMAP_LOADED);
-    munmap(map_str, size);
-    close(fd);  // close the fd to avoid leak
-}
-
-static void _sfte_wayland_keyboard_enter(void *data, struct wl_keyboard *keyboard, uint32_t serial,
-                                         struct wl_surface *surface, struct wl_array *keys) {
-    (void)data, (void)keyboard, (void)serial, (void)surface, (void)keys;
-}
-
-static void _sfte_wayland_keyboard_leave(void *data, struct wl_keyboard *keyboard, uint32_t serial,
-                                         struct wl_surface *surface) {
-    (void)data, (void)keyboard, (void)serial, (void)surface;
-}
-
-static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard, uint32_t serial,
-                                       uint32_t time, uint32_t key, uint32_t state) {
-    (void)data, (void)keyboard, (void)serial, (void)time;
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-#if SFTE_CLIPBOARD
-    app->serial = serial;
-#endif  // SFTE_CLIPBOARD
-
-    if (state == WL_KEYBOARD_KEY_STATE_RELEASED && key == app->repeating_key) {
-        struct itimerspec its = {0};
-        timerfd_settime(app->repeat_timer_fd, 0, &its, NULL);
-        app->repeating_key = 0;
-        return;
-    }
-
-    if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !app->xkb_state) return;
-
-    // clear selection on key press
-    if (app->ctx->term.mouse_sel_active) {
-        app->ctx->term.mouse_sel_active = 0;
-        _sfte_dirty_range(app->ctx, 0, app->ctx->term.cols * app->ctx->term.rows);
-        app->needs_render = 1;
-    }
-
-    if (app->repeat_rate > 0 && app->repeating_key != key) {
-        struct itimerspec its;
-        its.it_value.tv_sec = app->repeat_delay / 1000;
-        its.it_value.tv_nsec = (app->repeat_delay % 1000) * 1000000;
-        its.it_interval.tv_sec = 0;
-        if (app->repeat_rate > 0)
-            its.it_interval.tv_nsec = 1000000000 / app->repeat_rate;
-        else
-            its.it_interval.tv_nsec = 0;
-
-        timerfd_settime(app->repeat_timer_fd, 0, &its, NULL);
-        app->repeating_key = key;
-    }
-
-    xkb_keycode_t keycode = key + 8;  // WARN: evdev codes are offset by 8 from xkb keycodes
-    xkb_keysym_t sym = xkb_state_key_get_one_sym(app->xkb_state, keycode);
-
-    bool ctrl = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_CTRL,
-                                             XKB_STATE_MODS_EFFECTIVE);
-    bool alt = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_ALT,
-                                            XKB_STATE_MODS_EFFECTIVE);
-    bool shift = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_SHIFT,
-                                              XKB_STATE_MODS_EFFECTIVE);
-    bool super = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_LOGO,
-                                              XKB_STATE_MODS_EFFECTIVE);
-
-    uint32_t active_mods = SFTE_MOD_NONE;
-    if (ctrl) active_mods |= SFTE_MOD_CTRL;
-    if (alt) active_mods |= SFTE_MOD_ALT;
-    if (shift) active_mods |= SFTE_MOD_SHIFT;
-    if (super) active_mods |= SFTE_MOD_SUPER;
-
-    for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_shortcuts); ++i) {
-        if ((xkb_keysym_t)_sfte_shortcuts[i].keysym != sym ||
-            _sfte_shortcuts[i].mod_mask != active_mods)
-            continue;
-
-        _sfte_shortcuts[i].func(app->ctx, &_sfte_shortcuts[i].arg);
-        return;
-    }
-
-    char buf[128];
-    int size = 0;
-
-    // ignore standalone mod keys
-    if (sym >= XKB_KEY_Shift_L && sym <= XKB_KEY_Hyper_R) return;
-
-#if SFTE_KITTY_KB
-    sfte_key key_id = _sfte_xkb_to_sfte_key(sym);
-    uint32_t codepoint = xkb_keysym_to_utf32(sym);
-
-    size = sfte_kitty_kb_encode(app->ctx, key_id, codepoint, active_mods, buf, sizeof(buf));
-#endif  // SFTE_KITTY_KB
-
-    // if unhandled by kitty
-    if (size == 0) {
-#define MAP_KEY(str)                                                                               \
-    do {                                                                                           \
-        size = sizeof(str) - 1;                                                                    \
-        memcpy(buf, str, size);                                                                    \
-    } while (0)
-
-        switch (sym) {
-        case XKB_KEY_Up: MAP_KEY("\033[A"); break;
-        case XKB_KEY_Down: MAP_KEY("\033[B"); break;
-        case XKB_KEY_Right: MAP_KEY("\033[C"); break;
-        case XKB_KEY_Left: MAP_KEY("\033[D"); break;
-        case XKB_KEY_BackSpace: MAP_KEY("\x7f"); break;
-        case XKB_KEY_Delete: MAP_KEY("\033[3~"); break;
-        case XKB_KEY_Home: MAP_KEY("\033[H"); break;
-        case XKB_KEY_End: MAP_KEY("\033[F"); break;
-        default:
-            if (ctrl) {
-                if (sym >= XKB_KEY_a && sym <= XKB_KEY_z) {
-                    buf[0] = sym - XKB_KEY_a + 1;
-                    size = 1;
-                } else if (sym >= XKB_KEY_A && sym <= XKB_KEY_Z) {
-                    buf[0] = sym - XKB_KEY_A + 1;
-                    size = 1;
-                } else if (sym == XKB_KEY_space) {
-                    buf[0] = '\0';
-                    size = 1;
-                }
-            }
-
-            // if nothing intercepted the key, default to generating
-            // standard terminal control chars or psasing through the raw utf8 string
-            if (size == 0) size = xkb_state_key_get_utf8(app->xkb_state, keycode, buf, sizeof(buf));
-        }
-
-        // if alt is held, prepend esc byte
-        if (alt && size > 0 && size < (int)(sizeof(buf) - 1)) {
-            memmove(buf + 1, buf, size++);
-            buf[0] = '\033';
-        }
-#undef MAP_KEY
-    }
-
-    if (size > 0) {
-#if SFTE_SCROLLBACK_CAP
-        sfte_term *term = &app->ctx->term;
-        if (term->sb_offset > 0) {
-            term->sb_offset = 0;
-            _sfte_dirty_range(app->ctx, 0, term->cols * term->rows);
-            app->needs_render = 1;
-        }
-#endif  // SFTE_SCROLLBACK_CAP
-
-        write(app->pty_fd, buf, size);
-    }
-}
-
-static void _sfte_wayland_keyboard_modifiers(void *data, struct wl_keyboard *keyboard,
-                                             uint32_t serial, uint32_t mods_depressed,
-                                             uint32_t mods_latched, uint32_t mods_locked,
-                                             uint32_t group) {
-    (void)keyboard, (void)serial;
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-    if (!app->xkb_state) return;
-
-    xkb_state_update_mask(app->xkb_state, mods_depressed, mods_latched, mods_locked, 0, 0, group);
-}
-
-static void _sfte_wayland_keyboard_repeat_info(void *data, struct wl_keyboard *keyboard,
-                                               int32_t rate, int32_t delay) {
-    (void)keyboard;
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-
-    app->repeat_rate = rate;
-    app->repeat_delay = delay;
-}
-
-static const struct wl_keyboard_listener _sfte_wayland_keyboard_listener = {
-    .keymap = _sfte_wayland_keyboard_keymap,
-    .enter = _sfte_wayland_keyboard_enter,
-    .leave = _sfte_wayland_keyboard_leave,
-    .key = _sfte_wayland_keyboard_key,
-    .modifiers = _sfte_wayland_keyboard_modifiers,
-    .repeat_info = _sfte_wayland_keyboard_repeat_info,
-};
-
-static void _sfte_wayland_seat_capabilities(void *data, struct wl_seat *seat,
-                                            uint32_t capabilities) {
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-    // if seat has a keyboard and we haven't grabbed it yet
-    if ((capabilities & WL_SEAT_CAPABILITY_KEYBOARD) && !app->keyboard) {
-        app->keyboard = wl_seat_get_keyboard(seat);
-        wl_keyboard_add_listener(app->keyboard, &_sfte_wayland_keyboard_listener, app);
-    }
-    // if seat lost keyboard and we still hold the ptr
-    else if (!(capabilities & WL_SEAT_CAPABILITY_KEYBOARD) && app->keyboard) {
-        wl_keyboard_release(app->keyboard);
-        app->keyboard = NULL;
-    }
-
-#if SFTE_SELECTION
-    if ((capabilities & WL_SEAT_CAPABILITY_POINTER) && !app->pointer) {
-        app->pointer = wl_seat_get_pointer(seat);
-        wl_pointer_add_listener(app->pointer, &_sfte_wayland_pointer_listener, app);
-
-    } else if (!(capabilities & WL_SEAT_CAPABILITY_POINTER) && app->pointer) {
-        wl_pointer_release(app->pointer);
-        app->pointer = NULL;
-    }
-#endif  // SFTE_SELECTION
-
-#if SFTE_CLIPBOARD
-    if (app->data_device_manager && !app->data_device) {
-        app->data_device = (struct wl_data_device *)wl_data_device_manager_get_data_device(
-            app->data_device_manager, seat);
-        wl_data_device_add_listener(app->data_device, &_sfte_wayland_data_device_listener, app);
-    }
-#endif  // SFTE_CLIPBOARD
-}
-
-static void _sfte_wayland_seat_name(void *data, struct wl_seat *seat, const char *name) {
-    (void)data, (void)seat, (void)name;
-}
-
-static const struct wl_seat_listener _sfte_wayland_seat_listener = {
-    .capabilities = _sfte_wayland_seat_capabilities,
-    .name = _sfte_wayland_seat_name,
-};
-
-static void _sfte_wayland_xdg_wm_base_ping(void *data, struct xdg_wm_base *xdg_wm_base,
-                                           uint32_t serial) {
-    (void)data;
-    xdg_wm_base_pong(xdg_wm_base, serial);  // compositor pinged, pong back with same serial
-}
-
-static const struct xdg_wm_base_listener _sfte_wayland_xdg_wm_base_listener = {
-    .ping = _sfte_wayland_xdg_wm_base_ping,
-};
-
-static void _sfte_wayland_registry_global(void *data, struct wl_registry *registry, uint32_t name,
-                                          const char *interface, uint32_t version) {
-    (void)version;
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-
-    if (strcmp(interface, wl_compositor_interface.name) == 0)
-        app->compositor = (struct wl_compositor *)wl_registry_bind(
-            registry, name, &wl_compositor_interface, 4 /* wl compositor version */);
-    else if (strcmp(interface, wl_shm_interface.name) == 0)
-        app->shm = (struct wl_shm *)wl_registry_bind(registry, name, &wl_shm_interface,
-                                                     1 /* wl shm version */);
-    else if (strcmp(interface, wl_seat_interface.name) == 0) {
-        app->seat = (struct wl_seat *)wl_registry_bind(registry, name, &wl_seat_interface,
-                                                       7 /* wl seat version */);
-        wl_seat_add_listener(app->seat, &_sfte_wayland_seat_listener, app);
-    } else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
-        app->xdg_wm_base = (struct xdg_wm_base *)wl_registry_bind(
-            registry, name, &xdg_wm_base_interface, 1 /* xdg wm base version */);
-        xdg_wm_base_add_listener(app->xdg_wm_base, &_sfte_wayland_xdg_wm_base_listener, app);
-    }
-#if SFTE_CLIPBOARD
-    else if (strcmp(interface, wl_data_device_manager_interface.name) == 0) {
-        app->data_device_manager = (struct wl_data_device_manager *)wl_registry_bind(
-            registry, name, &wl_data_device_manager_interface, 3 /* data device manager version */);
-    }
-#endif  // SFTE_CLIPBOARD
-}
-
-static void _sfte_wayland_registry_global_remove(void *data, struct wl_registry *registry,
-                                                 uint32_t name) {
-    (void)data, (void)registry, (void)name;
-}
-
-static const struct wl_registry_listener _sfte_wayland_registry_listener = {
-    .global = _sfte_wayland_registry_global,
-    .global_remove = _sfte_wayland_registry_global_remove,
-};
-
-static void _sfte_wayland_xdg_surface_configure(void *data, struct xdg_surface *xdg_surface,
-                                                uint32_t serial) {
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-    xdg_surface_ack_configure(xdg_surface, serial);
-
-    if (app->pending_width > 0 && app->pending_height > 0) {
-        app->width = app->pending_width;
-        app->height = app->pending_height;
-        app->pending_width = 0;
-        app->pending_height = 0;
-
-        sfte_resize(app->ctx, app->width, app->height);
-        _sfte_wayland_pty_update(app);
-    }
-
-    // resize recalc
-    int needed_size = app->width * app->height * 4;
-    if (app->shm_size != needed_size) {
-        if (app->buffer) wl_buffer_destroy(app->buffer);
-        if (app->shm_data) munmap(app->shm_data, app->shm_size);
-
-        _sfte_wayland_create_buffer(app);
-    }
-
-    app->needs_render = 1;
-}
-
-static const struct xdg_surface_listener _sfte_wayland_xdg_surface_listener = {
-    .configure = _sfte_wayland_xdg_surface_configure,
-};
-
-static void _sfte_wayland_xdg_toplevel_configure(void *data, struct xdg_toplevel *xdg_toplevel,
-                                                 int32_t width, int32_t height,
-                                                 struct wl_array *states) {
-    (void)xdg_toplevel, (void)states;
-    if (width <= 0 || height <= 0) return;
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-
-    app->pending_width = width;
-    app->pending_height = height;
-}
-
-static void _sfte_wayland_xdg_toplevel_close(void *data, struct xdg_toplevel *xdg_toplevel) {
-    (void)xdg_toplevel;
-    sfte_wayland_app *app = (sfte_wayland_app *)data;
-    app->running = 0;
-}
-
-static const struct xdg_toplevel_listener _sfte_wayland_xdg_toplevel_listener = {
-    .configure = _sfte_wayland_xdg_toplevel_configure,
-    .close = _sfte_wayland_xdg_toplevel_close,
-};
-
-static void _sfte_wayland_load(sfte_wayland_app *app) {
-    app->xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-    SFTE_ASSERT(app->xkb_context, "failed to create xkb context");
-
-    app->display = wl_display_connect(NULL);
-    SFTE_ASSERT(app->display, "failed to connect to Wayland display\n");
-
-    app->registry = wl_display_get_registry(app->display);
-    wl_registry_add_listener(app->registry, &_sfte_wayland_registry_listener, app);
-
-    wl_display_roundtrip(app->display);
-    SFTE_ASSERT(app->compositor, "failed to initialize compositor\n");
-    SFTE_ASSERT(app->shm, "compositor missing required interfaces\n");
-    SFTE_ASSERT(app->xdg_wm_base, "failed to bind xdg_wm_base\n");
-
-    app->surface = wl_compositor_create_surface(app->compositor);
-    app->xdg_surface = xdg_wm_base_get_xdg_surface(app->xdg_wm_base, app->surface);
-    xdg_surface_add_listener(app->xdg_surface, &_sfte_wayland_xdg_surface_listener, app);
-
-    app->xdg_toplevel = xdg_surface_get_toplevel(app->xdg_surface);
-    xdg_toplevel_add_listener(app->xdg_toplevel, &_sfte_wayland_xdg_toplevel_listener, app);
-    xdg_toplevel_set_title(app->xdg_toplevel, "sfte");
-    xdg_toplevel_set_app_id(app->xdg_toplevel, "sfte");
-
-    wl_surface_commit(app->surface);
-    wl_display_roundtrip(app->display);
-    _SFTE_INFO(app->ctx, WAYLAND_REGISTRY_BOUND);
-}
-
-static void _sfte_wayland_unload(sfte_wayland_app *app) {
-#if SFTE_DOUBLE_BUFFER
-    SFTE_FREE(app->back_buffer);
-#endif  // SFTE_DOUBLE_BUFFER
-
-    if (app->buffer) wl_buffer_destroy(app->buffer);
-    if (app->shm_data) munmap(app->shm_data, app->shm_size);
-    if (app->xdg_toplevel) xdg_toplevel_destroy(app->xdg_toplevel);
-    if (app->xdg_surface) xdg_surface_destroy(app->xdg_surface);
-    if (app->surface) wl_surface_destroy(app->surface);
-    if (app->xdg_wm_base) xdg_wm_base_destroy(app->xdg_wm_base);
-    if (app->keyboard) wl_keyboard_release(app->keyboard);
-    if (app->seat) wl_seat_release(app->seat);
-
-    wl_registry_destroy(app->registry);
-    wl_display_disconnect(app->display);
-
-    xkb_state_unref(app->xkb_state);
-    xkb_keymap_unref(app->xkb_keymap);
-    xkb_context_unref(app->xkb_context);
-}
-
-#if SFTE_CLIPBOARD
-#if SFTE_SELECTION
-#if SFTE_OSC52_CLIPBOARD
-static void _sfte_wayland_osc52_clipboard_cb(void *user_data, char target, const char *data) {
-    (void)target;  // TODO: wl primary selection protocol
-    if (target != 'c') return;
-    sfte_wayland_app *app = (sfte_wayland_app *)user_data;
-
-    if (app->data_source) {
-        wl_data_source_destroy(app->data_source);
-        app->data_source = NULL;
-    }
-    if (app->selection_text) {
-        SFTE_FREE(app->selection_text);
-        app->selection_text = NULL;
-    }
-
-    if (!data || !app->data_device_manager || !app->data_device) return;
-
-    size_t len = strlen(data);
-    app->selection_text = (char *)SFTE_MALLOC(len + 1);
-    memcpy(app->selection_text, data, len + 1);
-
-    app->data_source = wl_data_device_manager_create_data_source(app->data_device_manager);
-    wl_data_source_add_listener(app->data_source, &_sfte_wayland_data_source_listener, app);
-    wl_data_source_offer(app->data_source, "text/plain;charset=utf-8");
-    wl_data_source_offer(app->data_source, "text/plain");
-
-    wl_data_device_set_selection(app->data_device, app->data_source, app->serial);
-}
-#endif  // SFTE_OSC52_CLIPBOARD
-
-static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
-    (void)arg;
-    sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
-
-    if (app->data_source) {
-        wl_data_source_destroy(app->data_source);
-        app->data_source = NULL;
-    }
-    if (app->selection_text) {
-        SFTE_FREE(app->selection_text);
-        app->selection_text = NULL;
-    }
-
-    if (!app->ctx->term.mouse_sel_active || !app->data_device_manager || !app->data_device) return;
-
-    size_t needed_bytes = sfte_get_selection(app->ctx, NULL, 0);
-    if (needed_bytes == 0) {
-        _SFTE_INFO(ctx, CLIPBOARD_EMPTY);
-        return;
-    }
-
-    app->selection_text = (char *)SFTE_MALLOC(needed_bytes);
-    sfte_get_selection(app->ctx, app->selection_text, needed_bytes);
-    if (!app->selection_text) return;
-
-    app->data_source = wl_data_device_manager_create_data_source(app->data_device_manager);
-    wl_data_source_add_listener(app->data_source, &_sfte_wayland_data_source_listener, app);
-    wl_data_source_offer(app->data_source, "text/plain;charset=utf-8");
-    wl_data_source_offer(app->data_source, "text/plain");
-    wl_data_device_set_selection(app->data_device, app->data_source, app->serial);
-}
-#endif  // SFTE_SELECTION
-
-static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg) {
-    (void)arg;
-    sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
-
-    if (!app->data_offer) return;
-
-    int fds[2];
-    if (pipe(fds) == 0) {
-        wl_data_offer_receive(app->data_offer, "text/plain;charset=utf-8", fds[1]);
-        close(fds[1]);
-
-        wl_display_roundtrip(app->display);
-
-        if (app->ctx->term.bracketed_paste) write(app->pty_fd, "\033[200~", 6);
-
-        char buf[SFTE_CLIPBOARD_BUF_SIZE];
-        ssize_t n;
-        while ((n = read(fds[0], buf, sizeof(buf))) > 0) write(app->pty_fd, buf, n);
-
-        if (app->ctx->term.bracketed_paste) write(app->pty_fd, "\033[201~", 6);
-
-        close(fds[0]);
-    }
-}
-#endif  // SFTE_CLIPBOARD
-
-static void _sfte_wayland_loop(sfte_wayland_app *app) {
-    sfte_ctx *ctx = app->ctx;
-
-    signal(SIGPIPE, SIG_IGN);
-    setlocale(LC_ALL, "");
-
-    app->repeat_timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
-    int wl_fd = wl_display_get_fd(app->display);
-
-    while (app->running) {
-        wl_display_dispatch_pending(app->display);
-        wl_display_flush(app->display);
-        struct pollfd fds[] = {{.fd = wl_fd, .events = POLLIN},
-                               {.fd = app->pty_fd, .events = POLLIN},
-                               {.fd = app->repeat_timer_fd, .events = POLLIN}};
-        int timeout = -1;
-
-#if SFTE_CURSOR_TRAIL
-        if (ctx->term.is_trailing)
-            if (timeout == -1 || timeout > 16) timeout = 16;
-#endif  // SFTE_CURSOR_TRAIL
-
-#if SFTE_CURSOR_BLINK
-        uint64_t now = _sfte_time_ms();
-        if (ctx->term.blink_enabled) {
-            int time_to_next = (int)(ctx->term.next_blink_ms - now);
-            if (time_to_next < 0) time_to_next = 0;
-
-            if (timeout == -1 || time_to_next < timeout) timeout = time_to_next;
-        }
-#endif  // SFTE_CURSOR_BLINK
-
-        if (app->needs_render) timeout = 0;
-
-        if (poll(fds, _SFTE_ARRAY_LEN(fds), timeout /* default infinite timeout */) == -1) break;
-
-#if SFTE_CURSOR_BLINK
-        if (ctx->term.blink_enabled) {
-            now = _sfte_time_ms();
-            if (now >= ctx->term.next_blink_ms) {
-                ctx->term.blink_visible = !ctx->term.blink_visible;
-                ctx->term.next_blink_ms = now + SFTE_CURSOR_BLINK_RATE;
-                int vis_cx = ctx->term.cursor_x >= ctx->term.cols ? ctx->term.cols - 1
-                                                                  : ctx->term.cursor_x;
-                ctx->term.cells[_SFTE_IDX(ctx, vis_cx, ctx->term.cursor_y)].dirty = 1;
-                app->needs_render = 1;
-            }
-        }
-#endif  // SFTE_CURSOR_BLINK
-
-        if (fds[0].revents & (POLLIN | POLLERR | POLLHUP))
-            if (wl_display_dispatch(app->display) == -1) app->running = 0;
-
-        if (fds[1].revents & (POLLIN | POLLERR | POLLHUP)) {
-            uint8_t buf[SFTE_PTY_BUF_SIZE];
-            ssize_t n = read(app->pty_fd, buf, SFTE_PTY_BUF_SIZE);
-
-            if (n > 0) {
-                sfte_parse(app->ctx, buf, n);
-                app->needs_render = 1;
-            } else
-                app->running = 0;
-        }
-
-        if (fds[2].revents & POLLIN) {
-            uint64_t expirations;
-            if (read(app->repeat_timer_fd, &expirations, sizeof(expirations)) == 0 ||
-                app->repeating_key == 0)
-                continue;
-            // simulate a key press to get autorepeat
-            _sfte_wayland_keyboard_key(app, app->keyboard, 0, 0, app->repeating_key,
-                                       WL_KEYBOARD_KEY_STATE_PRESSED);
-        }
-
-#if SFTE_CURSOR_TRAIL
-        if (ctx->term.is_trailing) {
-            int vis_cx = ctx->term.cursor_x >= ctx->term.cols ? ctx->term.cols - 1
-                                                              : ctx->term.cursor_x;
-            float target_rx = vis_cx * ctx->font.cell_width;
-            float target_ry = ctx->term.cursor_y * ctx->font.cell_height;
-
-#if !SFTE_CURSOR_BLINK
-            uint64_t
-#endif  // !SFTE_CURSOR_BLINK
-                now = _sfte_time_ms();
-            if (ctx->term.last_trail_update_ms == 0) ctx->term.last_trail_update_ms = now;
-            float dt_ms = (float)(now - ctx->term.last_trail_update_ms);
-            ctx->term.last_trail_update_ms = now;
-
-            float tx = target_rx - ctx->term.tail_rx;
-            float ty = target_ry - ctx->term.tail_ry;
-
-            if (tx * tx + ty * ty <= 0.5f) {
-                ctx->term.is_trailing = 0;
-                ctx->term.tail_rx = target_rx;
-                ctx->term.tail_ry = target_ry;
-                ctx->term.last_trail_update_ms = 0;
-            } else {
-                float decay = dt_ms * SFTE_CURSOR_TRAIL_DECAY;
-                if (decay > 1.0f) decay = 1.0f;
-
-                ctx->term.tail_rx += tx * decay;
-                ctx->term.tail_ry += ty * decay;
-            }
-            app->needs_render = 1;
-        }
-#endif  // SFTE_CURSOR_TRAIL
-
-        if (app->needs_render) {
-            sfte_damage_rect dmg = {0};
-
-            uint32_t *target_pxs = app->shm_data;
-#if SFTE_DOUBLE_BUFFER
-            target_pxs = app->back_buffer;
-#endif  // SFTE_DOUBLE_BUFFER
-
-            sfte_render(app->ctx, target_pxs, app->width, app->height, &dmg);
-
-            if (dmg.w > 0 && dmg.h > 0) {
-#if SFTE_DOUBLE_BUFFER
-                for (int y = dmg.y; y < dmg.y + dmg.h; ++y)
-                    memcpy(&app->shm_data[y * app->width + dmg.x],
-                           &app->back_buffer[y * app->width + dmg.x], dmg.w * sizeof(uint32_t));
-#endif  // SFTE_DOUBLE_BUFFER
-
-                wl_surface_damage_buffer(app->surface, dmg.x, dmg.y, dmg.w, dmg.h);
-                wl_surface_attach(app->surface, app->buffer, 0, 0);
-                wl_surface_commit(app->surface);
-            }
-
-            app->needs_render = 0;
-        }
-    }
-}
-#endif  // SFTE_WAYLAND
-// =================================================================================================
-// >>reflow
-// =================================================================================================
-#if SFTE_REFLOW
-static void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell c, int is_cursor) {
-#if SFTE_WIDE_CHARS
-    // if we're pushing a wide char and we're at last column, wrap early
-    if ((c.attr & ATTR_WIDE) && st->tc == st->new_cols - 1) {
-        sfte_cell space = c;
-        space.rune = ' ';
-        space.fg = 0xFFFFFF;
-        space.bg = SFTE_BG_COLOR;
-        space.attr = 0;
-        space.wrapped = 1;
-        st->temp_rows[st->tr * st->new_cols + st->tc] = space;
-        st->tc = 0;
-        st->tr++;
-    }
-#endif  // SFTE_WIDE_CHARS
-
-    if (st->tc == st->new_cols) {
-        st->temp_rows[st->tr * st->new_cols + st->new_cols - 1].wrapped = 1;
-        st->tc = 0;
-        st->tr++;
-    }
-
-    if (is_cursor) {
-        st->new_cx = st->tc;
-        st->new_cy = st->tr;
-    }
-
-    c.wrapped = 0;
-    st->temp_rows[st->tr * st->new_cols + st->tc] = c;
-    st->tc++;
-}
-
-static void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old,
-                                          sfte_reflow_state *st) {
-#if SFTE_SCROLLBACK_CAP
-    for (int i = 0; i < ctx->term.sb_len; ++i) {
-        int ring_idx = (ctx->term.sb_head - ctx->term.sb_len + i + ctx->term.sb_cap) %
-                       ctx->term.sb_cap;
-        sfte_cell *row = &ctx->term.scrollback[ring_idx * ctx->term.cols];
-        int is_wrapped = row[ctx->term.cols - 1].wrapped;
-
-        int len = ctx->term.cols;
-        if (!is_wrapped)
-            while (len > 0 && (row[len - 1].rune == ' ' || row[len - 1].rune == 0) &&
-                   row[len - 1].bg == SFTE_BG_COLOR)
-                len--;
-
-        for (int c = 0; c < len; ++c) _sfte_reflow_push(st, row[c], 0);
-        if (!is_wrapped) {
-            st->tc = 0;
-            st->tr++;
-        }
-    }
-#endif  // SFTE_SCROLLBACK_CAP
-
-    // reflow live grid
-    st->is_live = 1;
-    for (int r = 0; r < ctx->term.rows; ++r) {
-        sfte_cell *row = &main_old[r * ctx->term.cols];
-        int is_wrapped = row[ctx->term.cols - 1].wrapped;
-
-        int len = ctx->term.cols;
-        if (!is_wrapped) {
-            while (len > 0 && (row[len - 1].rune == ' ' || row[len - 1].rune == 0) &&
-                   row[len - 1].bg == SFTE_BG_COLOR) {
-                if (r == st->target_old_cy && len - 1 == st->target_old_cx) break;
-                len--;
-            }
-            if (r == st->target_old_cy && len <= st->target_old_cx) len = st->target_old_cx + 1;
-        }
-
-        for (int c = 0; c < len; ++c) {
-            int is_cursor = (r == st->target_old_cy && c == st->target_old_cx);
-            _sfte_reflow_push(st, row[c], is_cursor);
-        }
-
-        if (r == st->target_old_cy && st->target_old_cx >= len) {
-            if (st->tc == st->new_cols) {
-                st->temp_rows[st->tr * st->new_cols + st->new_cols - 1].wrapped = 1;
-                st->tc = 0;
-                st->tr++;
-            }
-            st->new_cx = st->tc;
-            st->new_cy = st->tr;
-        }
-
-        if (!is_wrapped) {
-            st->tc = 0;
-            st->tr++;
-        }
-    }
-}
-
-// =================================================================================================
-// >>grid
-// =================================================================================================
-static inline int _sfte_grid_span(int px_len, int px_off, int cell_px) {
-    return (px_len + px_off + cell_px - 1) / cell_px;
-}
-
-static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt) {
-    for (int i = 0; i < cnt; ++i) {
-        ctx->term.cells[start_idx + i].rune = ' ';
-        ctx->term.cells[start_idx + i].fg = ctx->term.cur_fg;
-        ctx->term.cells[start_idx + i].bg = ctx->term.cur_bg;
-        ctx->term.cells[start_idx + i].attr = 0;
-#if SFTE_EXT_UNDERLINES
-        ctx->term.cells[start_idx + i].ul_style = 0;
-#endif  // SFTE_EXT_UNDERLINES
-#if SFTE_COLOR_UNDERLINE
-        ctx->term.cells[start_idx + i].ul_color = 0xFFFFFFFF;
-#endif  // SFTE_COLOR_UNDERLINE
-        ctx->term.cells[start_idx + i].dirty = 1;
-#if SFTE_REFLOW
-        ctx->term.cells[start_idx + i].wrapped = 0;
-#endif  // SFTE_REFLOW
-#if SFTE_HYPERLINKS
-        ctx->term.cells[start_idx + i].link_idx = 0;
-#endif  // SFTE_HYPERLINKS
-
-#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
-        // erase overlapping sixel img placements
-        for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
-            sfte_img_placement *p = &ctx->term.img_placements[i];
-            if (!p->is_sixel) continue;
-
-            sfte_img *img = NULL;
-            for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
-                if (ctx->term.img_pool[j].id == p->img_id) {
-                    img = &ctx->term.img_pool[j];
-                    break;
-                }
-
-            int cols = _sfte_grid_span(img->width, p->x_off, ctx->font.cell_width);
-            int rows = _sfte_grid_span(img->height, p->y_off, ctx->font.cell_height);
-
-            // check if 2D image bbox overlaps the 1D cleared range
-            int overlap = 0;
-            for (int r = p->start_row; r < p->start_row + rows && !overlap; ++r)
-                for (int c = p->start_col; c < p->start_col + cols; ++c) {
-                    int cell_idx = r * ctx->term.cols + c;
-                    if (cell_idx >= start_idx && cell_idx < start_idx + cnt) {
-                        overlap = 1;
-                        break;
-                    }
-                }
-
-            if (overlap) {
-                if (img) img->ref_cnt--;
-                ctx->term.img_placements[i--] = ctx->term
-                                                    .img_placements[--ctx->term.img_placements_len];
-            }
-        }
-
-        // free memory for imgs with no placements
-        // only auto-free sixel images, kitty images require explicit a=d commands.
-        for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i) {
-            if (ctx->term.img_pool[i].ref_cnt || !ctx->term.img_pool[i].is_sixel) continue;
-            if (ctx->term.img_pool[i].pxs) SFTE_FREE(ctx->term.img_pool[i].pxs);
-            ctx->term.img_pool[i--] = ctx->term.img_pool[--ctx->term.img_pool_len];
-        }
-#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
-    }
-}
-
-static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
-    int top = ctx->term.scroll_top;
-    int bot = ctx->term.scroll_bottom;
-    int height = bot - top + 1;
-    int cols = ctx->term.cols;
-
-#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
-    for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
-        sfte_img_placement *p = &ctx->term.img_placements[i];
-        if (p->alt_screen != ctx->term.alt_active) continue;
-        // scroll the image if its in active region, or its in the scrollback buffer and we're
-        // pushing new lines into scrollback.
-        if ((p->start_row >= top && p->start_row <= bot + 1) || (top == 0 && p->start_row < 0))
-            p->start_row -= lines;
-
-        sfte_img *img = NULL;
-        for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
-            if (ctx->term.img_pool[j].id == p->img_id) {
-                img = &ctx->term.img_pool[j];
-                break;
-            }
-        // if it scrolled out of visible area, delete it
-        int rows = _sfte_grid_span(img->height, p->y_off, ctx->font.cell_height);
-        if (p->start_row + rows <= -SFTE_SCROLLBACK_CAP) {
-            img->ref_cnt--;
-            ctx->term.img_placements[i--] = ctx->term
-                                                .img_placements[--ctx->term.img_placements_len];
-        }
-    }
-#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
-
-    if (lines > 0) {  // scroll up
-        if (lines > height) lines = height;
-
-#if SFTE_SCROLLBACK_CAP
-        if (top == 0
-#if SFTE_ALT_SCREEN
-            && !ctx->term.alt_active
-#endif  // SFTE_ALT_SCREEN
-        ) {
-            for (int i = 0; i < lines; ++i) {
-                int ring_idx = ctx->term.sb_head * cols;
-                int screen_idx = i * cols;
-                memcpy(&ctx->term.scrollback[ring_idx], &ctx->term.cells[screen_idx],
-                       cols * sizeof(sfte_cell));
-
-                ctx->term.sb_head = (ctx->term.sb_head + 1) % ctx->term.sb_cap;
-                if (ctx->term.sb_len < ctx->term.sb_cap) ctx->term.sb_len++;
-            }
-        }
-#endif  // SFTE_SCROLLBACK_CAP
-
-        int move_cnt = height - lines;
-        if (move_cnt > 0)
-            memmove(&ctx->term.cells[top * cols], &ctx->term.cells[(top + lines) * cols],
-                    move_cnt * cols * sizeof(sfte_cell));
-
-        int start_idx = (bot - lines + 1) * cols;
-        _sfte_grid_clear_cells(ctx, start_idx, lines * cols);  // clear lines at bot
-    } else if (lines < 0) {                                    // scroll down
-        lines = -lines;
-        if (lines > height) lines = height;
-
-        int move_cnt = height - lines;
-        if (move_cnt > 0)
-            memmove(&ctx->term.cells[(top + lines) * cols], &ctx->term.cells[top * cols],
-                    move_cnt * cols * sizeof(sfte_cell));
-
-        int start_idx = top * cols;
-        _sfte_grid_clear_cells(ctx, start_idx, lines * cols);
-    }
-
-    _sfte_dirty_range(ctx, top * cols, height * cols);
-}
-
-static inline void _sfte_grid_check_wrap(sfte_ctx *ctx) {
-    if (ctx->term.cursor_x >= ctx->term.cols) {
-        if (ctx->term.auto_wrap) {
-#if SFTE_REFLOW
-            ctx->term.cells[_SFTE_IDX(ctx, ctx->term.cols - 1, ctx->term.cursor_y)].wrapped = 1;
-#endif  // SFTE_REFLOW
-            ctx->term.cursor_x = 0;
-            if (ctx->term.cursor_y == ctx->term.scroll_bottom) {
-                uint32_t saved_bg = ctx->term.cur_bg;
-                ctx->term.cur_bg = SFTE_BG_COLOR;
-                _sfte_grid_scroll(ctx, 1);
-                ctx->term.cur_bg = saved_bg;
-            } else if (ctx->term.cursor_y < ctx->term.rows - 1)
-                ctx->term.cursor_y++;
-        } else
-            ctx->term.cursor_x = ctx->term.cols - 1;
-    }
-}
-
-static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
-    if (new_cols < 1 || new_rows < 1) return;
-#if SFTE_ALT_SCREEN
-    sfte_cell *main_old = ctx->term.alt_active ? ctx->term.alt_cells : ctx->term.cells;
-    sfte_cell *alt_old = ctx->term.alt_active ? ctx->term.cells : NULL;
-
-    int target_cx = ctx->term.alt_active ? ctx->term.saved_x[0] : ctx->term.cursor_x;
-    int target_cy = ctx->term.alt_active ? ctx->term.saved_y[0] : ctx->term.cursor_y;
-#else
-    sfte_cell *main_old = ctx->term.cells;
-    sfte_cell *alt_old = NULL;
-
-    int target_cx = ctx->term.cursor_x;
-    int target_cy = ctx->term.cursor_y;
-#endif  // !SFTE_ALT_SCREEN
-
-    int max_temp_rows = (
-#if SFTE_SCROLLBACK_CAP
-                            ctx->term.sb_len +
-#endif  // SFTE_SCROLLBACK_CAP
-                            ctx->term.rows) *
-                        (ctx->term.cols / new_cols + 2);
-    if (max_temp_rows < new_rows) max_temp_rows = new_rows;
-    sfte_cell *temp_rows = (sfte_cell *)SFTE_CALLOC(max_temp_rows * new_cols, sizeof(sfte_cell));
-    SFTE_ASSERT(temp_rows, "failed to allocate temporary row data");
-
-    sfte_reflow_state st = {.temp_rows = temp_rows,
-                            .new_cols = new_cols,
-                            .tr = 0,
-                            .tc = 0,
-                            .new_cx = 0,
-                            .new_cy = 0,
-                            .target_old_cx = target_cx,
-                            .target_old_cy = target_cy,
-                            .is_live = 0};
-
-    _sfte_reflow_grid_into_linear(ctx, main_old, &st);
-
-    int total_lines = st.tr + (st.tc > 0 ? 1 : 0);
-
-    // map into new layout arrays
-    sfte_cell *new_main = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
-    SFTE_ASSERT(new_main, "failed to allocate resized terminal grid");
-
-    int screen_top = st.new_cy - target_cy;
-    if (screen_top < 0) screen_top = 0;
-
-    if (st.new_cy >= screen_top + new_rows) screen_top = st.new_cy - new_rows + 1;
-
-    if (screen_top + new_rows > total_lines) {
-        screen_top = total_lines - new_rows;
-        if (screen_top < 0) screen_top = 0;
-    }
-
-#if SFTE_SCROLLBACK_CAP
-    sfte_cell *new_sb = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
-    SFTE_ASSERT(new_sb, "failed to allocate resized scrollback");
-
-    int sb_lines = screen_top;
-    if (sb_lines > ctx->term.sb_cap) sb_lines = ctx->term.sb_cap;
-    int sb_start = screen_top - sb_lines;
-
-    for (int i = 0; i < sb_lines; ++i)
-        memcpy(&new_sb[i * new_cols], &temp_rows[(sb_start + i) * new_cols],
-               new_cols * sizeof(sfte_cell));
-#endif  // SFTE_SCROLLBACK_CAP
-
-    int copy_lines = total_lines - screen_top;
-    if (copy_lines > new_rows) copy_lines = new_rows;
-    for (int i = 0; i < copy_lines; ++i)
-        memcpy(&new_main[i * new_cols], &temp_rows[(screen_top + i) * new_cols],
-               new_cols * sizeof(sfte_cell));
-
-// anchor cursors
-#if SFTE_ALT_SCREEN
-    if (ctx->term.alt_active) {
-        ctx->term.saved_x[0] = st.new_cx;
-        ctx->term.saved_y[0] = _SFTE_CLAMP(st.new_cy - screen_top, 0, new_rows - 1);
-    } else {
-#endif  // SFTE_ALT_SCREEN
-        ctx->term.cursor_x = st.new_cx;
-        ctx->term.cursor_y = _SFTE_CLAMP(st.new_cy - screen_top, 0, new_rows - 1);
-#if SFTE_ALT_SCREEN
-    }
-#endif  // SFTE_ALT_SCREEN
-
-#if SFTE_ALT_SCREEN
-    // hard copy alt grid
-    // NOTE: alt grid gets no reflow, it destroys visuals of alt-screen based interfaces
-    sfte_cell *new_alt = NULL;
-    if (alt_old) {
-        new_alt = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
-        SFTE_ASSERT(new_alt, "failed to allocate resized alt grid");
-
-        int min_cols = new_cols < ctx->term.cols ? new_cols : ctx->term.cols;
-        int min_rows = new_rows < ctx->term.rows ? new_rows : ctx->term.rows;
-        for (int r = 0; r < min_rows; ++r)
-            for (int c = 0; c < min_cols; ++c)
-                new_alt[r * new_cols + c] = alt_old[r * ctx->term.cols + c];
-
-        if (ctx->term.cursor_x >= new_cols) ctx->term.cursor_x = new_cols - 1;
-        if (ctx->term.cursor_y >= new_rows) ctx->term.cursor_y = new_rows - 1;
-    }
-#endif  // SFTE_ALT_SCREEN
-
-    SFTE_FREE(ctx->term.cells);
-    SFTE_FREE(temp_rows);
-
-#if SFTE_ALT_SCREEN
-    if (ctx->term.alt_cells) SFTE_FREE(ctx->term.alt_cells);
-    ctx->term.cells = ctx->term.alt_active ? new_alt : new_main;
-    ctx->term.alt_cells = ctx->term.alt_active ? new_main : NULL;
-#else
-    ctx->term.cells = new_main;
-#endif  // !SFTE_ALT_SCREEN
-
-#if SFTE_SCROLLBACK_CAP
-    if (ctx->term.scrollback) SFTE_FREE(ctx->term.scrollback);
-    ctx->term.scrollback = new_sb;
-    ctx->term.sb_head = sb_lines % ctx->term.sb_cap;
-    ctx->term.sb_offset = 0;
-    ctx->term.sb_len = sb_lines;
-#endif  // SFTE_SCROLLBACK_CAP
-
-    int old_cols = ctx->term.cols;
-
-    ctx->term.cols = new_cols;
-    ctx->term.rows = new_rows;
-    ctx->term.scroll_top = 0;
-    ctx->term.scroll_bottom = new_rows - 1;
-
-    _sfte_dirty_range(ctx, 0, new_cols * new_rows);
-
-    uint8_t *new_tabs = (uint8_t *)SFTE_MALLOC(new_cols);
-    SFTE_ASSERT(new_tabs, "failed to allocate new tab stops");
-    for (int i = 0; i < new_cols; ++i)
-        if (i < old_cols)
-            new_tabs[i] = ctx->term.tab_stops[i];
-        else
-            new_tabs[i] = (i % SFTE_TAB_WIDTH == 0);
-    SFTE_FREE(ctx->term.tab_stops);
-    ctx->term.tab_stops = new_tabs;
-
-    _SFTE_INFO(ctx, TERM_RESIZE, new_cols, new_rows);
-}
-#else  // !SFTE_REFLOW
-static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
-    sfte_cell *new_cells = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
-    SFTE_ASSERT(new_cells, "failed to allocate resized terminal grid");
-
-    sfte_cell *new_alt_cells = NULL;
-#if SFTE_ALT_SCREEN
-    if (ctx->term.alt_cells) {
-        new_alt_cells = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
-        SFTE_ASSERT(new_alt_cells, "failed to allocate resized alt grid");
-    }
-#endif  // SFTE_ALT_SCREEN
-
-#if SFTE_SCROLLBACK_CAP
-    if (ctx->term.scrollback) SFTE_FREE(ctx->term.scrollback);
-    ctx->term.scrollback = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
-    ctx->term.sb_head = 0;
-    ctx->term.sb_offset = 0;
-    ctx->term.sb_len = 0;
-#endif  // SFTE_SCROLLBACK_CAP
-
-    uint8_t *new_tabs = (uint8_t *)SFTE_MALLOC(new_cols);
-    SFTE_ASSERT(new_tabs, "failed to allocate new tab stops");
-    for (int i = 0; i < new_cols; ++i)
-        if (i < ctx->term.cols)
-            new_tabs[i] = ctx->term.tab_stops[i];
-        else
-            new_tabs[i] = (i % SFTE_TAB_WIDTH == 0);
-    SFTE_FREE(ctx->term.tab_stops);
-    ctx->term.tab_stops = new_tabs;
-
-    int min_cols = new_cols < ctx->term.cols ? new_cols : ctx->term.cols;
-    int min_rows = new_rows < ctx->term.rows ? new_rows : ctx->term.rows;
-
-    for (int r = 0; r < min_rows; ++r) {
-        for (int c = 0; c < min_cols; ++c) {
-            new_cells[r * new_cols + c] = ctx->term.cells[r * ctx->term.cols + c];
-#if SFTE_ALT_SCREEN
-            if (new_alt_cells)
-                new_alt_cells[r * new_cols + c] = ctx->term.alt_cells[r * ctx->term.cols + c];
-#endif  // SFTE_ALT_SCREEN
-        }
-    }
-
-    SFTE_FREE(ctx->term.cells);
-    ctx->term.cells = new_cells;
-#if SFTE_ALT_SCREEN
-    if (ctx->term.alt_cells) {
-        SFTE_FREE(ctx->term.alt_cells);
-        ctx->term.alt_cells = new_alt_cells;
-    }
-#endif  // SFTE_ALT_SCREEN
-
-    ctx->term.cols = new_cols;
-    ctx->term.rows = new_rows;
-
-    ctx->term.scroll_top = 0;
-    ctx->term.scroll_bottom = new_rows - 1;
-
-    if (ctx->term.cursor_x >= new_cols) ctx->term.cursor_x = new_cols - 1;
-    if (ctx->term.cursor_y >= new_rows) ctx->term.cursor_y = new_rows - 1;
-
-    _sfte_dirty_range(ctx, 0, new_cols * new_rows);
-
-    _SFTE_INFO(ctx, TERM_RESIZE, new_cols, new_rows);
-}
-#endif  // !SFTE_REFLOW
-
-// =================================================================================================
 // >>csi
 // =================================================================================================
 #if SFTE_TRUE_COLOR
@@ -3925,14 +2745,14 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         if (n > rem) n = rem;
 
         int move_cnt = rem - n;
-        int base_idx = _SFTE_IDX(ctx, 0, ctx->term.cursor_y);
+        int base_idx = _SFTE_GRID_IDX(ctx, 0, ctx->term.cursor_y);
         if (move_cnt > 0)
             memmove(&ctx->term.cells[base_idx + cx + n], &ctx->term.cells[base_idx + cx],
                     move_cnt * sizeof(sfte_cell));
 
         int start_idx = base_idx + cx;
         _sfte_grid_clear_cells(ctx, start_idx, n);
-        _sfte_dirty_range(ctx, base_idx + cx, rem);
+        _sfte_grid_dirty_range(ctx, base_idx + cx, rem);
         break;
     }
     case 'A':  // CUU / Cursor Up
@@ -4085,10 +2905,10 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         }
 
         if (mode == 0) {
-            int start_idx = _SFTE_IDX(ctx, cx, ctx->term.cursor_y);
+            int start_idx = _SFTE_GRID_IDX(ctx, cx, ctx->term.cursor_y);
             _sfte_grid_clear_cells(ctx, start_idx, (ctx->term.rows * ctx->term.cols) - start_idx);
         } else if (mode == 1) {
-            int end_idx = _SFTE_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y) + 1;
+            int end_idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y) + 1;
             _sfte_grid_clear_cells(ctx, 0, end_idx);
         } else if (mode == 3) {
 #if SFTE_SCROLLBACK_CAP && SFTE_SCROLLBACK_ALLOW_CLEAR
@@ -4109,12 +2929,12 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
           Cursor position does not change.
          */
         if (p[0] == 0)
-            _sfte_grid_clear_cells(ctx, _SFTE_IDX(ctx, cx, ctx->term.cursor_y),
+            _sfte_grid_clear_cells(ctx, _SFTE_GRID_IDX(ctx, cx, ctx->term.cursor_y),
                                    ctx->term.cols - cx);
         else if (p[0] == 1)
-            _sfte_grid_clear_cells(ctx, _SFTE_IDX(ctx, 0, ctx->term.cursor_y), cx + 1);
+            _sfte_grid_clear_cells(ctx, _SFTE_GRID_IDX(ctx, 0, ctx->term.cursor_y), cx + 1);
         else if (p[0] == 2)
-            _sfte_grid_clear_cells(ctx, _SFTE_IDX(ctx, 0, ctx->term.cursor_y), ctx->term.cols);
+            _sfte_grid_clear_cells(ctx, _SFTE_GRID_IDX(ctx, 0, ctx->term.cursor_y), ctx->term.cols);
         break;
     }
     case 'L':  // IL / Insert Line
@@ -4140,7 +2960,7 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
 
         int start_idx = top * cols;
         _sfte_grid_clear_cells(ctx, start_idx, n * cols);
-        _sfte_dirty_range(ctx, top * cols, height * cols);
+        _sfte_grid_dirty_range(ctx, top * cols, height * cols);
         break;
     }
     case 'M':  // DL / Delete Line
@@ -4166,7 +2986,7 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
 
         int start_idx = (bot - n + 1) * cols;
         _sfte_grid_clear_cells(ctx, start_idx, n * cols);
-        _sfte_dirty_range(ctx, top * cols, height * cols);
+        _sfte_grid_dirty_range(ctx, top * cols, height * cols);
         break;
     }
     case 'P':  // DCH / Delete Character
@@ -4181,14 +3001,14 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         if (n > rem) n = rem;
 
         int move_cnt = rem - n;
-        int base_idx = _SFTE_IDX(ctx, 0, ctx->term.cursor_y);
+        int base_idx = _SFTE_GRID_IDX(ctx, 0, ctx->term.cursor_y);
         if (move_cnt > 0)
             memmove(&ctx->term.cells[base_idx + cx], &ctx->term.cells[base_idx + cx + n],
                     move_cnt * sizeof(sfte_cell));
 
         int start_idx = base_idx + ctx->term.cols - n;
         _sfte_grid_clear_cells(ctx, start_idx, n);
-        _sfte_dirty_range(ctx, base_idx + cx, rem);
+        _sfte_grid_dirty_range(ctx, base_idx + cx, rem);
         break;
     }
     case 'S':  // SU / Scroll Up
@@ -4218,7 +3038,7 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         int rem = ctx->term.cols - cx;
         if (n > rem) n = rem;
 
-        _sfte_grid_clear_cells(ctx, _SFTE_IDX(ctx, cx, ctx->term.cursor_y), n);
+        _sfte_grid_clear_cells(ctx, _SFTE_GRID_IDX(ctx, cx, ctx->term.cursor_y), n);
         break;
     }
     case 'c':  // DA / Device Attributes
@@ -4304,7 +3124,7 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         for (int i = 0; i < cnt; ++i) {
             if (p[i] == 25) {
                 ctx->term.hide_cursor = 0;
-                ctx->term.cells[_SFTE_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
+                ctx->term.cells[_SFTE_GRID_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
             } else if (p[i] == 2004)
                 ctx->term.bracketed_paste = 1;
             else if (p[i] == 7)
@@ -4351,7 +3171,7 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
                     ctx->term.cursor_x = 0;
                     ctx->term.cursor_y = 0;
                 } else if (p[i] == 1047) {
-                    _sfte_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
+                    _sfte_grid_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
                 }
             }
 #if SFTE_MOUSE
@@ -4374,7 +3194,7 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         for (int i = 0; i < cnt; ++i) {
             if (p[i] == 25) {
                 ctx->term.hide_cursor = 1;
-                ctx->term.cells[_SFTE_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
+                ctx->term.cells[_SFTE_GRID_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
             } else if (p[i] == 2004)
                 ctx->term.bracketed_paste = 0;
             else if (p[i] == 7)
@@ -4396,7 +3216,7 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
                         sfte_cell *tmp = ctx->term.cells;
                         ctx->term.cells = ctx->term.alt_cells;
                         ctx->term.alt_cells = tmp;
-                        _sfte_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
+                        _sfte_grid_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
                     }
 
 #if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
@@ -4442,7 +3262,7 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
                     ctx->term.cur_fg = ctx->term.saved_fg[s_idx];
                     ctx->term.cur_bg = ctx->term.saved_bg[s_idx];
                     ctx->term.cur_attr = ctx->term.saved_attr[s_idx];
-                    ctx->term.cells[_SFTE_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y)]
+                    ctx->term.cells[_SFTE_GRID_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y)]
                         .dirty = 1;
 
 #if SFTE_CURSOR_TRAIL
@@ -4591,7 +3411,7 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         ctx->term.cur_attr = 0;
         ctx->term.hide_cursor = 0;
 
-        ctx->term.cells[_SFTE_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
+        ctx->term.cells[_SFTE_GRID_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
         break;
     }
     case 'q':  // DECSCUSR / Set Cursor Style
@@ -4624,7 +3444,7 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         }
 #endif  // SFTE_CURSOR_DYNAMIC
 
-        ctx->term.cells[_SFTE_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
+        ctx->term.cells[_SFTE_GRID_IDX(ctx, cx, ctx->term.cursor_y)].dirty = 1;
         break;
     }
     case 'r':  // DECSTBM / Set Top and Bottom Margins
@@ -4730,146 +3550,6 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         break;
     }
     default: _SFTE_WARN(ctx, UNHANDLED_CSI, cmd, cnt); break;
-    }
-}
-
-// =================================================================================================
-// >>utf8
-// =================================================================================================
-#if SFTE_WIDE_CHARS
-#include <wchar.h>
-#define _SFTE_CHAR_WIDTH(rune) wcwidth(rune)
-#else
-#define _SFTE_CHAR_WIDTH(rune) 1
-#endif
-
-// returns 1 if a full UTF-8 rune has been successfully decoded
-static int _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b) {
-    if (ctx->term.utf8_bytes_left > 0) {
-        if ((b & 0xC0) == 0x80) {  // continuation byte
-            ctx->term.utf8_rune = (ctx->term.utf8_rune << 6) | (b & 0x3F);
-            ctx->term.utf8_bytes_left--;
-            if (ctx->term.utf8_bytes_left == 0) return 1;
-            return 0;
-        } else
-            ctx->term.utf8_bytes_left = 0;  // invalid sequence, abort
-    }
-
-    // start of a new rune
-    if ((b & 0x80) == 0) {
-        ctx->term.utf8_rune = b;
-        ctx->term.utf8_bytes_left = 0;
-        return 1;
-    } else if ((b & 0xE0) == 0xC0) {
-        ctx->term.utf8_rune = b & 0x1F;
-        ctx->term.utf8_bytes_left = 1;
-    } else if ((b & 0xF0) == 0xE0) {
-        ctx->term.utf8_rune = b & 0x0F;
-        ctx->term.utf8_bytes_left = 2;
-    } else if ((b & 0xF8) == 0xF0) {
-        ctx->term.utf8_rune = b & 0x07;
-        ctx->term.utf8_bytes_left = 3;
-    }
-
-    return 0;
-}
-
-static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
-    int w = _SFTE_CHAR_WIDTH(rune);
-    if (w < 0) w = 1;
-
-    if (w == 0) {
-#if SFTE_WIDE_CHARS
-        if (ctx->term.cursor_x > 0) {
-            int prev_idx = _SFTE_IDX(ctx, ctx->term.cursor_x - 1, ctx->term.cursor_y);
-            sfte_cell *prev = &ctx->term.cells[prev_idx];
-
-            if (prev->attr & ATTR_DUMMY && ctx->term.cursor_x > 1) {
-                prev_idx = _SFTE_IDX(ctx, ctx->term.cursor_x - 2, ctx->term.cursor_y);
-                prev = &ctx->term.cells[prev_idx];
-            }
-
-            if (prev->num_combining < SFTE_MAX_COMBINING) {
-                prev->combining[prev->num_combining++] = rune;
-                prev->dirty = 1;
-            }
-        }
-#endif  // SFTE_WIDE_CHARS
-        return;
-    }
-
-    // evaluate line wrapping before drawing
-    // ensures chars placed in the final col enter a pending wrap state
-    // instead of immediately dropping to the next line
-    _sfte_grid_check_wrap(ctx);
-
-#if SFTE_WIDE_CHARS
-    if (w == 2) {
-        // wide char cannot be split across lines,
-        // if in last column, leave it blank and wrap early
-        if (ctx->term.cursor_x == ctx->term.cols - 1) {
-            int idx = _SFTE_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y);
-            ctx->term.cells[idx].rune = ' ';
-            ctx->term.cells[idx].fg = 0xFFFFFF;
-            ctx->term.cells[idx].bg = SFTE_BG_COLOR;
-            ctx->term.cells[idx].attr = 0;
-#if SFTE_HYPERLINKS
-            ctx->term.cells[idx].link_idx = ctx->term.cur_link_idx;
-#endif  // SFTE_HYPERLINKS
-            ctx->term.cells[idx].dirty = 1;
-            ctx->term.cursor_x++;
-            _sfte_grid_check_wrap(ctx);
-        }
-
-        if (ctx->term.cursor_x == ctx->term.cols - 1) return;
-
-        int idx = _SFTE_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y);
-        ctx->term.cells[idx].rune = rune;
-        ctx->term.cells[idx].fg = ctx->term.cur_fg;
-        ctx->term.cells[idx].bg = ctx->term.cur_bg;
-        ctx->term.cells[idx].attr = ctx->term.cur_attr | ATTR_WIDE;
-#if SFTE_HYPERLINKS
-        ctx->term.cells[idx].link_idx = ctx->term.cur_link_idx;
-#endif  // SFTE_HYPERLINKS
-#if SFTE_EXT_UNDERLINES
-        ctx->term.cells[idx].ul_style = ctx->term.cur_ul_style;
-#endif  // SFTE_EXT_UNDERLINES
-#if SFTE_COLOR_UNDERLINE
-        ctx->term.cells[idx].ul_color = ctx->term.cur_ul_color;
-#endif  // SFTE_COLOR_UNDERLINE
-        ctx->term.cells[idx].dirty = 1;
-
-        int dummy_idx = _SFTE_IDX(ctx, ctx->term.cursor_x + 1, ctx->term.cursor_y);
-        ctx->term.cells[dummy_idx].rune = ' ';
-        ctx->term.cells[dummy_idx].fg = ctx->term.cur_fg;
-        ctx->term.cells[dummy_idx].bg = ctx->term.cur_bg;
-        ctx->term.cells[dummy_idx].attr = ctx->term.cur_attr | ATTR_DUMMY;
-#if SFTE_HYPERLINKS
-        ctx->term.cells[dummy_idx].link_idx = ctx->term.cur_link_idx;
-#endif  // SFTE_HYPERLINKS
-        ctx->term.cells[dummy_idx].dirty = 1;
-
-        ctx->term.cursor_x += 2;
-    } else
-#endif  // SFTE_WIDE_CHARS
-    {
-        int idx = _SFTE_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y);
-        ctx->term.cells[idx].rune = rune;
-        ctx->term.cells[idx].fg = ctx->term.cur_fg;
-        ctx->term.cells[idx].bg = ctx->term.cur_bg;
-        ctx->term.cells[idx].attr = ctx->term.cur_attr;
-#if SFTE_HYPERLINKS
-        ctx->term.cells[idx].link_idx = ctx->term.cur_link_idx;
-#endif  // SFTE_HYPERLINKS
-#if SFTE_EXT_UNDERLINES
-        ctx->term.cells[idx].ul_style = ctx->term.cur_ul_style;
-#endif  // SFTE_EXT_UNDERLINES
-#if SFTE_COLOR_UNDERLINE
-        ctx->term.cells[idx].ul_color = ctx->term.cur_ul_color;
-#endif  // SFTE_COLOR_UNDERLINE
-        ctx->term.cells[idx].dirty = 1;
-
-        ctx->term.cursor_x++;
     }
 }
 // =================================================================================================
@@ -5261,7 +3941,1340 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
         }
     }
 }
+// =================================================================================================
+// >>font
+// =================================================================================================
+#ifndef SFTE_CUSTOM_FONT_BACKEND
+static inline void _sfte_stb_init(sfte_font_backend_info *info, const uint8_t *data) {
+    stbtt_InitFont(info, data, 0);
+}
 
+static inline float _sfte_stb_get_scale(sfte_font_backend_info *info, float px_hei) {
+    return stbtt_ScaleForPixelHeight(info, px_hei);
+}
+
+static inline void _sfte_stb_vmetrics(sfte_font_backend_info *info, int *ascent, int *descent,
+                                      int *linegap) {
+    stbtt_GetFontVMetrics(info, ascent, descent, linegap);
+}
+
+static inline int _sfte_stb_bounds(sfte_font_backend_info *info, uint32_t rune, float scale,
+                                   int *adv, int *x0, int *y0, int *x1, int *y1) {
+    int glyph_idx = stbtt_FindGlyphIndex(info, rune);
+    if (glyph_idx == 0) return 0;
+
+    int lsb;
+    stbtt_GetGlyphHMetrics(info, glyph_idx, adv, &lsb);
+    stbtt_GetGlyphBitmapBox(info, glyph_idx, scale, scale, x0, y0, x1, y1);
+
+    return glyph_idx;
+}
+
+static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, float scale,
+                                  uint8_t *atlas_ptr, int gw, int gh, int atlas_stride) {
+    stbtt_MakeGlyphBitmap(info, atlas_ptr, gw, gh, atlas_stride, scale, scale, glyph_idx);
+}
+#endif  // !SFTE_CUSTOM_FONT_BACKEND
+
+static sfte_font_cache *_sfte_font_get_cache(sfte_ctx *ctx, int style) {
+    if (style == SFTE_FONT_STYLE_REGULAR) return &ctx->font.regular;
+#ifdef SFTE_FONT_BOLD
+    if (style == SFTE_FONT_STYLE_BOLD) return &ctx->font.bold;
+#endif  // SFTE_FONT_BOLD
+#ifdef SFTE_FONT_ITALIC
+    if (style == SFTE_FONT_STYLE_ITALIC) return &ctx->font.italic;
+#endif  // SFTE_FONT_ITALIC
+#ifdef SFTE_FONT_BOLD_ITALIC
+    if (style == SFTE_FONT_STYLE_BOLD_ITALIC) return &ctx->font.bold_italic;
+#endif  // SFTE_FONT_BOLD_ITALIC
+    return NULL;
+}
+
+static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_ptr, uint32_t rune) {
+    sfte_font_cache *cache = *cache_ptr;
+
+    if (rune == 0) rune = ' ';
+
+    uint32_t h = rune;
+    h %= SFTE_FONT_GLYPH_CAP;
+
+    // hash map logic
+    for (int i = 0; i < SFTE_FONT_GLYPH_CAP; ++i) {
+        int idx = (h + i) % SFTE_FONT_GLYPH_CAP;
+
+        if (cache->glyphs[idx].rune == rune) return &cache->glyphs[idx];
+
+        if (cache->glyphs[idx].rune != 0) continue;  // cache miss, taken, continue
+
+        // fallback check
+        int font_idx = 0;
+        int glyph_idx = 0;
+
+        int advance_width = 0, x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+
+        // start in primary font [0]
+        // then, look through fallback fonts [1-SFTE_FONTS_MAX_COUNT]
+        for (int i = 0; i < cache->num_fonts; ++i) {
+            glyph_idx = SFTE_FONT_BOUNDS(&cache->info[i], rune, cache->scales[i], &advance_width,
+                                         &x0, &y0, &x1, &y1);
+            if (glyph_idx != 0) {
+                font_idx = i;
+                break;
+            }
+        }
+
+        // if glyph was not found and cache isn't regular, look in regular
+        // this is useful e.g. when a certain app tries to draw nerd symbols
+        // in bold/italic/bold italic instead of regular.
+        if (glyph_idx == 0 && cache != &ctx->font.regular) {
+            *cache_ptr = &ctx->font.regular;
+            return _sfte_font_get_glyph(ctx, cache_ptr, rune);
+        }
+
+        sfte_font_backend_info *info = &cache->info[font_idx];
+        float font_scale = cache->scales[font_idx];
+
+        // cache miss, free, take space
+        sfte_glyph *g = &cache->glyphs[idx];
+        g->rune = rune;
+        g->xadvance = (int)(advance_width * font_scale + 0.5f);
+
+        int glyph_width = x1 - x0;
+        int glyph_height = y1 - y0;
+
+        // wrap to next row if out of horizontal space
+        if (cache->atlas_x + glyph_width >= SFTE_FONT_ATLAS_SIZE) {
+            cache->atlas_x = 0;
+            cache->atlas_y += cache->atlas_row_h + 1;
+            cache->atlas_row_h = 0;
+        }
+
+        SFTE_ASSERT(cache->atlas_y + glyph_height < SFTE_FONT_ATLAS_SIZE, "glyph atlas full");
+
+        if (glyph_height > cache->atlas_row_h) cache->atlas_row_h = glyph_height;
+
+        g->x0 = cache->atlas_x;
+        g->y0 = cache->atlas_y;
+        g->x1 = g->x0 + glyph_width;
+        g->y1 = g->y0 + glyph_height;
+        g->xoff = x0;
+        g->yoff = y0;
+
+        if (glyph_width > 0 && glyph_height > 0) {
+            int byte_off = g->y0 * SFTE_FONT_ATLAS_SIZE + g->x0;
+            SFTE_FONT_BAKE(info, glyph_idx, font_scale, &cache->atlas_pxs[byte_off], glyph_width,
+                           glyph_height, SFTE_FONT_ATLAS_SIZE);
+        }
+
+        cache->atlas_x += glyph_width + 1;  // padding to prevent bleeding
+
+        return g;
+    }
+
+    return NULL;  // out of space
+}
+
+static void _sfte_font_reset_cache(sfte_ctx *ctx) {
+#define CLEAR_CACHE(type)                                                                          \
+    do {                                                                                           \
+        if (type.atlas_pxs)                                                                        \
+            memset(type.atlas_pxs, 0, SFTE_FONT_ATLAS_SIZE * SFTE_FONT_ATLAS_SIZE);                \
+        if (type.glyphs) memset(type.glyphs, 0, SFTE_FONT_GLYPH_CAP * sizeof(sfte_glyph));         \
+        type.atlas_x = 0;                                                                          \
+        type.atlas_y = 0;                                                                          \
+        type.atlas_row_h = 0;                                                                      \
+    } while (0)
+
+    CLEAR_CACHE(ctx->font.regular);
+#ifdef SFTE_FONT_BOLD
+    CLEAR_CACHE(ctx->font.bold);
+#endif  // SFTE_FONT_BOLD
+#ifdef SFTE_FONT_ITALIC
+    CLEAR_CACHE(ctx->font.italic);
+#endif  // SFTE_FONT_ITALIC
+#ifdef SFTE_FONT_BOLD_ITALIC
+    CLEAR_CACHE(ctx->font.bold_italic);
+#endif  // SFTE_FONT_BOLD_ITALIC
+
+#undef CLEAR_CACHE
+
+#define SET_SCALES(type)                                                                           \
+    for (int i = 0; i < type.num_fonts; ++i) {                                                     \
+        float tweak = _sfte_font_scales[i];                                                        \
+        if (tweak <= 0.0f) tweak = 1.0f;                                                           \
+        type.scales[i] = SFTE_FONT_GET_SCALE(&type.info[i], ctx->font.cur_size * tweak);           \
+    }
+
+    SET_SCALES(ctx->font.regular);
+#ifdef SFTE_FONT_BOLD
+    SET_SCALES(ctx->font.bold);
+#endif  // SFTE_FONT_BOLD
+#ifdef SFTE_FONT_ITALIC
+    SET_SCALES(ctx->font.italic);
+#endif  // SFTE_FONT_ITALIC
+#ifdef SFTE_FONT_BOLD_ITALIC
+    SET_SCALES(ctx->font.bold_italic);
+#endif  // SFTE_FONT_BOLD_ITALIC
+
+#undef SET_SCALES
+
+    int unscaled_ascent, unscaled_descent, unscaled_line_gap;
+    SFTE_FONT_VMETRICS(&ctx->font.regular.info[0], &unscaled_ascent, &unscaled_descent,
+                       &unscaled_line_gap);
+
+    float primary_scale = ctx->font.regular.scales[0];
+    ctx->font.ascent = (int)(unscaled_ascent * primary_scale + 0.5f);
+    ctx->font.descent = (int)(unscaled_descent * primary_scale -
+                              0.5f);  // descent is usually negative
+    ctx->font.line_gap = (int)(unscaled_line_gap * primary_scale + 0.5f);
+
+    ctx->font.cell_height = ctx->font.ascent - ctx->font.descent + ctx->font.line_gap;
+
+    // monospace grid using standard 'M' glyph
+    sfte_font_cache *dummy = &ctx->font.regular;
+    sfte_glyph *m = _sfte_font_get_glyph(ctx, &dummy, 'M');
+    ctx->font.cell_width = m->xadvance;
+}
+// =================================================================================================
+// >>render
+// =================================================================================================
+#if SFTE_CURSOR_DYNAMIC
+#define _SFTE_CUR_STYLE(ctx) (ctx->term.cursor_style)
+#else
+#define _SFTE_CUR_STYLE(ctx) (SFTE_CURSOR_STYLE)
+#endif  // !SFTE_CURSOR_DYNAMIC
+
+static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, uint8_t src_a) {
+    if (src_a == 0) return dst;                                    // no trail
+    if (src_a == 255) return (0xFF << 24) | (src_col & 0xFFFFFF);  // solid trail
+
+    // unpack dest
+    uint8_t da = (dst >> 24) & 0xFF;
+    uint8_t dr = (dst >> 16) & 0xFF;
+    uint8_t dg = (dst >> 8) & 0xFF;
+    uint8_t db = dst & 0xFF;
+
+    // unpack src
+    uint8_t sr = (src_col >> 16) & 0xFF;
+    uint8_t sg = (src_col >> 8) & 0xFF;
+    uint8_t sb = src_col & 0xFF;
+
+    uint8_t out_r = (sr * src_a + dr * (255 - src_a)) >> 8;
+    uint8_t out_g = (sg * src_a + dg * (255 - src_a)) >> 8;
+    uint8_t out_b = (sb * src_a + db * (255 - src_a)) >> 8;
+    uint8_t out_a = da + ((src_a * (255 - da)) >> 8);
+
+    return (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
+}
+
+static void _sfte_render_bg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, uint32_t bg) {
+    int cx = col * ctx->font.cell_width + SFTE_PAD_X;
+    int cy = row * ctx->font.cell_height + SFTE_PAD_Y;
+    uint32_t final_bg = (bg & 0x00FFFFFF) | (SFTE_BG_OPACITY << 24);
+
+    for (int y = 0; y < ctx->font.cell_height; ++y) {
+        for (int x = 0; x < ctx->font.cell_width; ++x) {
+            int px_idx = (cy + y) * ctx->width + (cx + x);
+            if (px_idx < ctx->width * ctx->height) px_buf[px_idx] = final_bg;
+        }
+    }
+}
+
+static void _sfte_render_fg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, uint32_t rune,
+                            uint32_t fg, sfte_font_cache *target_cache) {
+    if (rune == ' ') return;
+
+    sfte_font_cache *actual_cache = target_cache;
+    sfte_glyph *g = _sfte_font_get_glyph(ctx, &actual_cache, rune);
+    if (!g) return;
+
+    int cx = col * ctx->font.cell_width + SFTE_PAD_X;
+    int cy = row * ctx->font.cell_height + SFTE_PAD_Y;
+
+    int glyph_width = g->x1 - g->x0;
+    int glyph_height = g->y1 - g->y0;
+
+    int baseline = ctx->font.ascent;
+    int draw_x = cx + (int)g->xoff;
+    int draw_y = cy + baseline + (int)g->yoff;
+
+    uint8_t fg_r = (fg >> 16) & 0xFF, fg_g = (fg >> 8) & 0xFF, fg_b = fg & 0xFF;
+
+    for (int y = 0; y < glyph_height; ++y) {
+        for (int x = 0; x < glyph_width; ++x) {
+            int screen_x = draw_x + x;
+            int screen_y = draw_y + y;
+            if (screen_x < 0 || screen_x >= ctx->width || screen_y < 0 || screen_y >= ctx->height)
+                continue;
+
+            uint8_t alpha = actual_cache
+                                ->atlas_pxs[(g->y0 + y) * SFTE_FONT_ATLAS_SIZE + (g->x0 + x)];
+            if (alpha == 0) continue;
+
+            int px_idx = screen_y * ctx->width + screen_x;
+
+            if (alpha == 255)
+                px_buf[px_idx] = (0xFF << 24) | (fg & 0x00FFFFFF);
+            else {
+                uint32_t dst = px_buf[px_idx];
+                uint8_t bg_r = (dst >> 16) & 0xFF;
+                uint8_t bg_g = (dst >> 8) & 0xFF;
+                uint8_t bg_b = dst & 0xFF;
+
+                uint8_t col_r = (fg_r * alpha + bg_r * (255 - alpha)) >> 8;
+                uint8_t col_g = (fg_g * alpha + bg_g * (255 - alpha)) >> 8;
+                uint8_t col_b = (fg_b * alpha + bg_b * (255 - alpha)) >> 8;
+
+                px_buf[px_idx] = (SFTE_BG_OPACITY << 24) | (col_r << 16) | (col_g << 8) | col_b;
+            }
+        }
+    }
+}
+
+static void _sfte_render_decorations(sfte_ctx *ctx, uint32_t *px_buf, int c, int r,
+                                     sfte_cell *vcell, int is_cursor, int w, int h) {
+    uint16_t attr = vcell->attr;
+    uint32_t text_fg = vcell->fg;
+
+    int cx = c * ctx->font.cell_width + SFTE_PAD_X;
+    int cy = r * ctx->font.cell_height + SFTE_PAD_Y;
+
+    int render_w = ctx->font.cell_width;
+#if SFTE_WIDE_CHARS
+    render_w *= (attr & ATTR_WIDE) ? 2 : 1;
+#endif  // SFTE_WIDE_CHARS
+
+    if (attr & ATTR_UNDERLINE) {
+        uint32_t base_ul_col = text_fg;
+#if SFTE_COLOR_UNDERLINE
+        if (vcell->ul_color != 0xFFFFFFFF) base_ul_col = vcell->ul_color;
+#endif
+        uint32_t underline_col = (base_ul_col & 0x00FFFFFF) | (0xFF << 24);
+
+        int thickness = (int)(ctx->font.cell_height * SFTE_UNDERLINE_THICK_RATIO);
+        if (thickness < 1) thickness = 1;
+
+        int style = 1;  // default straight line
+#if SFTE_EXT_UNDERLINES
+        style = vcell->ul_style;
+        style = _SFTE_CLAMP(style, 1, 5);
+#endif
+
+        int base_y = cy + ctx->font.ascent + 2;
+        if (base_y + thickness > cy + ctx->font.cell_height)
+            base_y = cy + ctx->font.cell_height - thickness;
+
+        for (int x = cx; x < cx + render_w; ++x) {
+            if (x >= w) break;
+
+            int grid_x = x - SFTE_PAD_X;
+            int local_x = grid_x % ctx->font.cell_width;
+
+            if (style == 4 && ((grid_x / thickness) % 2) != 0) continue;  // dotted
+
+            if (style == 5 && ((grid_x / thickness) % 5) >= 3) continue;  // dashed
+
+            if (style == 3) {  // undercurl
+                int half_w = ctx->font.cell_width / 2;
+                if (half_w == 0) half_w = 1;
+
+                int amp = thickness + 1;
+                int dist = local_x > half_w ? local_x - half_w : half_w - local_x;
+                int y_off = (dist * amp) / half_w - (amp / 2);
+
+                for (int dy = 0; dy < thickness; ++dy) {
+                    int py = base_y + y_off + dy;
+                    if (py >= 0 && py < h) px_buf[py * w + x] = underline_col;
+                }
+            } else if (style == 2) {  // double underline
+                int thin = thickness / 2;
+                if (thin < 1) thin = 1;
+                for (int dy = 0; dy < thin; ++dy) {
+                    int py1 = base_y - thin + dy;
+                    int py2 = base_y + thin + dy + 1;
+                    if (py1 >= 0 && py1 < h) px_buf[py1 * w + x] = underline_col;
+                    if (py2 >= 0 && py2 < h) px_buf[py2 * w + x] = underline_col;
+                }
+            } else {  // straight underline
+                for (int dy = 0; dy < thickness; ++dy) {
+                    int py = base_y + dy;
+                    if (py >= 0 && py < h) px_buf[py * w + x] = underline_col;
+                }
+            }
+        }
+    }
+
+    if (is_cursor && _SFTE_CUR_STYLE(ctx) != SFTE_CURSOR_BLOCK) {
+        uint32_t cur_col = (SFTE_CURSOR_COLOR & 0x00FFFFFF) | (0xFF << 24);
+
+        if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_UNDERLINE) {
+            int thickness = (int)(ctx->font.cell_height * SFTE_CURSOR_THICK_RATIO);
+            if (thickness < 1) thickness = 1;
+
+            for (int y = cy + ctx->font.cell_height - thickness; y < cy + ctx->font.cell_height;
+                 ++y)
+                for (int x = cx; x < cx + render_w; ++x)
+                    if (x < w && y < h) px_buf[y * w + x] = cur_col;
+        } else if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_BAR) {
+            int thickness = (int)(ctx->font.cell_width * SFTE_CURSOR_THICK_RATIO);
+            if (thickness < 1) thickness = 1;
+
+            for (int y = cy; y < cy + ctx->font.cell_height; ++y)
+                for (int x = cx; x < cx + thickness; ++x)
+                    if (x < w && y < h) px_buf[y * w + x] = cur_col;
+        }
+    }
+}
+// =================================================================================================
+// >>wayland
+// =================================================================================================
+#if SFTE_WAYLAND
+
+static sfte_key _sfte_xkb_to_sfte_key(xkb_keysym_t sym) {
+    switch (sym) {
+    case XKB_KEY_Tab:
+    case XKB_KEY_ISO_Left_Tab: return SFTE_KEY_TAB;
+    case XKB_KEY_Return:
+    case XKB_KEY_Linefeed:
+    case XKB_KEY_KP_Enter: return SFTE_KEY_ENTER;
+    case XKB_KEY_BackSpace: return SFTE_KEY_BACKSPACE;
+    case XKB_KEY_Escape: return SFTE_KEY_ESCAPE;
+    case XKB_KEY_Up: return SFTE_KEY_UP;
+    case XKB_KEY_Down: return SFTE_KEY_DOWN;
+    case XKB_KEY_Left: return SFTE_KEY_LEFT;
+    case XKB_KEY_Right: return SFTE_KEY_RIGHT;
+    case XKB_KEY_Home: return SFTE_KEY_HOME;
+    case XKB_KEY_End: return SFTE_KEY_END;
+    case XKB_KEY_Page_Up: return SFTE_KEY_PAGE_UP;
+    case XKB_KEY_Page_Down: return SFTE_KEY_PAGE_DOWN;
+    case XKB_KEY_Insert: return SFTE_KEY_INSERT;
+    case XKB_KEY_Delete: return SFTE_KEY_DELETE;
+    case XKB_KEY_F1: return SFTE_KEY_F1;
+    case XKB_KEY_F2: return SFTE_KEY_F2;
+    case XKB_KEY_F3: return SFTE_KEY_F3;
+    case XKB_KEY_F4: return SFTE_KEY_F4;
+    case XKB_KEY_F5: return SFTE_KEY_F5;
+    case XKB_KEY_F6: return SFTE_KEY_F6;
+    case XKB_KEY_F7: return SFTE_KEY_F7;
+    case XKB_KEY_F8: return SFTE_KEY_F8;
+    case XKB_KEY_F9: return SFTE_KEY_F9;
+    case XKB_KEY_F10: return SFTE_KEY_F10;
+    case XKB_KEY_F11: return SFTE_KEY_F11;
+    case XKB_KEY_F12: return SFTE_KEY_F12;
+    default: return SFTE_KEY_NONE;
+    }
+}
+
+static void _sfte_wayland_write_cb(void *user_data, const char *data, size_t len) {
+    sfte_wayland_app *app = (sfte_wayland_app *)user_data;
+    if (app->pty_fd > 0) write(app->pty_fd, data, len);
+}
+
+static void _sfte_wayland_pty_spawn(sfte_wayland_app *app) {
+#ifndef SFTE_NO_POSIX
+    app->pty_pid = sfte_posix_pty_spawn(app->ctx, &app->pty_fd, app->width, app->height);
+    SFTE_ASSERT(app->pty_pid != -1, "failed to forkpty");
+#endif  // !SFTE_NO_POSIX
+}
+
+static void _sfte_wayland_pty_update(sfte_wayland_app *app) {
+#ifndef SFTE_NO_POSIX
+    sfte_posix_pty_resize(app->ctx, app->pty_fd, app->width, app->height);
+#endif  // !SFTE_NO_POSIX
+}
+
+#if SFTE_FONT_ZOOM
+static void _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg) {
+    sfte_zoom(ctx, arg->f);
+    sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
+    _sfte_wayland_pty_update(app);
+    app->needs_render = 1;
+}
+
+static void _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *dummy) {
+    (void)dummy;
+    const sfte_arg arg = {.f = SFTE_FONT_DEFAULT_SIZE - ctx->font.cur_size};
+    _sfte_wayland_font_resize(ctx, &arg);
+}
+#endif  // SFTE_FONT_ZOOM
+
+#if SFTE_SCROLLBACK_CAP
+static void _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg) {
+    sfte_view_scroll(ctx, arg->i);
+    sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
+    app->needs_render = 1;
+}
+#endif  // SFTE_SCROLLBACK_CAP
+
+static void _sfte_wayland_create_buffer(sfte_wayland_app *app) {
+    int stride = app->width * 4;  // 4B/px (ARGB)
+    app->shm_size = stride * app->height;
+
+    int fd = memfd_create("sfte-buffer", MFD_CLOEXEC);
+    SFTE_ASSERT(fd != -1, "failed to create memfd");
+    SFTE_ASSERT(ftruncate(fd, app->shm_size) != -1, "failed to truncate memfd");
+
+    app->shm_data = (uint32_t *)mmap(NULL, app->shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+                                     0);
+    SFTE_ASSERT(app->shm_data != MAP_FAILED, "failed to mmap shm data");
+
+#if SFTE_DOUBLE_BUFFER
+    if (app->back_buffer) SFTE_FREE(app->back_buffer);
+    app->back_buffer = (uint32_t *)SFTE_MALLOC(app->shm_size);
+    SFTE_ASSERT(app->back_buffer, "failed to allocate back buffer");
+#endif  // SFTE_DOUBLE_BUFFER
+
+    struct wl_shm_pool *pool = wl_shm_create_pool(app->shm, fd, app->shm_size);
+    app->buffer = wl_shm_pool_create_buffer(pool, 0, app->width, app->height, stride,
+                                            WL_SHM_FORMAT_ARGB8888);
+    wl_shm_pool_destroy(pool);
+    close(fd);
+}
+
+#if SFTE_CLIPBOARD
+static void _sfte_wayland_data_offer_offer(void *data, struct wl_data_offer *offer,
+                                           const char *mime_type) {
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+    if (strcmp(mime_type, "text/plain;charset=utf-8") == 0 ||
+        strcmp(mime_type, "text/plain") == 0) {
+        wl_data_offer_accept(offer, app->serial, mime_type);
+    }
+}
+
+static void _sfte_wayland_data_offer_source_actions(void *data, struct wl_data_offer *offer,
+                                                    uint32_t actions) {
+    (void)data, (void)offer, (void)actions;
+}
+
+static void _sfte_wayland_data_offer_action(void *data, struct wl_data_offer *offer,
+                                            uint32_t action) {
+    (void)data, (void)offer, (void)action;
+}
+
+static const struct wl_data_offer_listener _sfte_wayland_data_offer_listener = {
+    .offer = _sfte_wayland_data_offer_offer,
+    .source_actions = _sfte_wayland_data_offer_source_actions,
+    .action = _sfte_wayland_data_offer_action,
+};
+
+static void _sfte_wayland_data_device_data_offer(void *data, struct wl_data_device *device,
+                                                 struct wl_data_offer *offer) {
+    (void)device;
+    wl_data_offer_add_listener(offer, &_sfte_wayland_data_offer_listener, data);
+}
+
+static void _sfte_wayland_data_device_enter(void *data, struct wl_data_device *device,
+                                            uint32_t serial, struct wl_surface *surface,
+                                            wl_fixed_t x, wl_fixed_t y,
+                                            struct wl_data_offer *offer) {
+    (void)data, (void)device, (void)serial, (void)surface, (void)x, (void)y, (void)offer;
+}
+
+static void _sfte_wayland_data_device_leave(void *data, struct wl_data_device *device) {
+    (void)data, (void)device;
+}
+
+static void _sfte_wayland_data_device_motion(void *data, struct wl_data_device *device,
+                                             uint32_t time, wl_fixed_t x, wl_fixed_t y) {
+    (void)data, (void)device, (void)time, (void)x, (void)y;
+}
+
+static void _sfte_wayland_data_device_drop(void *data, struct wl_data_device *device) {
+    (void)data, (void)device;
+}
+
+static void _sfte_wayland_data_device_selection(void *data, struct wl_data_device *device,
+                                                struct wl_data_offer *offer) {
+    (void)device;
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+    if (app->data_offer && app->data_offer != offer) wl_data_offer_destroy(app->data_offer);
+    app->data_offer = offer;
+}
+
+static const struct wl_data_device_listener _sfte_wayland_data_device_listener = {
+    .data_offer = _sfte_wayland_data_device_data_offer,
+    .enter = _sfte_wayland_data_device_enter,
+    .leave = _sfte_wayland_data_device_leave,
+    .motion = _sfte_wayland_data_device_motion,
+    .drop = _sfte_wayland_data_device_drop,
+    .selection = _sfte_wayland_data_device_selection,
+};
+
+static void _sfte_wayland_data_source_target(void *data, struct wl_data_source *src,
+                                             const char *mime_type) {
+    (void)data, (void)src, (void)mime_type;
+}
+
+static void _sfte_wayland_data_source_send(void *data, struct wl_data_source *src,
+                                           const char *mime_type, int32_t fd) {
+    (void)src, (void)mime_type;
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+    if (app->selection_text) write(fd, app->selection_text, strlen(app->selection_text));
+
+    close(fd);
+}
+
+static void _sfte_wayland_data_source_cancelled(void *data, struct wl_data_source *src) {
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+    wl_data_source_destroy(src);
+    if (app->selection_text) {
+        SFTE_FREE(app->selection_text);
+        app->selection_text = NULL;
+    }
+    app->data_source = NULL;
+}
+
+static void _sfte_wayland_data_source_dnd_drop_performed(void *data, struct wl_data_source *src) {
+    (void)data, (void)src;
+}
+
+static void _sfte_wayland_data_source_dnd_finished(void *data, struct wl_data_source *src) {
+    (void)data, (void)src;
+}
+
+static void _sfte_wayland_data_source_action(void *data, struct wl_data_source *src,
+                                             uint32_t action) {
+    (void)data, (void)src, (void)action;
+}
+
+static const struct wl_data_source_listener _sfte_wayland_data_source_listener = {
+    .target = _sfte_wayland_data_source_target,
+    .send = _sfte_wayland_data_source_send,
+    .cancelled = _sfte_wayland_data_source_cancelled,
+    .dnd_drop_performed = _sfte_wayland_data_source_dnd_drop_performed,
+    .dnd_finished = _sfte_wayland_data_source_dnd_finished,
+    .action = _sfte_wayland_data_source_action,
+};
+#endif  // SFTE_CLIPBOARD
+
+#if SFTE_SELECTION
+static void _sfte_wayland_pointer_enter(void *data, struct wl_pointer *pointer, uint32_t serial,
+                                        struct wl_surface *surface, wl_fixed_t surface_x,
+                                        wl_fixed_t surface_y) {
+    (void)data, (void)pointer, (void)serial, (void)surface, (void)surface_x, (void)surface_y;
+#if SFTE_MOUSE
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+    sfte_mouse_move(app->ctx, wl_fixed_to_int(surface_x), wl_fixed_to_int(surface_y));
+    app->needs_render = 1;
+#endif  // SFTE_MOUSE
+}
+
+static void _sfte_wayland_pointer_leave(void *data, struct wl_pointer *pointer, uint32_t serial,
+                                        struct wl_surface *surface) {
+    (void)data, (void)pointer, (void)serial, (void)surface;
+}
+
+static void _sfte_wayland_pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time,
+                                         wl_fixed_t surface_x, wl_fixed_t surface_y) {
+    (void)data, (void)pointer, (void)time, (void)surface_x, (void)surface_y;
+#if SFTE_MOUSE
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+    sfte_mouse_move(app->ctx, wl_fixed_to_int(surface_x), wl_fixed_to_int(surface_y));
+    app->needs_render = 1;
+#endif  // SFTE_MOUSE
+}
+
+static void _sfte_wayland_pointer_button(void *data, struct wl_pointer *pointer, uint32_t serial,
+                                         uint32_t time, uint32_t button, uint32_t state) {
+    (void)data, (void)pointer, (void)serial, (void)time, (void)button, (void)state;
+#if SFTE_MOUSE
+    if (button != 0x110) return;  // lmb
+
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+
+#if SFTE_CLIPBOARD
+    app->serial = serial;
+#endif  // SFTE_CLIPBOARD
+
+    sfte_mouse_click(app->ctx, 0, state == WL_POINTER_BUTTON_STATE_PRESSED,
+                     app->ctx->term.mouse_hover_x * app->ctx->font.cell_width + SFTE_PAD_X,
+                     app->ctx->term.mouse_hover_y * app->ctx->font.cell_height + SFTE_PAD_Y);
+    app->needs_render = 1;
+
+#if SFTE_CLIPBOARD
+    if (state == WL_POINTER_BUTTON_STATE_RELEASED) _sfte_wayland_clipboard_copy(app->ctx, NULL);
+#endif  // SFTE_CLIPBOARD
+#endif  // SFTE_MOUSE
+}
+
+static void _sfte_wayland_pointer_axis(void *data, struct wl_pointer *pointer, uint32_t time,
+                                       uint32_t axis, wl_fixed_t value) {
+    (void)data, (void)pointer, (void)time, (void)axis, (void)value;
+#if SFTE_MOUSE
+    if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL) return;
+
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+    int dir = (wl_fixed_to_double(value) < 0) ? 1 : -1;
+    sfte_mouse_scroll(app->ctx, dir,
+                      app->ctx->term.mouse_hover_x * app->ctx->font.cell_width + SFTE_PAD_X,
+                      app->ctx->term.mouse_hover_y * app->ctx->font.cell_height + SFTE_PAD_Y);
+    app->needs_render = 1;
+#endif  // SFTE_MOUSE
+}
+
+static void _sfte_wayland_pointer_frame(void *data, struct wl_pointer *pointer) {
+    (void)data, (void)pointer;
+}
+
+static void _sfte_wayland_pointer_axis_source(void *data, struct wl_pointer *pointer,
+                                              uint32_t axis_source) {
+    (void)data, (void)pointer, (void)axis_source;
+}
+
+static void _sfte_wayland_pointer_axis_stop(void *data, struct wl_pointer *pointer, uint32_t time,
+                                            uint32_t axis) {
+    (void)data, (void)pointer, (void)time, (void)axis;
+}
+
+static void _sfte_wayland_pointer_axis_discrete(void *data, struct wl_pointer *pointer,
+                                                uint32_t axis, int32_t discrete) {
+    (void)data, (void)pointer, (void)axis, (void)discrete;
+}
+
+static const struct wl_pointer_listener _sfte_wayland_pointer_listener = {
+    .enter = _sfte_wayland_pointer_enter,
+    .leave = _sfte_wayland_pointer_leave,
+    .motion = _sfte_wayland_pointer_motion,
+    .button = _sfte_wayland_pointer_button,
+    .axis = _sfte_wayland_pointer_axis,
+    .frame = _sfte_wayland_pointer_frame,
+    .axis_source = _sfte_wayland_pointer_axis_source,
+    .axis_stop = _sfte_wayland_pointer_axis_stop,
+    .axis_discrete = _sfte_wayland_pointer_axis_discrete,
+};
+#endif  // SFTE_SELECTION
+
+#if SFTE_HYPERLINKS
+static void _sfte_wayland_open_link_cb(void *user_data, const char *uri) {
+    (void)user_data;
+    if (!uri) return;
+
+    if (fork() == 0) {
+        freopen("/dev/null", "w", stdout);
+        freopen("/dev/null", "w", stderr);
+        execlp("xdg-open", "xdg-open", uri, NULL);
+        exit(1);
+    }
+}
+#endif  // SFTE_HYPERLINKS
+
+static void _sfte_wayland_keyboard_keymap(void *data, struct wl_keyboard *keyboard, uint32_t format,
+                                          int32_t fd, uint32_t size) {
+    (void)keyboard;
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+    SFTE_ASSERT(format == WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, "unsupported keymap format");
+
+    char *map_str = (char *)mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+    SFTE_ASSERT(map_str != MAP_FAILED, "failed to mmap keyboard");
+
+    if (app->xkb_keymap) xkb_keymap_unref(app->xkb_keymap);
+    if (app->xkb_state) xkb_state_unref(app->xkb_state);
+
+    app->xkb_keymap = xkb_keymap_new_from_string(
+        app->xkb_context, map_str, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
+    app->xkb_state = xkb_state_new(app->xkb_keymap);
+
+    _SFTE_INFO(app->ctx, KEYMAP_LOADED);
+    munmap(map_str, size);
+    close(fd);  // close the fd to avoid leak
+}
+
+static void _sfte_wayland_keyboard_enter(void *data, struct wl_keyboard *keyboard, uint32_t serial,
+                                         struct wl_surface *surface, struct wl_array *keys) {
+    (void)data, (void)keyboard, (void)serial, (void)surface, (void)keys;
+}
+
+static void _sfte_wayland_keyboard_leave(void *data, struct wl_keyboard *keyboard, uint32_t serial,
+                                         struct wl_surface *surface) {
+    (void)data, (void)keyboard, (void)serial, (void)surface;
+}
+
+static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard, uint32_t serial,
+                                       uint32_t time, uint32_t key, uint32_t state) {
+    (void)data, (void)keyboard, (void)serial, (void)time;
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+#if SFTE_CLIPBOARD
+    app->serial = serial;
+#endif  // SFTE_CLIPBOARD
+
+    if (state == WL_KEYBOARD_KEY_STATE_RELEASED && key == app->repeating_key) {
+        struct itimerspec its = {0};
+        timerfd_settime(app->repeat_timer_fd, 0, &its, NULL);
+        app->repeating_key = 0;
+        return;
+    }
+
+    if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !app->xkb_state) return;
+
+    // clear selection on key press
+    if (app->ctx->term.mouse_sel_active) {
+        app->ctx->term.mouse_sel_active = 0;
+        _sfte_grid_dirty_range(app->ctx, 0, app->ctx->term.cols * app->ctx->term.rows);
+        app->needs_render = 1;
+    }
+
+    if (app->repeat_rate > 0 && app->repeating_key != key) {
+        struct itimerspec its;
+        its.it_value.tv_sec = app->repeat_delay / 1000;
+        its.it_value.tv_nsec = (app->repeat_delay % 1000) * 1000000;
+        its.it_interval.tv_sec = 0;
+        if (app->repeat_rate > 0)
+            its.it_interval.tv_nsec = 1000000000 / app->repeat_rate;
+        else
+            its.it_interval.tv_nsec = 0;
+
+        timerfd_settime(app->repeat_timer_fd, 0, &its, NULL);
+        app->repeating_key = key;
+    }
+
+    xkb_keycode_t keycode = key + 8;  // WARN: evdev codes are offset by 8 from xkb keycodes
+    xkb_keysym_t sym = xkb_state_key_get_one_sym(app->xkb_state, keycode);
+
+    bool ctrl = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_CTRL,
+                                             XKB_STATE_MODS_EFFECTIVE);
+    bool alt = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_ALT,
+                                            XKB_STATE_MODS_EFFECTIVE);
+    bool shift = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_SHIFT,
+                                              XKB_STATE_MODS_EFFECTIVE);
+    bool super = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_LOGO,
+                                              XKB_STATE_MODS_EFFECTIVE);
+
+    uint32_t active_mods = SFTE_MOD_NONE;
+    if (ctrl) active_mods |= SFTE_MOD_CTRL;
+    if (alt) active_mods |= SFTE_MOD_ALT;
+    if (shift) active_mods |= SFTE_MOD_SHIFT;
+    if (super) active_mods |= SFTE_MOD_SUPER;
+
+    for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_shortcuts); ++i) {
+        if ((xkb_keysym_t)_sfte_shortcuts[i].keysym != sym ||
+            _sfte_shortcuts[i].mod_mask != active_mods)
+            continue;
+
+        _sfte_shortcuts[i].func(app->ctx, &_sfte_shortcuts[i].arg);
+        return;
+    }
+
+    char buf[128];
+    int size = 0;
+
+    // ignore standalone mod keys
+    if (sym >= XKB_KEY_Shift_L && sym <= XKB_KEY_Hyper_R) return;
+
+#if SFTE_KITTY_KB
+    sfte_key key_id = _sfte_xkb_to_sfte_key(sym);
+    uint32_t codepoint = xkb_keysym_to_utf32(sym);
+
+    size = sfte_kitty_kb_encode(app->ctx, key_id, codepoint, active_mods, buf, sizeof(buf));
+#endif  // SFTE_KITTY_KB
+
+    // if unhandled by kitty
+    if (size == 0) {
+#define MAP_KEY(str)                                                                               \
+    do {                                                                                           \
+        size = sizeof(str) - 1;                                                                    \
+        memcpy(buf, str, size);                                                                    \
+    } while (0)
+
+        switch (sym) {
+        case XKB_KEY_Up: MAP_KEY("\033[A"); break;
+        case XKB_KEY_Down: MAP_KEY("\033[B"); break;
+        case XKB_KEY_Right: MAP_KEY("\033[C"); break;
+        case XKB_KEY_Left: MAP_KEY("\033[D"); break;
+        case XKB_KEY_BackSpace: MAP_KEY("\x7f"); break;
+        case XKB_KEY_Delete: MAP_KEY("\033[3~"); break;
+        case XKB_KEY_Home: MAP_KEY("\033[H"); break;
+        case XKB_KEY_End: MAP_KEY("\033[F"); break;
+        default:
+            if (ctrl) {
+                if (sym >= XKB_KEY_a && sym <= XKB_KEY_z) {
+                    buf[0] = sym - XKB_KEY_a + 1;
+                    size = 1;
+                } else if (sym >= XKB_KEY_A && sym <= XKB_KEY_Z) {
+                    buf[0] = sym - XKB_KEY_A + 1;
+                    size = 1;
+                } else if (sym == XKB_KEY_space) {
+                    buf[0] = '\0';
+                    size = 1;
+                }
+            }
+
+            // if nothing intercepted the key, default to generating
+            // standard terminal control chars or psasing through the raw utf8 string
+            if (size == 0) size = xkb_state_key_get_utf8(app->xkb_state, keycode, buf, sizeof(buf));
+        }
+
+        // if alt is held, prepend esc byte
+        if (alt && size > 0 && size < (int)(sizeof(buf) - 1)) {
+            memmove(buf + 1, buf, size++);
+            buf[0] = '\033';
+        }
+#undef MAP_KEY
+    }
+
+    if (size > 0) {
+#if SFTE_SCROLLBACK_CAP
+        sfte_term *term = &app->ctx->term;
+        if (term->sb_offset > 0) {
+            term->sb_offset = 0;
+            _sfte_grid_dirty_range(app->ctx, 0, term->cols * term->rows);
+            app->needs_render = 1;
+        }
+#endif  // SFTE_SCROLLBACK_CAP
+
+        write(app->pty_fd, buf, size);
+    }
+}
+
+static void _sfte_wayland_keyboard_modifiers(void *data, struct wl_keyboard *keyboard,
+                                             uint32_t serial, uint32_t mods_depressed,
+                                             uint32_t mods_latched, uint32_t mods_locked,
+                                             uint32_t group) {
+    (void)keyboard, (void)serial;
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+    if (!app->xkb_state) return;
+
+    xkb_state_update_mask(app->xkb_state, mods_depressed, mods_latched, mods_locked, 0, 0, group);
+}
+
+static void _sfte_wayland_keyboard_repeat_info(void *data, struct wl_keyboard *keyboard,
+                                               int32_t rate, int32_t delay) {
+    (void)keyboard;
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+
+    app->repeat_rate = rate;
+    app->repeat_delay = delay;
+}
+
+static const struct wl_keyboard_listener _sfte_wayland_keyboard_listener = {
+    .keymap = _sfte_wayland_keyboard_keymap,
+    .enter = _sfte_wayland_keyboard_enter,
+    .leave = _sfte_wayland_keyboard_leave,
+    .key = _sfte_wayland_keyboard_key,
+    .modifiers = _sfte_wayland_keyboard_modifiers,
+    .repeat_info = _sfte_wayland_keyboard_repeat_info,
+};
+
+static void _sfte_wayland_seat_capabilities(void *data, struct wl_seat *seat,
+                                            uint32_t capabilities) {
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+    // if seat has a keyboard and we haven't grabbed it yet
+    if ((capabilities & WL_SEAT_CAPABILITY_KEYBOARD) && !app->keyboard) {
+        app->keyboard = wl_seat_get_keyboard(seat);
+        wl_keyboard_add_listener(app->keyboard, &_sfte_wayland_keyboard_listener, app);
+    }
+    // if seat lost keyboard and we still hold the ptr
+    else if (!(capabilities & WL_SEAT_CAPABILITY_KEYBOARD) && app->keyboard) {
+        wl_keyboard_release(app->keyboard);
+        app->keyboard = NULL;
+    }
+
+#if SFTE_SELECTION
+    if ((capabilities & WL_SEAT_CAPABILITY_POINTER) && !app->pointer) {
+        app->pointer = wl_seat_get_pointer(seat);
+        wl_pointer_add_listener(app->pointer, &_sfte_wayland_pointer_listener, app);
+
+    } else if (!(capabilities & WL_SEAT_CAPABILITY_POINTER) && app->pointer) {
+        wl_pointer_release(app->pointer);
+        app->pointer = NULL;
+    }
+#endif  // SFTE_SELECTION
+
+#if SFTE_CLIPBOARD
+    if (app->data_device_manager && !app->data_device) {
+        app->data_device = (struct wl_data_device *)wl_data_device_manager_get_data_device(
+            app->data_device_manager, seat);
+        wl_data_device_add_listener(app->data_device, &_sfte_wayland_data_device_listener, app);
+    }
+#endif  // SFTE_CLIPBOARD
+}
+
+static void _sfte_wayland_seat_name(void *data, struct wl_seat *seat, const char *name) {
+    (void)data, (void)seat, (void)name;
+}
+
+static const struct wl_seat_listener _sfte_wayland_seat_listener = {
+    .capabilities = _sfte_wayland_seat_capabilities,
+    .name = _sfte_wayland_seat_name,
+};
+
+static void _sfte_wayland_xdg_wm_base_ping(void *data, struct xdg_wm_base *xdg_wm_base,
+                                           uint32_t serial) {
+    (void)data;
+    xdg_wm_base_pong(xdg_wm_base, serial);  // compositor pinged, pong back with same serial
+}
+
+static const struct xdg_wm_base_listener _sfte_wayland_xdg_wm_base_listener = {
+    .ping = _sfte_wayland_xdg_wm_base_ping,
+};
+
+static void _sfte_wayland_registry_global(void *data, struct wl_registry *registry, uint32_t name,
+                                          const char *interface, uint32_t version) {
+    (void)version;
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+
+    if (strcmp(interface, wl_compositor_interface.name) == 0)
+        app->compositor = (struct wl_compositor *)wl_registry_bind(
+            registry, name, &wl_compositor_interface, 4 /* wl compositor version */);
+    else if (strcmp(interface, wl_shm_interface.name) == 0)
+        app->shm = (struct wl_shm *)wl_registry_bind(registry, name, &wl_shm_interface,
+                                                     1 /* wl shm version */);
+    else if (strcmp(interface, wl_seat_interface.name) == 0) {
+        app->seat = (struct wl_seat *)wl_registry_bind(registry, name, &wl_seat_interface,
+                                                       7 /* wl seat version */);
+        wl_seat_add_listener(app->seat, &_sfte_wayland_seat_listener, app);
+    } else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
+        app->xdg_wm_base = (struct xdg_wm_base *)wl_registry_bind(
+            registry, name, &xdg_wm_base_interface, 1 /* xdg wm base version */);
+        xdg_wm_base_add_listener(app->xdg_wm_base, &_sfte_wayland_xdg_wm_base_listener, app);
+    }
+#if SFTE_CLIPBOARD
+    else if (strcmp(interface, wl_data_device_manager_interface.name) == 0) {
+        app->data_device_manager = (struct wl_data_device_manager *)wl_registry_bind(
+            registry, name, &wl_data_device_manager_interface, 3 /* data device manager version */);
+    }
+#endif  // SFTE_CLIPBOARD
+}
+
+static void _sfte_wayland_registry_global_remove(void *data, struct wl_registry *registry,
+                                                 uint32_t name) {
+    (void)data, (void)registry, (void)name;
+}
+
+static const struct wl_registry_listener _sfte_wayland_registry_listener = {
+    .global = _sfte_wayland_registry_global,
+    .global_remove = _sfte_wayland_registry_global_remove,
+};
+
+static void _sfte_wayland_xdg_surface_configure(void *data, struct xdg_surface *xdg_surface,
+                                                uint32_t serial) {
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+    xdg_surface_ack_configure(xdg_surface, serial);
+
+    if (app->pending_width > 0 && app->pending_height > 0) {
+        app->width = app->pending_width;
+        app->height = app->pending_height;
+        app->pending_width = 0;
+        app->pending_height = 0;
+
+        sfte_resize(app->ctx, app->width, app->height);
+        _sfte_wayland_pty_update(app);
+    }
+
+    // resize recalc
+    int needed_size = app->width * app->height * 4;
+    if (app->shm_size != needed_size) {
+        if (app->buffer) wl_buffer_destroy(app->buffer);
+        if (app->shm_data) munmap(app->shm_data, app->shm_size);
+
+        _sfte_wayland_create_buffer(app);
+    }
+
+    app->needs_render = 1;
+}
+
+static const struct xdg_surface_listener _sfte_wayland_xdg_surface_listener = {
+    .configure = _sfte_wayland_xdg_surface_configure,
+};
+
+static void _sfte_wayland_xdg_toplevel_configure(void *data, struct xdg_toplevel *xdg_toplevel,
+                                                 int32_t width, int32_t height,
+                                                 struct wl_array *states) {
+    (void)xdg_toplevel, (void)states;
+    if (width <= 0 || height <= 0) return;
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+
+    app->pending_width = width;
+    app->pending_height = height;
+}
+
+static void _sfte_wayland_xdg_toplevel_close(void *data, struct xdg_toplevel *xdg_toplevel) {
+    (void)xdg_toplevel;
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+    app->running = 0;
+}
+
+static const struct xdg_toplevel_listener _sfte_wayland_xdg_toplevel_listener = {
+    .configure = _sfte_wayland_xdg_toplevel_configure,
+    .close = _sfte_wayland_xdg_toplevel_close,
+};
+
+static void _sfte_wayland_load(sfte_wayland_app *app) {
+    app->xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    SFTE_ASSERT(app->xkb_context, "failed to create xkb context");
+
+    app->display = wl_display_connect(NULL);
+    SFTE_ASSERT(app->display, "failed to connect to Wayland display\n");
+
+    app->registry = wl_display_get_registry(app->display);
+    wl_registry_add_listener(app->registry, &_sfte_wayland_registry_listener, app);
+
+    wl_display_roundtrip(app->display);
+    SFTE_ASSERT(app->compositor, "failed to initialize compositor\n");
+    SFTE_ASSERT(app->shm, "compositor missing required interfaces\n");
+    SFTE_ASSERT(app->xdg_wm_base, "failed to bind xdg_wm_base\n");
+
+    app->surface = wl_compositor_create_surface(app->compositor);
+    app->xdg_surface = xdg_wm_base_get_xdg_surface(app->xdg_wm_base, app->surface);
+    xdg_surface_add_listener(app->xdg_surface, &_sfte_wayland_xdg_surface_listener, app);
+
+    app->xdg_toplevel = xdg_surface_get_toplevel(app->xdg_surface);
+    xdg_toplevel_add_listener(app->xdg_toplevel, &_sfte_wayland_xdg_toplevel_listener, app);
+    xdg_toplevel_set_title(app->xdg_toplevel, "sfte");
+    xdg_toplevel_set_app_id(app->xdg_toplevel, "sfte");
+
+    wl_surface_commit(app->surface);
+    wl_display_roundtrip(app->display);
+    _SFTE_INFO(app->ctx, WAYLAND_REGISTRY_BOUND);
+}
+
+static void _sfte_wayland_unload(sfte_wayland_app *app) {
+#if SFTE_DOUBLE_BUFFER
+    SFTE_FREE(app->back_buffer);
+#endif  // SFTE_DOUBLE_BUFFER
+
+    if (app->buffer) wl_buffer_destroy(app->buffer);
+    if (app->shm_data) munmap(app->shm_data, app->shm_size);
+    if (app->xdg_toplevel) xdg_toplevel_destroy(app->xdg_toplevel);
+    if (app->xdg_surface) xdg_surface_destroy(app->xdg_surface);
+    if (app->surface) wl_surface_destroy(app->surface);
+    if (app->xdg_wm_base) xdg_wm_base_destroy(app->xdg_wm_base);
+    if (app->keyboard) wl_keyboard_release(app->keyboard);
+    if (app->seat) wl_seat_release(app->seat);
+
+    wl_registry_destroy(app->registry);
+    wl_display_disconnect(app->display);
+
+    xkb_state_unref(app->xkb_state);
+    xkb_keymap_unref(app->xkb_keymap);
+    xkb_context_unref(app->xkb_context);
+}
+
+#if SFTE_CLIPBOARD
+#if SFTE_SELECTION
+#if SFTE_OSC52_CLIPBOARD
+static void _sfte_wayland_osc52_clipboard_cb(void *user_data, char target, const char *data) {
+    (void)target;  // TODO: wl primary selection protocol
+    if (target != 'c') return;
+    sfte_wayland_app *app = (sfte_wayland_app *)user_data;
+
+    if (app->data_source) {
+        wl_data_source_destroy(app->data_source);
+        app->data_source = NULL;
+    }
+    if (app->selection_text) {
+        SFTE_FREE(app->selection_text);
+        app->selection_text = NULL;
+    }
+
+    if (!data || !app->data_device_manager || !app->data_device) return;
+
+    size_t len = strlen(data);
+    app->selection_text = (char *)SFTE_MALLOC(len + 1);
+    memcpy(app->selection_text, data, len + 1);
+
+    app->data_source = wl_data_device_manager_create_data_source(app->data_device_manager);
+    wl_data_source_add_listener(app->data_source, &_sfte_wayland_data_source_listener, app);
+    wl_data_source_offer(app->data_source, "text/plain;charset=utf-8");
+    wl_data_source_offer(app->data_source, "text/plain");
+
+    wl_data_device_set_selection(app->data_device, app->data_source, app->serial);
+}
+#endif  // SFTE_OSC52_CLIPBOARD
+
+static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
+    (void)arg;
+    sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
+
+    if (app->data_source) {
+        wl_data_source_destroy(app->data_source);
+        app->data_source = NULL;
+    }
+    if (app->selection_text) {
+        SFTE_FREE(app->selection_text);
+        app->selection_text = NULL;
+    }
+
+    if (!app->ctx->term.mouse_sel_active || !app->data_device_manager || !app->data_device) return;
+
+    size_t needed_bytes = sfte_get_selection(app->ctx, NULL, 0);
+    if (needed_bytes == 0) {
+        _SFTE_INFO(ctx, CLIPBOARD_EMPTY);
+        return;
+    }
+
+    app->selection_text = (char *)SFTE_MALLOC(needed_bytes);
+    sfte_get_selection(app->ctx, app->selection_text, needed_bytes);
+    if (!app->selection_text) return;
+
+    app->data_source = wl_data_device_manager_create_data_source(app->data_device_manager);
+    wl_data_source_add_listener(app->data_source, &_sfte_wayland_data_source_listener, app);
+    wl_data_source_offer(app->data_source, "text/plain;charset=utf-8");
+    wl_data_source_offer(app->data_source, "text/plain");
+    wl_data_device_set_selection(app->data_device, app->data_source, app->serial);
+}
+#endif  // SFTE_SELECTION
+
+static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg) {
+    (void)arg;
+    sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
+
+    if (!app->data_offer) return;
+
+    int fds[2];
+    if (pipe(fds) == 0) {
+        wl_data_offer_receive(app->data_offer, "text/plain;charset=utf-8", fds[1]);
+        close(fds[1]);
+
+        wl_display_roundtrip(app->display);
+
+        if (app->ctx->term.bracketed_paste) write(app->pty_fd, "\033[200~", 6);
+
+        char buf[SFTE_CLIPBOARD_BUF_SIZE];
+        ssize_t n;
+        while ((n = read(fds[0], buf, sizeof(buf))) > 0) write(app->pty_fd, buf, n);
+
+        if (app->ctx->term.bracketed_paste) write(app->pty_fd, "\033[201~", 6);
+
+        close(fds[0]);
+    }
+}
+#endif  // SFTE_CLIPBOARD
+
+static void _sfte_wayland_loop(sfte_wayland_app *app) {
+    sfte_ctx *ctx = app->ctx;
+
+    signal(SIGPIPE, SIG_IGN);
+    setlocale(LC_ALL, "");
+
+    app->repeat_timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    int wl_fd = wl_display_get_fd(app->display);
+
+    while (app->running) {
+        wl_display_dispatch_pending(app->display);
+        wl_display_flush(app->display);
+        struct pollfd fds[] = {{.fd = wl_fd, .events = POLLIN},
+                               {.fd = app->pty_fd, .events = POLLIN},
+                               {.fd = app->repeat_timer_fd, .events = POLLIN}};
+        int timeout = -1;
+
+#if SFTE_CURSOR_TRAIL
+        if (ctx->term.is_trailing)
+            if (timeout == -1 || timeout > 16) timeout = 16;
+#endif  // SFTE_CURSOR_TRAIL
+
+#if SFTE_CURSOR_BLINK
+        uint64_t now = _sfte_time_ms();
+        if (ctx->term.blink_enabled) {
+            int time_to_next = (int)(ctx->term.next_blink_ms - now);
+            if (time_to_next < 0) time_to_next = 0;
+
+            if (timeout == -1 || time_to_next < timeout) timeout = time_to_next;
+        }
+#endif  // SFTE_CURSOR_BLINK
+
+        if (app->needs_render) timeout = 0;
+
+        if (poll(fds, _SFTE_ARRAY_LEN(fds), timeout /* default infinite timeout */) == -1) break;
+
+#if SFTE_CURSOR_BLINK
+        if (ctx->term.blink_enabled) {
+            now = _sfte_time_ms();
+            if (now >= ctx->term.next_blink_ms) {
+                ctx->term.blink_visible = !ctx->term.blink_visible;
+                ctx->term.next_blink_ms = now + SFTE_CURSOR_BLINK_RATE;
+                int vis_cx = ctx->term.cursor_x >= ctx->term.cols ? ctx->term.cols - 1
+                                                                  : ctx->term.cursor_x;
+                ctx->term.cells[_SFTE_GRID_IDX(ctx, vis_cx, ctx->term.cursor_y)].dirty = 1;
+                app->needs_render = 1;
+            }
+        }
+#endif  // SFTE_CURSOR_BLINK
+
+        if (fds[0].revents & (POLLIN | POLLERR | POLLHUP))
+            if (wl_display_dispatch(app->display) == -1) app->running = 0;
+
+        if (fds[1].revents & (POLLIN | POLLERR | POLLHUP)) {
+            uint8_t buf[SFTE_PTY_BUF_SIZE];
+            ssize_t n = read(app->pty_fd, buf, SFTE_PTY_BUF_SIZE);
+
+            if (n > 0) {
+                sfte_parse(app->ctx, buf, n);
+                app->needs_render = 1;
+            } else
+                app->running = 0;
+        }
+
+        if (fds[2].revents & POLLIN) {
+            uint64_t expirations;
+            if (read(app->repeat_timer_fd, &expirations, sizeof(expirations)) == 0 ||
+                app->repeating_key == 0)
+                continue;
+            // simulate a key press to get autorepeat
+            _sfte_wayland_keyboard_key(app, app->keyboard, 0, 0, app->repeating_key,
+                                       WL_KEYBOARD_KEY_STATE_PRESSED);
+        }
+
+#if SFTE_CURSOR_TRAIL
+        if (ctx->term.is_trailing) {
+            int vis_cx = ctx->term.cursor_x >= ctx->term.cols ? ctx->term.cols - 1
+                                                              : ctx->term.cursor_x;
+            float target_rx = vis_cx * ctx->font.cell_width;
+            float target_ry = ctx->term.cursor_y * ctx->font.cell_height;
+
+#if !SFTE_CURSOR_BLINK
+            uint64_t
+#endif  // !SFTE_CURSOR_BLINK
+                now = _sfte_time_ms();
+            if (ctx->term.last_trail_update_ms == 0) ctx->term.last_trail_update_ms = now;
+            float dt_ms = (float)(now - ctx->term.last_trail_update_ms);
+            ctx->term.last_trail_update_ms = now;
+
+            float tx = target_rx - ctx->term.tail_rx;
+            float ty = target_ry - ctx->term.tail_ry;
+
+            if (tx * tx + ty * ty <= 0.5f) {
+                ctx->term.is_trailing = 0;
+                ctx->term.tail_rx = target_rx;
+                ctx->term.tail_ry = target_ry;
+                ctx->term.last_trail_update_ms = 0;
+            } else {
+                float decay = dt_ms * SFTE_CURSOR_TRAIL_DECAY;
+                if (decay > 1.0f) decay = 1.0f;
+
+                ctx->term.tail_rx += tx * decay;
+                ctx->term.tail_ry += ty * decay;
+            }
+            app->needs_render = 1;
+        }
+#endif  // SFTE_CURSOR_TRAIL
+
+        if (app->needs_render) {
+            sfte_damage_rect dmg = {0};
+
+            uint32_t *target_pxs = app->shm_data;
+#if SFTE_DOUBLE_BUFFER
+            target_pxs = app->back_buffer;
+#endif  // SFTE_DOUBLE_BUFFER
+
+            sfte_render(app->ctx, target_pxs, app->width, app->height, &dmg);
+
+            if (dmg.w > 0 && dmg.h > 0) {
+#if SFTE_DOUBLE_BUFFER
+                for (int y = dmg.y; y < dmg.y + dmg.h; ++y)
+                    memcpy(&app->shm_data[y * app->width + dmg.x],
+                           &app->back_buffer[y * app->width + dmg.x], dmg.w * sizeof(uint32_t));
+#endif  // SFTE_DOUBLE_BUFFER
+
+                wl_surface_damage_buffer(app->surface, dmg.x, dmg.y, dmg.w, dmg.h);
+                wl_surface_attach(app->surface, app->buffer, 0, 0);
+                wl_surface_commit(app->surface);
+            }
+
+            app->needs_render = 0;
+        }
+    }
+}
+#endif  // SFTE_WAYLAND
 // #################################################################################################
 // >>>PUBLIC IMPLEMENTATION
 // #################################################################################################
@@ -5324,7 +5337,8 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
         end_r = _SFTE_CLAMP(end_r, 0, ctx->term.rows - 1);
 
         for (int r = start_r; r <= end_r; ++r)
-            for (int c = start_c; c <= end_c; ++c) ctx->term.cells[_SFTE_IDX(ctx, c, r)].dirty = 1;
+            for (int c = start_c; c <= end_c; ++c)
+                ctx->term.cells[_SFTE_GRID_IDX(ctx, c, r)].dirty = 1;
     }
 #endif  // SFTE_CURSOR_TRAIL
 
@@ -5343,11 +5357,11 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
     if (ctx->term.dirty_saved_x != vis_cx || ctx->term.dirty_saved_y != vis_cy) {
         if (ctx->term.dirty_saved_x >= 0 && ctx->term.dirty_saved_x < ctx->term.cols &&
             ctx->term.dirty_saved_y >= 0 && ctx->term.dirty_saved_y < ctx->term.rows)
-            ctx->term.cells[_SFTE_IDX(ctx, ctx->term.dirty_saved_x, ctx->term.dirty_saved_y)]
+            ctx->term.cells[_SFTE_GRID_IDX(ctx, ctx->term.dirty_saved_x, ctx->term.dirty_saved_y)]
                 .dirty = 1;
 
         if (vis_cx >= 0 && vis_cx < ctx->term.cols && vis_cy >= 0 && vis_cy < ctx->term.rows)
-            ctx->term.cells[_SFTE_IDX(ctx, vis_cx, vis_cy)].dirty = 1;
+            ctx->term.cells[_SFTE_GRID_IDX(ctx, vis_cx, vis_cy)].dirty = 1;
 
         ctx->term.dirty_saved_x = vis_cx;
         ctx->term.dirty_saved_y = vis_cy;
@@ -5360,7 +5374,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
     for (int r = 0; r < ctx->term.rows; ++r) {
         int row_has_damage = 0;
         for (int c = 0; c < ctx->term.cols; ++c)
-            if (ctx->term.cells[_SFTE_IDX(ctx, c, r)].dirty) {
+            if (ctx->term.cells[_SFTE_GRID_IDX(ctx, c, r)].dirty) {
                 row_has_damage = 1;
                 break;
             }
@@ -5377,8 +5391,8 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
 
             for (int y = r_min; y <= r_max; ++y)
                 for (int x = 0; x < ctx->term.cols; ++x)
-                    if (!ctx->term.cells[_SFTE_IDX(ctx, x, y)].dirty)
-                        ctx->term.cells[_SFTE_IDX(ctx, x, y)].dirty = 2;
+                    if (!ctx->term.cells[_SFTE_GRID_IDX(ctx, x, y)].dirty)
+                        ctx->term.cells[_SFTE_GRID_IDX(ctx, x, y)].dirty = 2;
         }
     }
 
@@ -5456,7 +5470,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
                 else {                                                                             \
                     int grid_c = (out_x - SFTE_PAD_X) / ctx->font.cell_width;                      \
                     int grid_r = (out_y - SFTE_PAD_Y) / ctx->font.cell_height;                     \
-                    is_dirty = ctx->term.cells[_SFTE_IDX(ctx, grid_c, grid_r)].dirty;              \
+                    is_dirty = ctx->term.cells[_SFTE_GRID_IDX(ctx, grid_c, grid_r)].dirty;         \
                 }                                                                                  \
                 if (!is_dirty) continue;                                                           \
                                                                                                    \
@@ -5471,7 +5485,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
 
     for (int r = 0; r < ctx->term.rows; ++r) {
         for (int c = 0; c < ctx->term.cols; ++c) {
-            int idx = _SFTE_IDX(ctx, c, r);
+            int idx = _SFTE_GRID_IDX(ctx, c, r);
             if (!ctx->term.cells[idx].dirty) continue;
 
             sfte_cell *vcell = _sfte_get_view_cell(ctx, c, r);
@@ -5520,7 +5534,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
 
     for (int r = 0; r < ctx->term.rows; ++r) {
         for (int c = 0; c < ctx->term.cols; ++c) {
-            int idx = _SFTE_IDX(ctx, c, r);
+            int idx = _SFTE_GRID_IDX(ctx, c, r);
             if (!ctx->term.cells[idx].dirty) continue;
 
             sfte_cell *vcell = _sfte_get_view_cell(ctx, c, r);
@@ -5742,7 +5756,7 @@ void sfte_parse(sfte_ctx *ctx, const uint8_t *data, size_t len) {
     // snap view to bottom if new output arrives
     if (ctx->term.sb_offset > 0) {
         ctx->term.sb_offset = 0;
-        _sfte_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
+        _sfte_grid_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
     }
 #endif  // SFTE_SCROLLBACK_CAP
 
@@ -6207,7 +6221,7 @@ void sfte_view_scroll(sfte_ctx *ctx, int delta) {
 
     if (new_off != ctx->term.sb_offset) {
         ctx->term.sb_offset = new_off;
-        _sfte_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
+        _sfte_grid_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
     }
 }
 #endif  // SFTE_SCROLLBACK_CAP
