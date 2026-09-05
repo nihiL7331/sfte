@@ -54,9 +54,9 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #define SFTE_WAYLAND 0
 #endif  // SFTE_CUSTOM_BACKEND
 
-// =================================================================================================
-// >>config
-// =================================================================================================
+// #################################################################################################
+// >>>CONFIGURATION
+// #################################################################################################
 
 #ifndef SFTE_MALLOC
 #include <stdlib.h>
@@ -406,9 +406,9 @@ static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg);
          _SFTE_WAYLAND_PASTE_BIND}
 #endif  // SFTE_SHORTCUTS
 
-// =================================================================================================
-// >>api
-// =================================================================================================
+// #################################################################################################
+// >>>PUBLIC API
+// #################################################################################################
 // used to report what regions of the pixel buffer changed
 typedef struct {
     int x, y, w, h;
@@ -560,9 +560,9 @@ int sfte_wayland_run(sfte_wayland_app *app);
 
 #define SFTE_IMPL
 #ifdef SFTE_IMPL
-// =================================================================================================
-//  PRIVATE IMPLEMENTATION  ========================================================================
-// =================================================================================================
+// #################################################################################################
+// >>>INTERNAL DECLARATIONS
+// #################################################################################################
 
 #ifndef SFTE_FONT_CUSTOM_BACKEND
 #define STB_TRUETYPE_IMPLEMENTATION
@@ -649,7 +649,7 @@ static const char *_sfte_log_messages[] = {_SFTE_LOG_ITEMS};
 
 #endif  // !SFTE_NO_LOGGING
 // =================================================================================================
-// >>structs
+// >>internal data structures
 // =================================================================================================
 #ifndef SFTE_NO_LOGGING
 typedef struct sfte_logger {
@@ -1041,13 +1041,13 @@ static const float _sfte_font_scales[SFTE_FONT_MAX_COUNT] = SFTE_FONT_SCALES;
 // =================================================================================================
 
 // -------------------------------------------------------------------------------------------------
-// --memory--
+// >memory
 // -------------------------------------------------------------------------------------------------
 static inline void _sfte_dirty_rect(sfte_ctx *ctx, int start_c, int start_r, int cols, int rows);
 static inline void _sfte_dirty_range(sfte_ctx *ctx, int start_idx, int cnt);
 
 // -------------------------------------------------------------------------------------------------
-// --logging--
+// >logging
 // -------------------------------------------------------------------------------------------------
 #ifndef SFTE_NO_LOGGING
 static void _sfte_logger_default(const char *tag, uint32_t log_level, const char *msg,
@@ -1057,21 +1057,21 @@ static void _sfte_log(sfte_ctx *ctx, _sfte_log_item_t log_item, uint32_t log_lev
 #endif  // !SFTE_NO_LOGGING
 
 // -------------------------------------------------------------------------------------------------
-// --b64--
+// >b64
 // -------------------------------------------------------------------------------------------------
 #if (SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD) || SFTE_KITTY_GRAPHICS
 static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len);
 #endif  // (SFTE_CLIPBOARD && SFTE_OSC52_CLIPBOARD) || SFTE_KITTY_GRAPHICS
 
 // -------------------------------------------------------------------------------------------------
-// --img--
+// >img
 // -------------------------------------------------------------------------------------------------
 #if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 static inline sfte_img_placement *_sfte_img_placement_insert(sfte_ctx *ctx, sfte_img_placement p);
 #endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 
 // -------------------------------------------------------------------------------------------------
-// --sixel--
+// >sixel
 // -------------------------------------------------------------------------------------------------
 #if SFTE_SIXEL
 static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b);
@@ -1079,7 +1079,7 @@ static void _sfte_sixel_deinit(sfte_ctx *ctx);
 #endif  // SFTE_SIXEL
 
 // -------------------------------------------------------------------------------------------------
-// --kitty--
+// >kitty
 // -------------------------------------------------------------------------------------------------
 #if SFTE_KITTY_GRAPHICS
 static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int sw, int sh, int dw, int dh);
@@ -1100,7 +1100,7 @@ static void _sfte_kitty_deinit(sfte_ctx *ctx);
 #endif  // SFTE_KITTY_GRAPHICS
 
 // -------------------------------------------------------------------------------------------------
-// --font--
+// >font
 // -------------------------------------------------------------------------------------------------
 #ifndef SFTE_CUSTOM_FONT_BACKEND
 static inline void _sfte_stb_init(sfte_font_backend_info *info, const uint8_t *data);
@@ -1117,7 +1117,7 @@ static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_p
 static void _sfte_font_reset_cache(sfte_ctx *ctx);
 
 // -------------------------------------------------------------------------------------------------
-// --render--
+// >render
 // -------------------------------------------------------------------------------------------------
 static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, uint8_t src_a);
 static void _sfte_render_bg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, uint32_t bg);
@@ -1127,7 +1127,7 @@ static void _sfte_render_decorations(sfte_ctx *ctx, uint32_t *px_buf, int c, int
                                      sfte_cell *vcell, int is_cursor, int w, int h);
 
 // -------------------------------------------------------------------------------------------------
-// --state--
+// >state
 // -------------------------------------------------------------------------------------------------
 #if SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL
 static inline uint64_t _sfte_time_ms(void);
@@ -1145,7 +1145,7 @@ static void _sfte_px_to_grid(sfte_ctx *ctx, int px_x, int px_y, int *out_c, int 
 static void _sfte_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf);
 
 // -------------------------------------------------------------------------------------------------
-// --wayland--
+// >wayland
 // -------------------------------------------------------------------------------------------------
 #if SFTE_WAYLAND
 static sfte_key _sfte_xkb_to_sfte_key(xkb_keysym_t sym);
@@ -1178,7 +1178,7 @@ static void _sfte_wayland_loop(sfte_wayland_app *app);
 #endif  // SFTE_WAYLAND
 
 // -------------------------------------------------------------------------------------------------
-// --reflow--
+// >reflow
 // -------------------------------------------------------------------------------------------------
 #if SFTE_REFLOW
 static void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell c, int is_cursor);
@@ -1187,7 +1187,7 @@ static void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old,
 #endif  // SFTE_REFLOW
 
 // -------------------------------------------------------------------------------------------------
-// --grid--
+// >grid
 // -------------------------------------------------------------------------------------------------
 static inline int _sfte_grid_span(int px_len, int px_off, int cell_px);
 static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt);
@@ -1196,7 +1196,7 @@ static inline void _sfte_grid_check_wrap(sfte_ctx *ctx);
 static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows);
 
 // -------------------------------------------------------------------------------------------------
-// --csi--
+// >csi
 // -------------------------------------------------------------------------------------------------
 #if SFTE_TRUE_COLOR
 static inline uint32_t _sfte_csi_parse_truecolor(int *p, int i);
@@ -1204,15 +1204,19 @@ static inline uint32_t _sfte_csi_parse_truecolor(int *p, int i);
 static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd);
 
 // -------------------------------------------------------------------------------------------------
-// --utf8--
+// >utf8
 // -------------------------------------------------------------------------------------------------
 static int _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b);
 static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune);
 
 // -------------------------------------------------------------------------------------------------
-// --parser--
+// >parser
 // -------------------------------------------------------------------------------------------------
 static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b);
+
+// #################################################################################################
+// >>>INTERNAL IMPLEMENTATION
+// #################################################################################################
 
 // =================================================================================================
 // >>memory
@@ -5364,12 +5368,12 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
     }
 }
 
-// =================================================================================================
-//  PUBLIC IMPLEMENTATION
-// =================================================================================================
+// #################################################################################################
+// >>>PUBLIC IMPLEMENTATION
+// #################################################################################################
 
 // =================================================================================================
-// >>core api
+// >>core api (implementations of the prototypes from the PUBLIC API section)
 // =================================================================================================
 void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect *out_dmg) {
     int dmg_x0 = w, dmg_y0 = h, dmg_x1 = 0, dmg_y1 = 0;
