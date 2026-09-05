@@ -659,7 +659,7 @@ static const char *_sfte_log_messages[] = {_SFTE_LOG_ITEMS};
 #define _SFTE_WARN(ctx, code, ...) _sfte_log(ctx, code, _SFTE_LOG_LVL_WARN, __LINE__, ##__VA_ARGS__)
 #define _SFTE_INFO(ctx, code, ...) _sfte_log(ctx, code, _SFTE_LOG_LVL_INFO, __LINE__, ##__VA_ARGS__)
 
-#else
+#else  // !SFTE_NO_LOGGING
 
 #define _SFTE_PANIC(ctx, code, ...) abort()
 #define _SFTE_ERROR(ctx, code, ...)                                                                \
@@ -1337,8 +1337,16 @@ static const int8_t _sfte_b64_table[256] = {
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
 };
 
+/*
+    Decodes a Base64 payload into a newly allocated binary buffer.
+    Ignores invalid characters (spaces, newlines).
+    The caller assumes ownership of the returned pointer and MUST free it.
+    Returns NULL if input is empty or if memory allocation fails.
+*/
 static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len) {
-    // strip trailing pad
+    SFTE_ASSERT(src && out_len, "b64_decode requires valid pointers");
+
+    // Strip trailing padding
     while (len > 0 && src[len - 1] == '=') len--;
 
     *out_len = (len * 3) / 4;
@@ -1361,6 +1369,7 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
         }
     }
 
+    // Update out_len since ignored characters might've made the overall size smaller.
     *out_len = j;
     return dst;
 }
