@@ -1936,7 +1936,15 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
 // >>img
 // =================================================================================================
 #if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
-// returns a pointer to a new image, or NULL if pool is at max cap
+/*
+    Inserts a new image into the global image pool.
+
+    Takes ownership of `img.pxs`.
+    If the pool is at maximum capacity, it safely frees `img.pxs` and returns NULL.
+
+    WARN: The returned pointer points directly into a dynamic array.
+    It WILL be invalidated the next time an image is inserted. Do not store this pointer.
+*/
 static inline sfte_img *_sfte_img_pool_insert(sfte_ctx *ctx, sfte_img img) {
     uint8_t oom = 0;
     _SFTE_MEM_ENSURE_CAP(sfte_img, ctx->term.img_pool, ctx->term.img_pool_len,
@@ -1951,7 +1959,12 @@ static inline sfte_img *_sfte_img_pool_insert(sfte_ctx *ctx, sfte_img img) {
     return &ctx->term.img_pool[ctx->term.img_pool_len++];
 }
 
-// returns a pointer to a new placement, or NULL if placements are at max cap
+/*
+    Inserts a new image placement instruction into the global placements list.
+
+    WARN: The returned pointer points directly into a dynamic array.
+    It WILL be invalidated the next time a placement is inserted. Do not store this pointer.
+*/
 static inline sfte_img_placement *_sfte_img_placement_insert(sfte_ctx *ctx, sfte_img_placement p) {
     uint8_t oom = 0;
     _SFTE_MEM_ENSURE_CAP(sfte_img_placement, ctx->term.img_placements, ctx->term.img_placements_len,
@@ -1966,6 +1979,9 @@ static inline sfte_img_placement *_sfte_img_placement_insert(sfte_ctx *ctx, sfte
 /*
     Locates an image in the global pool by its ID.
     Returns NULL if the image was deleted.
+
+    WARN: The returned pointer points directly into a dynamic array.
+    It WILL be invalidated the next time a placement is inserted. Do not store this pointer.
 */
 static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id) {
     for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i)
