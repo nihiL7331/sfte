@@ -680,6 +680,18 @@ static const char *_sfte_log_messages[] = {_SFTE_LOG_ITEMS};
 #else
 #define _SFTE_CHAR_WIDTH(rune) 1
 #endif
+
+#if SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL
+#ifndef SFTE_TIME_MS
+#include <time.h>
+static inline uint64_t _sfte_time_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+#define SFTE_TIME_MS() _sfte_time_ms()
+#endif  // SFTE_TIME_MS
+#endif  // SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL
 // =================================================================================================
 // >>internal data structures
 // =================================================================================================
@@ -1142,9 +1154,6 @@ static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id);
 // -------------------------------------------------------------------------------------------------
 // >state
 // -------------------------------------------------------------------------------------------------
-#if SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL
-static inline uint64_t _sfte_time_ms(void);
-#endif  // SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL
 static inline sfte_cell *_sfte_get_view_cell(sfte_ctx *ctx, int c, int r);
 #if SFTE_SELECTION
 static void _sfte_dirty_selection_rows(sfte_ctx *ctx, int y1, int y2);
@@ -1992,14 +2001,6 @@ static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id) {
 // =================================================================================================
 // >>state
 // =================================================================================================
-#if SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL
-static inline uint64_t _sfte_time_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
-#endif  // SFTE_CURSOR_BLINK
-
 static inline sfte_cell *_sfte_get_view_cell(sfte_ctx *ctx, int c, int r) {
 #if SFTE_SCROLLBACK_CAP
     int logical_r = r - ctx->term.sb_offset;
@@ -5335,7 +5336,7 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
 #endif  // SFTE_CURSOR_TRAIL
 
 #if SFTE_CURSOR_BLINK
-        uint64_t now = _sfte_time_ms();
+        uint64_t now = SFTE_TIME_MS();
         if (ctx->term.blink_enabled) {
             int time_to_next = (int)(ctx->term.next_blink_ms - now);
             if (time_to_next < 0) time_to_next = 0;
@@ -5350,7 +5351,7 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
 
 #if SFTE_CURSOR_BLINK
         if (ctx->term.blink_enabled) {
-            now = _sfte_time_ms();
+            now = SFTE_TIME_MS();
             if (now >= ctx->term.next_blink_ms) {
                 ctx->term.blink_visible = !ctx->term.blink_visible;
                 ctx->term.next_blink_ms = now + SFTE_CURSOR_BLINK_RATE;
@@ -5396,7 +5397,7 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
 #if !SFTE_CURSOR_BLINK
             uint64_t
 #endif  // !SFTE_CURSOR_BLINK
-                now = _sfte_time_ms();
+                now = SFTE_TIME_MS();
             if (ctx->term.last_trail_update_ms == 0) ctx->term.last_trail_update_ms = now;
             float dt_ms = (float)(now - ctx->term.last_trail_update_ms);
             ctx->term.last_trail_update_ms = now;
@@ -5935,7 +5936,7 @@ void sfte_parse(sfte_ctx *ctx, const uint8_t *data, size_t len) {
 #if SFTE_CURSOR_BLINK
     // reset blink timer when typing/outputting
     ctx->term.blink_visible = 1;
-    ctx->term.next_blink_ms = _sfte_time_ms() + SFTE_CURSOR_BLINK_RATE;
+    ctx->term.next_blink_ms = SFTE_TIME_MS() + SFTE_CURSOR_BLINK_RATE;
 #endif  // SFTE_CURSOR_BLINK
 
     // parse incoming stream
@@ -5947,7 +5948,7 @@ void sfte_parse(sfte_ctx *ctx, const uint8_t *data, size_t len) {
     float target_ry = ctx->term.cursor_y * ctx->font.cell_height;
 
     if (vis_cx != ctx->term.last_grid_x || ctx->term.cursor_y != ctx->term.last_grid_y) {
-        uint64_t now = _sfte_time_ms();
+        uint64_t now = SFTE_TIME_MS();
 
         if (ctx->term.last_move_ms != 0 && (now - ctx->term.last_move_ms >= SFTE_CURSOR_TRAIL))
             ctx->term.is_trailing = 1;
@@ -6007,7 +6008,7 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
 #if SFTE_CURSOR_BLINK
     ctx->term.blink_enabled = 1;
     ctx->term.blink_visible = 1;
-    ctx->term.next_blink_ms = _sfte_time_ms() + SFTE_CURSOR_BLINK_RATE;
+    ctx->term.next_blink_ms = SFTE_TIME_MS() + SFTE_CURSOR_BLINK_RATE;
 #endif  // SFTE_CURSOR_BLINK
 #if SFTE_CURSOR_TRAIL
     ctx->term.tail_rx = 0.0f;
