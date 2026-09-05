@@ -1122,6 +1122,7 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune);
 // >grid
 // -------------------------------------------------------------------------------------------------
 #define _SFTE_GRID_IDX(ctx, c, r) ((r) * ctx->term.cols + (c))
+static inline sfte_cell *_sfte_grid_get_cell(sfte_ctx *ctx, int c, int r);
 static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int start_c, int start_r, int cols,
                                          int rows);
 static inline void _sfte_grid_dirty_range(sfte_ctx *ctx, int start_idx, int cnt);
@@ -1154,7 +1155,6 @@ static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id);
 // -------------------------------------------------------------------------------------------------
 // >state
 // -------------------------------------------------------------------------------------------------
-static inline sfte_cell *_sfte_get_view_cell(sfte_ctx *ctx, int c, int r);
 #if SFTE_SELECTION
 static void _sfte_dirty_selection_rows(sfte_ctx *ctx, int y1, int y2);
 static inline int _sfte_is_selected(sfte_ctx *ctx, int c, int logical_r);
@@ -1564,6 +1564,26 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
 // -------------------------------------------------------------------------------------------------
 // >grid helpers
 // -------------------------------------------------------------------------------------------------
+
+/*
+    Retrieves a pointer to a specific cell in memory using logical grid coordinates.
+
+    A negative `logical_r` seamlessly reaches back into the scrollback ring buffer.
+    Assumes the caller has already validated that `logical_r` doesn't exceed scrollback length.
+*/
+static inline sfte_cell *_sfte_grid_get_cell(sfte_ctx *ctx, int c, int r) {
+#if SFTE_SCROLLBACK_CAP
+    if (r >= 0)
+        return &ctx->term.cells[_SFTE_GRID_IDX(ctx, c, r)];
+    else {
+        // NOTE: The + (100 * sb_cap) prevents negative modulo results
+        int ring_r = (ctx->term.sb_head + r + (100 * ctx->term.sb_cap)) % ctx->term.sb_cap;
+        return &ctx->term.scrollback[ring_r * ctx->term.cols + c];
+    }
+#else   // !SFTE_SCROLLBACK_CAP
+    return &ctx->term.cells[_SFTE_GRID_IDX(ctx, c, r)];
+#endif  // !SFTE_SCROLLBACK_CAP
+}
 
 /*
     Flags a rectangular region of the grid as dirty, forcing a redraw on the next frame.
@@ -2001,20 +2021,6 @@ static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id) {
 // =================================================================================================
 // >>state
 // =================================================================================================
-static inline sfte_cell *_sfte_get_view_cell(sfte_ctx *ctx, int c, int r) {
-#if SFTE_SCROLLBACK_CAP
-    int logical_r = r - ctx->term.sb_offset;
-    if (logical_r >= 0)
-        return &ctx->term.cells[_SFTE_GRID_IDX(ctx, c, logical_r)];
-    else {
-        int hist_idx = -logical_r;
-        int ring_r = (ctx->term.sb_head - hist_idx + (100 * ctx->term.sb_cap)) % ctx->term.sb_cap;
-        return &ctx->term.scrollback[ring_r * ctx->term.cols + c];
-    }
-#else
-    return &ctx->term.cells[_SFTE_GRID_IDX(ctx, c, r)];
-#endif  // !SFTE_SCROLLBACK_CAP
-}
 
 #if SFTE_SELECTION
 static void _sfte_dirty_selection_rows(sfte_ctx *ctx, int y1, int y2) {
