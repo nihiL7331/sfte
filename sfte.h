@@ -1053,6 +1053,15 @@ struct sfte_wayland_app {
 };
 #endif  // SFTE_WAYLAND
 
+typedef struct {
+    sfte_cell *main_grid;
+    int new_cx, new_cy;
+#if SFTE_SCROLLBACK_CAP
+    sfte_cell *sb_grid;
+    int sb_lines;
+#endif  // SFTE_SCROLLBACK_CAP
+} _sfte_resize_buffers;
+
 #if SFTE_REFLOW
 typedef struct {
     sfte_cell *temp_rows;
@@ -1061,7 +1070,7 @@ typedef struct {
     int new_cx, new_cy;
     int target_old_cx, target_old_cy;
     int is_live;
-} sfte_reflow_state;
+} _sfte_reflow_state;
 #endif  // SFTE_REFLOW
 
 static const sfte_shortcut _sfte_shortcuts[] = SFTE_SHORTCUTS;
@@ -1105,9 +1114,21 @@ static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int start_c, int start_r
                                          int rows);
 static inline void _sfte_grid_dirty_range(sfte_ctx *ctx, int start_idx, int cnt);
 static inline int _sfte_grid_span(int px_len, int px_off, int cell_px);
+#if SFTE_SIXEL
+static void _sfte_grid_clear_sixel(sfte_ctx *ctx, int start_idx, int cnt);
+#endif  // SFTE_SIXEL
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+static void _sfte_grid_scroll_images(sfte_ctx *ctx, int lines, int top, int bot);
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+#if SFTE_SCROLLBACK_CAP
+static void _sfte_grid_push_scrollback(sfte_ctx *ctx, int lines);
+#endif  // SFTE_SCROLLBACK_CAP
 static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt);
 static void _sfte_grid_scroll(sfte_ctx *ctx, int lines);
 static inline void _sfte_grid_check_wrap(sfte_ctx *ctx);
+static sfte_cell *_sfte_grid_resize_dumb_copy(sfte_cell *old_grid, int old_cols, int old_rows,
+                                              int new_cols, int new_rows);
+static void _sfte_grid_resize_tabs(sfte_ctx *ctx, int old_cols, int new_cols);
 static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows);
 
 // -------------------------------------------------------------------------------------------------
@@ -1115,6 +1136,7 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows);
 // -------------------------------------------------------------------------------------------------
 #if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 static inline sfte_img_placement *_sfte_img_placement_insert(sfte_ctx *ctx, sfte_img_placement p);
+static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id);
 #endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 
 // -------------------------------------------------------------------------------------------------
@@ -1139,9 +1161,16 @@ static void _sfte_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf);
 // >reflow
 // -------------------------------------------------------------------------------------------------
 #if SFTE_REFLOW
-static void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell c, int is_cursor);
+static sfte_cell *_sfte_reflow_linearize(sfte_ctx *ctx, sfte_cell *main_old, int new_cols,
+                                         int new_rows, _sfte_reflow_state *st);
+static void _sfte_reflow_extract_view(sfte_ctx *ctx, int new_cols, int new_rows, int target_cy,
+                                      _sfte_reflow_state *st, _sfte_resize_buffers *out);
+static _sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_ctx *ctx, sfte_cell *main_old,
+                                                          int new_cols, int new_rows, int target_cx,
+                                                          int target_cy);
+static void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell c, int is_cursor);
 static void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old,
-                                          sfte_reflow_state *st);
+                                          _sfte_reflow_state *st);
 #endif  // SFTE_REFLOW
 
 // -------------------------------------------------------------------------------------------------
@@ -1522,6 +1551,15 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
 // =================================================================================================
 // >>grid
 // =================================================================================================
+
+// -------------------------------------------------------------------------------------------------
+// >grid helpers
+// -------------------------------------------------------------------------------------------------
+
+/*
+    Flags a rectangular region of the grid as dirty, forcing a redraw on the next frame.
+    Safely clips coordinates that fall outside the terminal boundaries.
+*/
 static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int start_c, int start_r, int cols,
                                          int rows) {
     for (int r = start_r; r < start_r + rows; ++r) {
@@ -1533,101 +1571,94 @@ static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int start_c, int start_r
     }
 }
 
+/*
+    Flags a contiguous 1D range of grid cells [start_idx; start_idx + cnt) as dirty.
+    Does NOT perform boundary checking, uses asserts for boundary safety
+    to avoid branch-checking overhead in RELEASE builds.
+*/
 static inline void _sfte_grid_dirty_range(sfte_ctx *ctx, int start_idx, int cnt) {
+    SFTE_ASSERT(start_idx >= 0, "dirty_range index underflow");
+    SFTE_ASSERT(start_idx + cnt <= ctx->term.cols * ctx->term.rows, "dirty_range index overflow");
+
     for (int i = 0; i < cnt; ++i) ctx->term.cells[start_idx + i].dirty = 1;
 }
 
+/*
+    Calculates how many terminal cells are spanned by a given pixel dimension,
+    accounting for an arbitrary pixel offset within the starting cell.
+*/
 static inline int _sfte_grid_span(int px_len, int px_off, int cell_px) {
     return (px_len + px_off + cell_px - 1) / cell_px;
 }
 
-static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt) {
-    for (int i = 0; i < cnt; ++i) {
-        ctx->term.cells[start_idx + i].rune = ' ';
-        ctx->term.cells[start_idx + i].fg = ctx->term.cur_fg;
-        ctx->term.cells[start_idx + i].bg = ctx->term.cur_bg;
-        ctx->term.cells[start_idx + i].attr = 0;
-#if SFTE_EXT_UNDERLINES
-        ctx->term.cells[start_idx + i].ul_style = 0;
-#endif  // SFTE_EXT_UNDERLINES
-#if SFTE_COLOR_UNDERLINE
-        ctx->term.cells[start_idx + i].ul_color = 0xFFFFFFFF;
-#endif  // SFTE_COLOR_UNDERLINE
-        ctx->term.cells[start_idx + i].dirty = 1;
-#if SFTE_REFLOW
-        ctx->term.cells[start_idx + i].wrapped = 0;
-#endif  // SFTE_REFLOW
-#if SFTE_HYPERLINKS
-        ctx->term.cells[start_idx + i].link_idx = 0;
-#endif  // SFTE_HYPERLINKS
-
-#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
-        // erase overlapping sixel img placements
-        for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
-            sfte_img_placement *p = &ctx->term.img_placements[i];
-            if (!p->is_sixel) continue;
-
-            sfte_img *img = NULL;
-            for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
-                if (ctx->term.img_pool[j].id == p->img_id) {
-                    img = &ctx->term.img_pool[j];
-                    break;
-                }
-
-            int cols = _sfte_grid_span(img->width, p->x_off, ctx->font.cell_width);
-            int rows = _sfte_grid_span(img->height, p->y_off, ctx->font.cell_height);
-
-            // check if 2D image bbox overlaps the 1D cleared range
-            int overlap = 0;
-            for (int r = p->start_row; r < p->start_row + rows && !overlap; ++r)
-                for (int c = p->start_col; c < p->start_col + cols; ++c) {
-                    int cell_idx = r * ctx->term.cols + c;
-                    if (cell_idx >= start_idx && cell_idx < start_idx + cnt) {
-                        overlap = 1;
-                        break;
-                    }
-                }
-
-            if (overlap) {
-                if (img) img->ref_cnt--;
-                ctx->term.img_placements[i--] = ctx->term
-                                                    .img_placements[--ctx->term.img_placements_len];
-            }
-        }
-
-        // free memory for imgs with no placements
-        // only auto-free sixel images, kitty images require explicit a=d commands.
-        for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i) {
-            if (ctx->term.img_pool[i].ref_cnt || !ctx->term.img_pool[i].is_sixel) continue;
-            if (ctx->term.img_pool[i].pxs) SFTE_FREE(ctx->term.img_pool[i].pxs);
-            ctx->term.img_pool[i--] = ctx->term.img_pool[--ctx->term.img_pool_len];
-        }
-#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
-    }
-}
-
-static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
-    int top = ctx->term.scroll_top;
-    int bot = ctx->term.scroll_bottom;
-    int height = bot - top + 1;
-    int cols = ctx->term.cols;
-
-#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+#if SFTE_SIXEL
+/*
+    Deletes Sixel image placements that intersect with a cleared grid region.
+    Automatically frees Sixel image data if the reference count drops to 0.
+    Kitty images are ignored as they require explicit terminal delete commands.
+*/
+static void _sfte_grid_clear_sixel(sfte_ctx *ctx, int start_idx, int cnt) {
     for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
         sfte_img_placement *p = &ctx->term.img_placements[i];
+        if (!p->is_sixel) continue;
+#if SFTE_ALT_SCREEN
+        // Prevent active-screen clears from wiping out hidden-screen images
         if (p->alt_screen != ctx->term.alt_active) continue;
-        // scroll the image if its in active region, or its in the scrollback buffer and we're
-        // pushing new lines into scrollback.
+#endif  // SFTE_ALT_SCREEN
+
+        sfte_img *img = _sfte_img_find(ctx, p->img_id);
+        if (!img) continue;
+
+        int cols = _sfte_grid_span(img->width, p->x_off, ctx->font.cell_width);
+        int rows = _sfte_grid_span(img->height, p->y_off, ctx->font.cell_height);
+
+        uint8_t overlap = 0;
+        for (int r = p->start_row; r < p->start_row + rows && !overlap; ++r)
+            for (int c = p->start_col; c < p->start_col + cols; ++c) {
+                int cell_idx = r * ctx->term.cols + c;
+                if (cell_idx >= start_idx && cell_idx < start_idx + cnt) {
+                    overlap = 1;
+                    break;
+                }
+            }
+
+        if (overlap) {
+            img->ref_cnt--;
+            ctx->term.img_placements[i--] = ctx->term
+                                                .img_placements[--ctx->term.img_placements_len];
+        }
+    }
+
+    for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i) {
+        if (ctx->term.img_pool[i].ref_cnt || !ctx->term.img_pool[i].is_sixel) continue;
+        if (ctx->term.img_pool[i].pxs) SFTE_FREE(ctx->term.img_pool[i].pxs);
+        ctx->term.img_pool[i--] = ctx->term.img_pool[--ctx->term.img_pool_len];
+    }
+}
+#endif  // SFTE_SIXEL
+
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+/*
+    Translates image placements up/down during screen scroll.
+    Deletes images that scroll entirely out of the scrollback buffer.
+*/
+static void _sfte_grid_scroll_images(sfte_ctx *ctx, int lines, int top, int bot) {
+    for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
+        sfte_img_placement *p = &ctx->term.img_placements[i];
+#if SFTE_ALT_SCREEN
+        if (p->alt_screen != ctx->term.alt_active) continue;
+#endif  // SFTE_ALT_SCREEN
+
+        // An image should only scroll if it falls into one of two categories:
+        // 1. it is inside the active scrolling margins (or sitting just on the edge at bot+1)
+        // 2. It is in the scrollback buffer (<0), AND we are doing a full-screen scroll
+        // (top==0) which pushes new lines into the scrollback.
         if ((p->start_row >= top && p->start_row <= bot + 1) || (top == 0 && p->start_row < 0))
             p->start_row -= lines;
 
-        sfte_img *img = NULL;
-        for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
-            if (ctx->term.img_pool[j].id == p->img_id) {
-                img = &ctx->term.img_pool[j];
-                break;
-            }
-        // if it scrolled out of visible area, delete it
+        sfte_img *img = _sfte_img_find(ctx, p->img_id);
+        if (!img) continue;
+
         int rows = _sfte_grid_span(img->height, p->y_off, ctx->font.cell_height);
         if (p->start_row + rows <= -SFTE_SCROLLBACK_CAP) {
             img->ref_cnt--;
@@ -1635,27 +1666,95 @@ static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
                                                 .img_placements[--ctx->term.img_placements_len];
         }
     }
+}
 #endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 
-    if (lines > 0) {  // scroll up
-        if (lines > height) lines = height;
-
 #if SFTE_SCROLLBACK_CAP
-        if (top == 0
+/*
+    Pushes lines scrolling off the top of the screen into the ring buffer.
+*/
+static void _sfte_grid_push_scrollback(sfte_ctx *ctx, int lines) {
 #if SFTE_ALT_SCREEN
-            && !ctx->term.alt_active
+    if (ctx->term.alt_active) return;
 #endif  // SFTE_ALT_SCREEN
-        ) {
-            for (int i = 0; i < lines; ++i) {
-                int ring_idx = ctx->term.sb_head * cols;
-                int screen_idx = i * cols;
-                memcpy(&ctx->term.scrollback[ring_idx], &ctx->term.cells[screen_idx],
-                       cols * sizeof(sfte_cell));
 
-                ctx->term.sb_head = (ctx->term.sb_head + 1) % ctx->term.sb_cap;
-                if (ctx->term.sb_len < ctx->term.sb_cap) ctx->term.sb_len++;
-            }
-        }
+    int cols = ctx->term.cols;
+    for (int i = 0; i < lines; ++i) {
+        int ring_idx = ctx->term.sb_head * cols;
+        int screen_idx = i * cols;
+        memcpy(&ctx->term.scrollback[ring_idx], &ctx->term.cells[screen_idx],
+               cols * sizeof(sfte_cell));
+
+        ctx->term.sb_head = (ctx->term.sb_head + 1) % ctx->term.sb_cap;
+        if (ctx->term.sb_len < ctx->term.sb_cap) ctx->term.sb_len++;
+    }
+}
+#endif  // SFTE_SCROLLBACK_CAP
+
+// -------------------------------------------------------------------------------------------------
+// >grid core
+// -------------------------------------------------------------------------------------------------
+
+/*
+    Wipes a 1D range of cells, resetting them to ' ' and applying the
+    currently active terminal foreground, background and text attributes.
+    Also triggers the deletion of any Sixel images that intersect that region.
+    Does NOT move the cursor.
+*/
+static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt) {
+    for (int i = 0; i < cnt; ++i) {
+        sfte_cell *c = &ctx->term.cells[start_idx + i];
+        c->rune = ' ';
+        c->fg = ctx->term.cur_fg;
+        c->bg = ctx->term.cur_bg;
+        c->attr = 0;
+        c->dirty = 1;
+#if SFTE_EXT_UNDERLINES
+        c->ul_style = 0;
+#endif  // SFTE_EXT_UNDERLINES
+#if SFTE_COLOR_UNDERLINE
+        c->ul_color = 0xFFFFFFFF;
+#endif  // SFTE_COLOR_UNDERLINE
+#if SFTE_REFLOW
+        c->wrapped = 0;
+#endif  // SFTE_REFLOW
+#if SFTE_HYPERLINKS
+        c->link_idx = 0;
+#endif  // SFTE_HYPERLINKS
+    }
+
+#if SFTE_SIXEL
+    _sfte_grid_clear_sixel(ctx, start_idx, cnt);
+#endif  // SFTE_SIXEL
+}
+
+/*
+    Shifts the terminal grid up or down by the specified number of lines.
+    Positive values scroll the text UP (moving the viewport down).
+    Negative values scroll the text DOWN (moving the viewport up).
+
+    Strictly respects the active scroll margins (`ctx->term.scroll_top/bottom`).
+    Pushes lines that fall off the top margin into the scrollback buffer
+    (only if scrolling the primary screen and starting from row 0).
+
+    Synchronizes image placements to scroll with the text.
+*/
+static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
+    int top = ctx->term.scroll_top;
+    int bot = ctx->term.scroll_bottom;
+    int height = bot - top + 1;
+    int cols = ctx->term.cols;
+
+    // Clamp the scroll amount to the region height while preserving direction.
+    lines = _SFTE_CLAMP(lines, -height, height);
+
+#if SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+    _sfte_grid_scroll_images(ctx, lines, top, bot);
+#endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
+
+    if (lines > 0) {  // Scroll up
+#if SFTE_SCROLLBACK_CAP
+        if (top == 0) _sfte_grid_push_scrollback(ctx, lines);
 #endif  // SFTE_SCROLLBACK_CAP
 
         int move_cnt = height - lines;
@@ -1663,24 +1762,32 @@ static void _sfte_grid_scroll(sfte_ctx *ctx, int lines) {
             memmove(&ctx->term.cells[top * cols], &ctx->term.cells[(top + lines) * cols],
                     move_cnt * cols * sizeof(sfte_cell));
 
-        int start_idx = (bot - lines + 1) * cols;
-        _sfte_grid_clear_cells(ctx, start_idx, lines * cols);  // clear lines at bot
-    } else if (lines < 0) {                                    // scroll down
+        _sfte_grid_clear_cells(ctx, (bot - lines + 1) * cols, lines * cols);
+    } else if (lines < 0) {  // Scroll down
         lines = -lines;
-        if (lines > height) lines = height;
 
         int move_cnt = height - lines;
         if (move_cnt > 0)
             memmove(&ctx->term.cells[(top + lines) * cols], &ctx->term.cells[top * cols],
                     move_cnt * cols * sizeof(sfte_cell));
 
-        int start_idx = top * cols;
-        _sfte_grid_clear_cells(ctx, start_idx, lines * cols);
+        _sfte_grid_clear_cells(ctx, top * cols, lines * cols);
     }
 
     _sfte_grid_dirty_range(ctx, top * cols, height * cols);
 }
 
+/*
+    Evaluates the cursor's X position against the terminal width and handles wrapping.
+    Must be called BEFORE printing a character that might fall off the edge.
+
+    If auto-wrap is ON, it wraps cursor to column 0 of the next line.
+    If already at the bottom scroll margin, forces a 1-line scroll upwards.
+    Marks the wrapped cell with a `wrapped = 1` flag (used by the reflow engine).
+
+    If auto-wrap is OFF, it clamps the cursor to the final column, causing subsequent
+    characters to overwrite each other.
+*/
 static inline void _sfte_grid_check_wrap(sfte_ctx *ctx) {
     if (ctx->term.cursor_x >= ctx->term.cols) {
         if (ctx->term.auto_wrap) {
@@ -1701,218 +1808,130 @@ static inline void _sfte_grid_check_wrap(sfte_ctx *ctx) {
     }
 }
 
-static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
-    if (new_cols < 1 || new_rows < 1) return;
-#if SFTE_ALT_SCREEN
-    sfte_cell *main_old = ctx->term.alt_active ? ctx->term.alt_cells : ctx->term.cells;
-    sfte_cell *alt_old = ctx->term.alt_active ? ctx->term.cells : NULL;
+// -------------------------------------------------------------------------------------------------
+// >resize
+// -------------------------------------------------------------------------------------------------
 
-    int target_cx = ctx->term.alt_active ? ctx->term.saved_x[0] : ctx->term.cursor_x;
-    int target_cy = ctx->term.alt_active ? ctx->term.saved_y[0] : ctx->term.cursor_y;
-#else
-    sfte_cell *main_old = ctx->term.cells;
-    sfte_cell *alt_old = NULL;
+/*
+    Performs a simple 2D truncation/padding copy of a grid.
+    Used for alt-screens (which don't reflow) and as the primary resizer in non-reflow builds.
+    Allocates and returns a new `sfte_cell` array. Caller assumes ownership.
+*/
+static sfte_cell *_sfte_grid_resize_dumb_copy(sfte_cell *old_grid, int old_cols, int old_rows,
+                                              int new_cols, int new_rows) {
+    if (!old_grid) return NULL;
+    sfte_cell *new_grid = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
+    SFTE_ASSERT(new_grid, "failed to allocate resized grid");
 
-    int target_cx = ctx->term.cursor_x;
-    int target_cy = ctx->term.cursor_y;
-#endif  // !SFTE_ALT_SCREEN
+    int min_cols = new_cols < old_cols ? new_cols : old_cols;
+    int min_rows = new_rows < old_rows ? new_rows : old_rows;
 
-    int max_temp_rows = (
-#if SFTE_SCROLLBACK_CAP
-                            ctx->term.sb_len +
-#endif  // SFTE_SCROLLBACK_CAP
-                            ctx->term.rows) *
-                        (ctx->term.cols / new_cols + 2);
-    if (max_temp_rows < new_rows) max_temp_rows = new_rows;
-    sfte_cell *temp_rows = (sfte_cell *)SFTE_CALLOC(max_temp_rows * new_cols, sizeof(sfte_cell));
-    SFTE_ASSERT(temp_rows, "failed to allocate temporary row data");
+    for (int r = 0; r < min_rows; ++r)
+        for (int c = 0; c < min_cols; ++c) new_grid[r * new_cols + c] = old_grid[r * old_cols + c];
 
-    sfte_reflow_state st = {.temp_rows = temp_rows,
-                            .new_cols = new_cols,
-                            .tr = 0,
-                            .tc = 0,
-                            .new_cx = 0,
-                            .new_cy = 0,
-                            .target_old_cx = target_cx,
-                            .target_old_cy = target_cy,
-                            .is_live = 0};
+    return new_grid;
+}
 
-    _sfte_reflow_grid_into_linear(ctx, main_old, &st);
-
-    int total_lines = st.tr + (st.tc > 0 ? 1 : 0);
-
-    // map into new layout arrays
-    sfte_cell *new_main = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
-    SFTE_ASSERT(new_main, "failed to allocate resized terminal grid");
-
-    int screen_top = st.new_cy - target_cy;
-    if (screen_top < 0) screen_top = 0;
-
-    if (st.new_cy >= screen_top + new_rows) screen_top = st.new_cy - new_rows + 1;
-
-    if (screen_top + new_rows > total_lines) {
-        screen_top = total_lines - new_rows;
-        if (screen_top < 0) screen_top = 0;
-    }
-
-#if SFTE_SCROLLBACK_CAP
-    sfte_cell *new_sb = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
-    SFTE_ASSERT(new_sb, "failed to allocate resized scrollback");
-
-    int sb_lines = screen_top;
-    if (sb_lines > ctx->term.sb_cap) sb_lines = ctx->term.sb_cap;
-    int sb_start = screen_top - sb_lines;
-
-    for (int i = 0; i < sb_lines; ++i)
-        memcpy(&new_sb[i * new_cols], &temp_rows[(sb_start + i) * new_cols],
-               new_cols * sizeof(sfte_cell));
-#endif  // SFTE_SCROLLBACK_CAP
-
-    int copy_lines = total_lines - screen_top;
-    if (copy_lines > new_rows) copy_lines = new_rows;
-    for (int i = 0; i < copy_lines; ++i)
-        memcpy(&new_main[i * new_cols], &temp_rows[(screen_top + i) * new_cols],
-               new_cols * sizeof(sfte_cell));
-
-// anchor cursors
-#if SFTE_ALT_SCREEN
-    if (ctx->term.alt_active) {
-        ctx->term.saved_x[0] = st.new_cx;
-        ctx->term.saved_y[0] = _SFTE_CLAMP(st.new_cy - screen_top, 0, new_rows - 1);
-    } else {
-#endif  // SFTE_ALT_SCREEN
-        ctx->term.cursor_x = st.new_cx;
-        ctx->term.cursor_y = _SFTE_CLAMP(st.new_cy - screen_top, 0, new_rows - 1);
-#if SFTE_ALT_SCREEN
-    }
-#endif  // SFTE_ALT_SCREEN
-
-#if SFTE_ALT_SCREEN
-    // hard copy alt grid
-    // NOTE: alt grid gets no reflow, it destroys visuals of alt-screen based interfaces
-    sfte_cell *new_alt = NULL;
-    if (alt_old) {
-        new_alt = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
-        SFTE_ASSERT(new_alt, "failed to allocate resized alt grid");
-
-        int min_cols = new_cols < ctx->term.cols ? new_cols : ctx->term.cols;
-        int min_rows = new_rows < ctx->term.rows ? new_rows : ctx->term.rows;
-        for (int r = 0; r < min_rows; ++r)
-            for (int c = 0; c < min_cols; ++c)
-                new_alt[r * new_cols + c] = alt_old[r * ctx->term.cols + c];
-
-        if (ctx->term.cursor_x >= new_cols) ctx->term.cursor_x = new_cols - 1;
-        if (ctx->term.cursor_y >= new_rows) ctx->term.cursor_y = new_rows - 1;
-    }
-#endif  // SFTE_ALT_SCREEN
-
-    SFTE_FREE(ctx->term.cells);
-    SFTE_FREE(temp_rows);
-
-#if SFTE_ALT_SCREEN
-    if (ctx->term.alt_cells) SFTE_FREE(ctx->term.alt_cells);
-    ctx->term.cells = ctx->term.alt_active ? new_alt : new_main;
-    ctx->term.alt_cells = ctx->term.alt_active ? new_main : NULL;
-#else
-    ctx->term.cells = new_main;
-#endif  // !SFTE_ALT_SCREEN
-
-#if SFTE_SCROLLBACK_CAP
-    if (ctx->term.scrollback) SFTE_FREE(ctx->term.scrollback);
-    ctx->term.scrollback = new_sb;
-    ctx->term.sb_head = sb_lines % ctx->term.sb_cap;
-    ctx->term.sb_offset = 0;
-    ctx->term.sb_len = sb_lines;
-#endif  // SFTE_SCROLLBACK_CAP
-
-    int old_cols = ctx->term.cols;
-
-    ctx->term.cols = new_cols;
-    ctx->term.rows = new_rows;
-    ctx->term.scroll_top = 0;
-    ctx->term.scroll_bottom = new_rows - 1;
-
-    _sfte_grid_dirty_range(ctx, 0, new_cols * new_rows);
-
+/*
+    Reallocates the tab stops array and populates new columns with default intervals.
+*/
+static void _sfte_grid_resize_tabs(sfte_ctx *ctx, int old_cols, int new_cols) {
     uint8_t *new_tabs = (uint8_t *)SFTE_MALLOC(new_cols);
     SFTE_ASSERT(new_tabs, "failed to allocate new tab stops");
-    for (int i = 0; i < new_cols; ++i)
+    for (int i = 0; i < new_cols; ++i) {
         if (i < old_cols)
             new_tabs[i] = ctx->term.tab_stops[i];
         else
             new_tabs[i] = (i % SFTE_TAB_WIDTH == 0);
+    }
     SFTE_FREE(ctx->term.tab_stops);
     ctx->term.tab_stops = new_tabs;
-
-    _SFTE_INFO(ctx, TERM_RESIZE, new_cols, new_rows);
 }
-#else  // !SFTE_REFLOW
-static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
-    sfte_cell *new_cells = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
-    SFTE_ASSERT(new_cells, "failed to allocate resized terminal grid");
 
-    sfte_cell *new_alt_cells = NULL;
+/*
+    Reallocates all terminal buffers (main, alt, scrollback, tab stops) to match new dimensions.
+    Assumes ownership of freeing the old ctx->term.cells arrays.
+
+    if SFTE_REFLOW is enabled, performs a topological wrap/unwrap of the main screen text.
+    If SFTE_REFLOW is disabled, performs a simple 2D truncation/padding copy.
+    Alt-screen grids are always dumb-copied and never reflowed.
+*/
+static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
+    if (new_cols < 1 || new_rows < 1) return;
+    int old_cols = ctx->term.cols;
+    int old_rows = ctx->term.rows;
+
 #if SFTE_ALT_SCREEN
-    if (ctx->term.alt_cells) {
-        new_alt_cells = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
-        SFTE_ASSERT(new_alt_cells, "failed to allocate resized alt grid");
-    }
+    sfte_cell *main_old = ctx->term.alt_active ? ctx->term.alt_cells : ctx->term.cells;
+    sfte_cell *alt_old = ctx->term.alt_active ? ctx->term.cells : NULL;
+    int target_cx = ctx->term.alt_active ? ctx->term.saved_x[0] : ctx->term.cursor_x;
+    int target_cy = ctx->term.alt_active ? ctx->term.saved_y[0] : ctx->term.cursor_y;
+#else
+    sfte_cell *main_old = ctx->term.cells;
+    int target_cx = ctx->term.cursor_x;
+    int target_cy = ctx->term.cursor_y;
+#endif  // !SFTE_ALT_SCREEN
+
+    _sfte_resize_buffers out = {0};
+
+#if SFTE_REFLOW
+    out = _sfte_reflow_generate_buffers(ctx, main_old, new_cols, new_rows, target_cx, target_cy);
+#else  // !SFTE_REFLOW
+    out.main_grid = _sfte_grid_resize_dumb_copy(main_old, old_cols, old_rows, new_cols, new_rows);
+    out.new_cx = _SFTE_CLAMP(target_cx, 0, new_cols - 1);
+    out.new_cy = _SFTE_CLAMP(target_cy, 0, new_rows - 1);
+#if SFTE_SCROLLBACK_CAP
+    out.sb_grid = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
+    out.sb_lines = 0;
+#endif  // SFTE_SCROLLBACK_CAP
+#endif  // !SFTE_REFLOW
+
+#if SFTE_ALT_SCREEN
+    // Alt screen uses dumb copy, since it's never reflowed
+    sfte_cell *new_alt = NULL;
+    if (alt_old)
+        new_alt = _sfte_grid_resize_dumb_copy(alt_old, old_cols, old_rows, new_cols, new_rows);
 #endif  // SFTE_ALT_SCREEN
+
+    SFTE_FREE(ctx->term.cells);
+#if SFTE_ALT_SCREEN
+    if (ctx->term.alt_cells) SFTE_FREE(ctx->term.alt_cells);
+    ctx->term.cells = ctx->term.alt_active ? new_alt : out.main_grid;
+    ctx->term.alt_cells = ctx->term.alt_active ? out.main_grid : NULL;
+
+    if (ctx->term.alt_active) {
+        ctx->term.saved_x[0] = out.new_cx;
+        ctx->term.saved_y[0] = out.new_cy;
+        ctx->term.cursor_x = _SFTE_CLAMP(ctx->term.cursor_x, 0, new_cols - 1);
+        ctx->term.cursor_y = _SFTE_CLAMP(ctx->term.cursor_y, 0, new_rows - 1);
+    } else {
+        ctx->term.cursor_x = out.new_cx;
+        ctx->term.cursor_y = out.new_cy;
+    }
+#else   // !SFTE_ALT_SCREEN
+    ctx->term.cells = out.main_grid;
+    ctx->term.cursor_x = st.new_cx;
+    ctx->term.cursor_y = st.new_cy;
+#endif  // !SFTE_ALT_SCREEN
 
 #if SFTE_SCROLLBACK_CAP
     if (ctx->term.scrollback) SFTE_FREE(ctx->term.scrollback);
-    ctx->term.scrollback = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
-    ctx->term.sb_head = 0;
+    ctx->term.scrollback = out.sb_grid;
+    ctx->term.sb_head = out.sb_lines % ctx->term.sb_cap;
     ctx->term.sb_offset = 0;
-    ctx->term.sb_len = 0;
+    ctx->term.sb_len = out.sb_lines;
 #endif  // SFTE_SCROLLBACK_CAP
-
-    uint8_t *new_tabs = (uint8_t *)SFTE_MALLOC(new_cols);
-    SFTE_ASSERT(new_tabs, "failed to allocate new tab stops");
-    for (int i = 0; i < new_cols; ++i)
-        if (i < ctx->term.cols)
-            new_tabs[i] = ctx->term.tab_stops[i];
-        else
-            new_tabs[i] = (i % SFTE_TAB_WIDTH == 0);
-    SFTE_FREE(ctx->term.tab_stops);
-    ctx->term.tab_stops = new_tabs;
-
-    int min_cols = new_cols < ctx->term.cols ? new_cols : ctx->term.cols;
-    int min_rows = new_rows < ctx->term.rows ? new_rows : ctx->term.rows;
-
-    for (int r = 0; r < min_rows; ++r) {
-        for (int c = 0; c < min_cols; ++c) {
-            new_cells[r * new_cols + c] = ctx->term.cells[r * ctx->term.cols + c];
-#if SFTE_ALT_SCREEN
-            if (new_alt_cells)
-                new_alt_cells[r * new_cols + c] = ctx->term.alt_cells[r * ctx->term.cols + c];
-#endif  // SFTE_ALT_SCREEN
-        }
-    }
-
-    SFTE_FREE(ctx->term.cells);
-    ctx->term.cells = new_cells;
-#if SFTE_ALT_SCREEN
-    if (ctx->term.alt_cells) {
-        SFTE_FREE(ctx->term.alt_cells);
-        ctx->term.alt_cells = new_alt_cells;
-    }
-#endif  // SFTE_ALT_SCREEN
 
     ctx->term.cols = new_cols;
     ctx->term.rows = new_rows;
-
     ctx->term.scroll_top = 0;
     ctx->term.scroll_bottom = new_rows - 1;
 
-    if (ctx->term.cursor_x >= new_cols) ctx->term.cursor_x = new_cols - 1;
-    if (ctx->term.cursor_y >= new_rows) ctx->term.cursor_y = new_rows - 1;
-
+    _sfte_grid_resize_tabs(ctx, old_cols, new_cols);
     _sfte_grid_dirty_range(ctx, 0, new_cols * new_rows);
-
     _SFTE_INFO(ctx, TERM_RESIZE, new_cols, new_rows);
 }
-#endif  // !SFTE_REFLOW
+#endif  // SFTE_REFLOW
 // =================================================================================================
 // >>img
 // =================================================================================================
@@ -1942,6 +1961,16 @@ static inline sfte_img_placement *_sfte_img_placement_insert(sfte_ctx *ctx, sfte
 
     ctx->term.img_placements[ctx->term.img_placements_len] = p;
     return &ctx->term.img_placements[ctx->term.img_placements_len++];
+}
+
+/*
+    Locates an image in the global pool by its ID.
+    Returns NULL if the image was deleted.
+*/
+static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id) {
+    for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i)
+        if (ctx->term.img_pool[i].id == id) return &ctx->term.img_pool[i];
+    return NULL;
 }
 #endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 // =================================================================================================
@@ -2101,7 +2130,97 @@ static void _sfte_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf) {
 // >>reflow
 // =================================================================================================
 #if SFTE_REFLOW
-static void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell c, int is_cursor) {
+/*
+    Allocates the temporary linear buffer and performs the topological text reflow.
+*/
+static sfte_cell *_sfte_reflow_linearize(sfte_ctx *ctx, sfte_cell *main_old, int new_cols,
+                                         int new_rows, _sfte_reflow_state *st) {
+    // ctx->term.cols / new_cols calculates the raw expansion factor.
+    // We add +2 to to this multiplier:
+    // +1 to account for integer division truncation, and
+    // +1 as a safety margin for double-width characters that force early wraps.
+    int max_temp_rows = (
+#if SFTE_SCROLLBACK_CAP
+                            ctx->term.sb_len +
+#endif  // SFTE_SCROLLBACK_CAP
+                            ctx->term.rows) *
+                        (ctx->term.cols / new_cols + 2);
+
+    if (max_temp_rows < new_rows) max_temp_rows = new_rows;
+
+    sfte_cell *temp_rows = (sfte_cell *)SFTE_CALLOC(max_temp_rows * new_cols, sizeof(sfte_cell));
+    SFTE_ASSERT(temp_rows, "failed to allocate temporary row data");
+
+    st->temp_rows = temp_rows;
+    st->new_cols = new_cols;
+    st->tr = 0, st->tc = 0, st->new_cx = 0, st->new_cy = 0;
+    st->is_live = 0;
+
+    _sfte_reflow_grid_into_linear(ctx, main_old, st);
+    return temp_rows;
+}
+
+/*
+    Maps the linearized reflow buffer back into distinct 2D main and scrollback grids.
+    Modifies `st->new_cy` to reflect its clamped viewport position.
+*/
+static void _sfte_reflow_extract_view(sfte_ctx *ctx, int new_cols, int new_rows, int target_cy,
+                                      _sfte_reflow_state *st, _sfte_resize_buffers *out) {
+    int total_lines = st->tr + (st->tc > 0 ? 1 : 0);
+
+    out->main_grid = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
+    SFTE_ASSERT(out->main_grid, "failed to allocate resized terminal grid");
+
+    // screen_top in [0; min(st->new_cy - new_rows + 1, total_lines - new_rows)]
+    int screen_top = _SFTE_CLAMP(st->new_cy - target_cy, 0, st->new_cy - new_rows + 1);
+    screen_top = _SFTE_CLAMP(screen_top, 0, total_lines - new_rows);
+
+#if SFTE_SCROLLBACK_CAP
+    out->sb_grid = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
+    SFTE_ASSERT(out->sb_grid, "failed to allocate resized scrollback");
+
+    out->sb_lines = screen_top;
+    if (out->sb_lines > ctx->term.sb_cap) out->sb_lines = ctx->term.sb_cap;
+    int sb_start = screen_top - out->sb_lines;
+
+    for (int i = 0; i < out->sb_lines; ++i)
+        memcpy(&out->sb_grid[i * new_cols], &st->temp_rows[(sb_start + i) * new_cols],
+               new_cols * sizeof(sfte_cell));
+#endif  // SFTE_SCROLLBACK_CAP
+
+    int copy_lines = _SFTE_CLAMP(total_lines - screen_top, 0, new_rows);
+    for (int i = 0; i < copy_lines; ++i)
+        memcpy(&out->main_grid[i * new_cols], &st->temp_rows[(screen_top + i) * new_cols],
+               new_cols * sizeof(sfte_cell));
+
+    st->new_cy = _SFTE_CLAMP(st->new_cy - screen_top, 0, new_rows - 1);
+}
+
+/*
+    Orchestrates the reflow pipeline and returns the newly allocated grid buffers.
+*/
+static _sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_ctx *ctx, sfte_cell *main_old,
+                                                          int new_cols, int new_rows, int target_cx,
+                                                          int target_cy) {
+    _sfte_reflow_state st = {
+        .target_old_cx = target_cx,
+        .target_old_cy = target_cy,
+    };
+
+    sfte_cell *temp = _sfte_reflow_linearize(ctx, main_old, new_cols, new_rows, &st);
+
+    _sfte_resize_buffers out = {0};
+    _sfte_reflow_extract_view(ctx, new_cols, new_rows, target_cy, &st, &out);
+
+    SFTE_FREE(temp);
+
+    out.new_cx = st.new_cx;
+    out.new_cy = st.new_cy;
+
+    return out;
+}
+
+static void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell c, int is_cursor) {
 #if SFTE_WIDE_CHARS
     // if we're pushing a wide char and we're at last column, wrap early
     if ((c.attr & ATTR_WIDE) && st->tc == st->new_cols - 1) {
@@ -2134,7 +2253,7 @@ static void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell c, int is_cursor)
 }
 
 static void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old,
-                                          sfte_reflow_state *st) {
+                                          _sfte_reflow_state *st) {
 #if SFTE_SCROLLBACK_CAP
     for (int i = 0; i < ctx->term.sb_len; ++i) {
         int ring_idx = (ctx->term.sb_head - ctx->term.sb_len + i + ctx->term.sb_cap) %
