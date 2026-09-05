@@ -50,7 +50,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_WAYLAND
 #define SFTE_WAYLAND 1
 #endif  // SFTE_WAYLAND
-#else
+#else   // SFTE_CUSTOM_BACKEND
 #define SFTE_WAYLAND 0
 #endif  // SFTE_CUSTOM_BACKEND
 
@@ -121,7 +121,7 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #define SFTE_FONT_VMETRICS _sfte_stb_vmetrics
 #define SFTE_FONT_BOUNDS _sfte_stb_bounds
 #define SFTE_FONT_BAKE _sfte_stb_bake
-#else
+#else  // SFTE_CUSTOM_FONT_BACKEND
 #if !defined(SFTE_FONT_INIT) || !defined(SFTE_FONT_GET_SCALE) || !defined(SFTE_FONT_VMETRICS) ||   \
     !defined(SFTE_FONT_BOUNDS) || !defined(SFTE_FONT_BAKE)
 #error                                                                                             \
@@ -1175,6 +1175,12 @@ static void _sfte_input_send_mouse_event(sfte_ctx *ctx, int btn, int is_release,
 // >reflow
 // -------------------------------------------------------------------------------------------------
 #if SFTE_REFLOW
+static void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell c, int is_cursor);
+static inline int _sfte_reflow_get_len(sfte_cell *row, int cols, int cursor_cx);
+static void _sfte_reflow_process_row(sfte_cell *row, int cols, int cursor_cx,
+                                     _sfte_reflow_state *st);
+static void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old,
+                                          _sfte_reflow_state *st);
 static sfte_cell *_sfte_reflow_linearize(sfte_ctx *ctx, sfte_cell *main_old, int new_cols,
                                          int new_rows, _sfte_reflow_state *st);
 static void _sfte_reflow_extract_view(sfte_ctx *ctx, int new_cols, int new_rows, int target_cy,
@@ -1182,9 +1188,6 @@ static void _sfte_reflow_extract_view(sfte_ctx *ctx, int new_cols, int new_rows,
 static _sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_ctx *ctx, sfte_cell *main_old,
                                                           int new_cols, int new_rows, int target_cx,
                                                           int target_cy);
-static void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell c, int is_cursor);
-static void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old,
-                                          _sfte_reflow_state *st);
 #endif  // SFTE_REFLOW
 
 // -------------------------------------------------------------------------------------------------
@@ -2007,7 +2010,6 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int new_cols, int new_rows) {
     _sfte_grid_dirty_range(ctx, 0, new_cols * new_rows);
     _SFTE_INFO(ctx, TERM_RESIZE, new_cols, new_rows);
 }
-#endif  // SFTE_REFLOW
 // =================================================================================================
 // >>img
 // =================================================================================================
@@ -2193,6 +2195,126 @@ static void _sfte_input_send_mouse_event(sfte_ctx *ctx, int btn, int is_release,
 // =================================================================================================
 #if SFTE_REFLOW
 /*
+    Pushes a single cell into the temporary linear buffer.
+*/
+static void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell c, int is_cursor) {
+#if SFTE_WIDE_CHARS
+    // If we're pushing a double-width character and we're at last column, wrap early.
+    if ((c.attr & ATTR_WIDE) && st->tc == st->new_cols - 1) {
+        sfte_cell space = c;
+        space.rune = ' ';
+        space.fg = 0xFFFFFF;
+        space.bg = SFTE_BG_COLOR;
+        space.attr = 0;
+        space.wrapped = 1;
+        st->temp_rows[st->tr * st->new_cols + st->tc] = space;
+        st->tc = 0;
+        st->tr++;
+    }
+#endif  // SFTE_WIDE_CHARS
+
+    if (st->tc == st->new_cols) {
+        st->temp_rows[st->tr * st->new_cols + st->new_cols - 1].wrapped = 1;
+        st->tc = 0;
+        st->tr++;
+    }
+
+    if (is_cursor) {
+        st->new_cx = st->tc;
+        st->new_cy = st->tr;
+    }
+
+    c.wrapped = 0;
+    st->temp_rows[st->tr * st->new_cols + st->tc] = c;
+    st->tc++;
+}
+
+/*
+    Calculates the true length of a line by trimming empty trailing spaces.
+    If the cursor is on this line (cursor_cx >= 0), it ensures the length includes the cursor.
+*/
+static inline int _sfte_reflow_get_len(sfte_cell *row, int cols, int cursor_cx) {
+    if (row[cols - 1].wrapped) return cols;
+    int len = cols;
+
+    // Terminals pad lines with empty cells. When resizing, we must trim these
+    // to prevent invisible padding from wrapping and creating artificial blank lines.
+    // However, a cell is only truly empty if:
+    // 1. it contains a space or null rune,
+    // 2. its bg is the default color (colored spaces are used by TUIs to draw UI).
+    // Finally, we must NEVER trim the cell where the cursor is currently sitting,
+    // even if its a blank space.
+    while (len > 0 && (row[len - 1].rune == ' ' || row[len - 1].rune == 0) &&
+           row[len - 1].bg == SFTE_BG_COLOR) {
+        if (cursor_cx >= 0 && len - 1 == cursor_cx) break;
+        len--;
+    }
+
+    // Ensure the cursor isn't trimmed out.
+    // Handles cases where cursor_cx is beyond the actual string length, e.g., wrap pending states.
+    if (cursor_cx >= 0 && len <= cursor_cx) len = cursor_cx + 1;
+
+    return len;
+}
+
+/*
+    Processes a single row, extracting length, pushing cells, and handling cursor edge cases.
+*/
+static void _sfte_reflow_process_row(sfte_cell *row, int cols, int cursor_cx,
+                                     _sfte_reflow_state *st) {
+    int len = _sfte_reflow_get_len(row, cols, cursor_cx);
+
+    for (int c = 0; c < len; ++c) _sfte_reflow_push(st, row[c], c == cursor_cx);
+
+    if (cursor_cx >= 0 && cursor_cx >= len) {
+        if (st->tc == st->new_cols) {
+            st->temp_rows[st->tr * st->new_cols + st->new_cols - 1].wrapped = 1;
+            st->tc = 0;
+            st->tr++;
+        }
+        st->new_cx = st->tc;
+        st->new_cy = st->tr;
+    }
+
+    if (!row[cols - 1].wrapped) {
+        st->tc = 0;
+        st->tr++;
+    }
+}
+
+/*
+    Flattens the terminals history (both the scrollback ring buffer and active 2D grid)
+    into a single continuous 1D stream.
+
+    To wrap text accurately across the boundaries of the screen and the scrollback, it
+    must evaluate the text from the oldest recorded line down to the newest.
+    Because the scrollback is a circular array, we must do modular rithmetic backwards
+    from `sb_head` to read it in chronological order.
+    The active cursor can only exist on the live screen, so we pass `-1`
+    during scrollback iteration to explicitly trim trailing whitespace on all historical lines.
+*/
+static void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old,
+                                          _sfte_reflow_state *st) {
+#if SFTE_SCROLLBACK_CAP
+    for (int i = 0; i < ctx->term.sb_len; ++i) {
+        int ring_idx = (ctx->term.sb_head - ctx->term.sb_len + i + ctx->term.sb_cap) %
+                       ctx->term.sb_cap;
+        sfte_cell *row = &ctx->term.scrollback[ring_idx * ctx->term.cols];
+        _sfte_reflow_process_row(row, ctx->term.cols, -1, st);
+    }
+#endif  // SFTE_SCROLLBACK_CAP
+
+    // reflow live grid
+    st->is_live = 1;
+    for (int r = 0; r < ctx->term.rows; ++r) {
+        sfte_cell *row = &main_old[r * ctx->term.cols];
+        int cursor_cx = (r == st->target_old_cy) ? st->target_old_cx : -1;
+
+        _sfte_reflow_process_row(row, ctx->term.cols, cursor_cx, st);
+    }
+}
+
+/*
     Allocates the temporary linear buffer and performs the topological text reflow.
 */
 static sfte_cell *_sfte_reflow_linearize(sfte_ctx *ctx, sfte_cell *main_old, int new_cols,
@@ -2233,9 +2355,17 @@ static void _sfte_reflow_extract_view(sfte_ctx *ctx, int new_cols, int new_rows,
     out->main_grid = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
     SFTE_ASSERT(out->main_grid, "failed to allocate resized terminal grid");
 
-    // screen_top in [0; min(st->new_cy - new_rows + 1, total_lines - new_rows)]
-    int screen_top = _SFTE_CLAMP(st->new_cy - target_cy, 0, st->new_cy - new_rows + 1);
-    screen_top = _SFTE_CLAMP(screen_top, 0, total_lines - new_rows);
+    // Clamp the cursors target row to the new screen height
+    int cy = target_cy < new_rows ? target_cy : new_rows - 1;
+
+    // Map the viewport to match the cursors visual row
+    int screen_top = st->new_cy - cy;
+
+    // Clamp the viewport to the absolute limits of the text buffer
+    int max_top = total_lines - new_rows;
+    if (max_top < 0) max_top = 0;
+
+    screen_top = _SFTE_CLAMP(screen_top, 0, max_top);
 
 #if SFTE_SCROLLBACK_CAP
     out->sb_grid = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
@@ -2254,6 +2384,14 @@ static void _sfte_reflow_extract_view(sfte_ctx *ctx, int new_cols, int new_rows,
     for (int i = 0; i < copy_lines; ++i)
         memcpy(&out->main_grid[i * new_cols], &st->temp_rows[(screen_top + i) * new_cols],
                new_cols * sizeof(sfte_cell));
+
+    for (int i = copy_lines * new_cols; i < new_rows * new_cols; ++i) {
+        out->main_grid[i].rune = ' ';
+        out->main_grid[i].bg = SFTE_BG_COLOR;
+        out->main_grid[i].fg = 0xFFFFFF;
+        out->main_grid[i].attr = 0;
+        out->main_grid[i].wrapped = 0;
+    }
 
     st->new_cy = _SFTE_CLAMP(st->new_cy - screen_top, 0, new_rows - 1);
 }
@@ -2281,100 +2419,7 @@ static _sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_ctx *ctx, sfte_ce
 
     return out;
 }
-
-static void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell c, int is_cursor) {
-#if SFTE_WIDE_CHARS
-    // if we're pushing a wide char and we're at last column, wrap early
-    if ((c.attr & ATTR_WIDE) && st->tc == st->new_cols - 1) {
-        sfte_cell space = c;
-        space.rune = ' ';
-        space.fg = 0xFFFFFF;
-        space.bg = SFTE_BG_COLOR;
-        space.attr = 0;
-        space.wrapped = 1;
-        st->temp_rows[st->tr * st->new_cols + st->tc] = space;
-        st->tc = 0;
-        st->tr++;
-    }
-#endif  // SFTE_WIDE_CHARS
-
-    if (st->tc == st->new_cols) {
-        st->temp_rows[st->tr * st->new_cols + st->new_cols - 1].wrapped = 1;
-        st->tc = 0;
-        st->tr++;
-    }
-
-    if (is_cursor) {
-        st->new_cx = st->tc;
-        st->new_cy = st->tr;
-    }
-
-    c.wrapped = 0;
-    st->temp_rows[st->tr * st->new_cols + st->tc] = c;
-    st->tc++;
-}
-
-static void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old,
-                                          _sfte_reflow_state *st) {
-#if SFTE_SCROLLBACK_CAP
-    for (int i = 0; i < ctx->term.sb_len; ++i) {
-        int ring_idx = (ctx->term.sb_head - ctx->term.sb_len + i + ctx->term.sb_cap) %
-                       ctx->term.sb_cap;
-        sfte_cell *row = &ctx->term.scrollback[ring_idx * ctx->term.cols];
-        int is_wrapped = row[ctx->term.cols - 1].wrapped;
-
-        int len = ctx->term.cols;
-        if (!is_wrapped)
-            while (len > 0 && (row[len - 1].rune == ' ' || row[len - 1].rune == 0) &&
-                   row[len - 1].bg == SFTE_BG_COLOR)
-                len--;
-
-        for (int c = 0; c < len; ++c) _sfte_reflow_push(st, row[c], 0);
-        if (!is_wrapped) {
-            st->tc = 0;
-            st->tr++;
-        }
-    }
-#endif  // SFTE_SCROLLBACK_CAP
-
-    // reflow live grid
-    st->is_live = 1;
-    for (int r = 0; r < ctx->term.rows; ++r) {
-        sfte_cell *row = &main_old[r * ctx->term.cols];
-        int is_wrapped = row[ctx->term.cols - 1].wrapped;
-
-        int len = ctx->term.cols;
-        if (!is_wrapped) {
-            while (len > 0 && (row[len - 1].rune == ' ' || row[len - 1].rune == 0) &&
-                   row[len - 1].bg == SFTE_BG_COLOR) {
-                if (r == st->target_old_cy && len - 1 == st->target_old_cx) break;
-                len--;
-            }
-            if (r == st->target_old_cy && len <= st->target_old_cx) len = st->target_old_cx + 1;
-        }
-
-        for (int c = 0; c < len; ++c) {
-            int is_cursor = (r == st->target_old_cy && c == st->target_old_cx);
-            _sfte_reflow_push(st, row[c], is_cursor);
-        }
-
-        if (r == st->target_old_cy && st->target_old_cx >= len) {
-            if (st->tc == st->new_cols) {
-                st->temp_rows[st->tr * st->new_cols + st->new_cols - 1].wrapped = 1;
-                st->tc = 0;
-                st->tr++;
-            }
-            st->new_cx = st->tc;
-            st->new_cy = st->tr;
-        }
-
-        if (!is_wrapped) {
-            st->tc = 0;
-            st->tr++;
-        }
-    }
-}
-
+#endif  // SFTE_REFLOW
 // =================================================================================================
 // >>sixel
 // =================================================================================================
