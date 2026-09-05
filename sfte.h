@@ -1093,21 +1093,8 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
 // >utf8
 // -------------------------------------------------------------------------------------------------
 static uint8_t _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b);
-static inline void _sfte_utf8_write_cell(sfte_ctx *ctx, int idx, uint32_t rune, uint32_t fg,
-                                         uint32_t bg, uint32_t attr
-#if SFTE_HYPERLINKS
-                                         ,
-                                         uint16_t link_idx
-#endif  // SFTE_HYPERLINKS
-#if SFTE_EXT_UNDERLINES
-                                         ,
-                                         uint8_t ul_style
-#endif  // SFTE_EXT_UNDERLINES
-#if SFTE_COLOR_UNDERLINE
-                                         ,
-                                         uint32_t ul_color
-#endif  // SFTE_COLOR_UNDERLINE
-);
+static inline void _sfte_utf8_stamp_cell(sfte_ctx *ctx, int idx, uint32_t rune,
+                                         uint32_t extra_attr);
 static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune);
 
 // -------------------------------------------------------------------------------------------------
@@ -1437,42 +1424,28 @@ static uint8_t _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b) {
 }
 
 /*
-    Copies the active cursor styling (colors, underlines, links) to a grid cell.
-    Dirties the cell and increments cursor column position.
+    Stamps the active terminal cursor styling onto a specific grid cell.
+    Isolates all feature-toggle macros to keep call sites clean.
+    Does NOT advance the cursor.
 */
-static inline void _sfte_utf8_write_cell(sfte_ctx *ctx, int idx, uint32_t rune, uint32_t fg,
-                                         uint32_t bg, uint32_t attr
-#if SFTE_HYPERLINKS
-                                         ,
-                                         uint16_t link_idx
-#endif  // SFTE_HYPERLINKS
-#if SFTE_EXT_UNDERLINES
-                                         ,
-                                         uint8_t ul_style
-#endif  // SFTE_EXT_UNDERLINES
-#if SFTE_COLOR_UNDERLINE
-                                         ,
-                                         uint32_t ul_color
-#endif  // SFTE_COLOR_UNDERLINE
-) {
+static inline void _sfte_utf8_stamp_cell(sfte_ctx *ctx, int idx, uint32_t rune,
+                                         uint32_t extra_attr) {
     sfte_cell *c = &ctx->term.cells[idx];
     c->rune = rune;
-    c->fg = fg;
-    c->bg = bg;
-    c->attr = attr;
+    c->fg = ctx->term.cur_fg;
+    c->bg = ctx->term.cur_bg;
+    c->attr = ctx->term.cur_attr | extra_attr;
     c->dirty = 1;
 
 #if SFTE_HYPERLINKS
-    c->link_idx = link_idx;
+    c->link_idx = ctx->term.cur_link_idx;
 #endif  // SFTE_HYPERLINKS
 #if SFTE_EXT_UNDERLINES
-    c->ul_style = ul_style;
+    c->ul_style = ctx->term.cur_ul_style;
 #endif  // SFTE_EXT_UNDERLINES
 #if SFTE_COLOR_UNDERLINE
-    c->ul_color = ul_color;
+    c->ul_color = ctx->term.cur_ul_color;
 #endif  // SFTE_COLOR_UNDERLINE
-
-    ctx->term.cursor_x++;
 }
 
 /*
@@ -1515,20 +1488,12 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
         // if in last column, leave it blank and wrap early.
         if (ctx->term.cursor_x == ctx->term.cols - 1) {
             int idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y);
-            _sfte_utf8_write_cell(ctx, idx, ' ', 0xFFFFFFFF, SFTE_BG_COLOR, 0
-#if SFTE_HYPERLINKS
-                                  ,
-                                  0
-#endif  // SFTE_HYPERLINKS
-#if SFTE_EXT_UNDERLINES
-                                  ,
-                                  0
-#endif  // SFTE_EXT_UNDERLINES
-#if SFTE_COLOR_UNDERLINE
-                                  ,
-                                  0x00000000
-#endif  // SFTE_COLOR_UNDERLINE
-            );
+            _sfte_utf8_stamp_cell(ctx, idx, ' ', 0);
+            ctx->term.cells[idx].fg = 0xFFFFFF;
+            ctx->term.cells[idx].bg = SFTE_BG_COLOR;
+            ctx->term.cells[idx].attr = 0;
+
+            ctx->term.cursor_x++;
             _sfte_grid_check_wrap(ctx);
         }
 
@@ -1537,48 +1502,21 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
 
         // Draw the actual character.
         int idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y);
-        _sfte_utf8_write_cell(ctx, idx, rune, ctx->term.cur_fg, ctx->term.cur_bg,
-                              ctx->term.cur_attr | ATTR_WIDE
-#if SFTE_HYPERLINKS
-                              ,
-                              ctx->term.cur_link_idx
-#endif  // SFTE_HYPERLINKS
-#if SFTE_EXT_UNDERLINES
-                              ,
-                              ctx->term.cur_ul_style
-#endif  // SFTE_EXT_UNDERLINES
-#if SFTE_COLOR_UNDERLINE
-                              ,
-                              ctx->term.cur_ul_color
-#endif  // SFTE_COLOR_UNDERLINE
-        );
+        _sfte_utf8_stamp_cell(ctx, idx, rune, ATTR_WIDE);
 
         // Place a dummy right after it so that it has enough space to render.
-        int dummy_idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y);
-        _sfte_utf8_write_cell(ctx, dummy_idx, ' ', ctx->term.cur_fg, ctx->term.cur_bg,
-                              ctx->term.cur_attr | ATTR_DUMMY, ctx->term.cur_link_idx,
-                              ctx->term.cur_ul_style, ctx->term.cur_ul_color);
+        int dummy_idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x + 1, ctx->term.cursor_y);
+        _sfte_utf8_stamp_cell(ctx, dummy_idx, rune, ATTR_DUMMY);
 
+        ctx->term.cursor_x += 2;
         return;
     }
 #endif  // SFTE_WIDE_CHARS
 
     // Write a normal, one-width character.
     int idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y);
-    _sfte_utf8_write_cell(ctx, idx, rune, ctx->term.cur_fg, ctx->term.cur_bg, ctx->term.cur_attr
-#if SFTE_HYPERLINKS
-                          ,
-                          ctx->term.cur_link_idx
-#endif  // SFTE_HYPERLINKS
-#if SFTE_EXT_UNDERLINES
-                          ,
-                          ctx->term.cur_ul_style
-#endif  // SFTE_EXT_UNDERLINES
-#if SFTE_COLOR_UNDERLINE
-                          ,
-                          ctx->term.cur_ul_color
-#endif  // SFTE_COLOR_UNDERLINE
-    );
+    _sfte_utf8_stamp_cell(ctx, idx, rune, 0);
+    ctx->term.cursor_x++;
 }
 
 // =================================================================================================
