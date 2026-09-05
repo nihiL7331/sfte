@@ -892,8 +892,8 @@ typedef struct {
 #if SFTE_SELECTION
     int mouse_sel_active;                      // 1 if has selection
     int mouse_sel_dragging;                    // 1 if lmb is held down
-    int mouse_sel_start_x, mouse_sel_start_y;  // abs grid coords
-    int mouse_sel_end_x, mouse_sel_end_y;
+    int mouse_sel_start_c, mouse_sel_start_r;  // abs grid coords
+    int mouse_sel_end_c, mouse_sel_end_r;
 #endif  // SFTE_SELECTION
 #endif  // SFTE_MOUSE
 #if SFTE_KITTY_KB
@@ -1156,16 +1156,20 @@ static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id);
 #endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 
 // -------------------------------------------------------------------------------------------------
-// >state
+// >view
+// -------------------------------------------------------------------------------------------------
+static void _sfte_view_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf);
+
+// -------------------------------------------------------------------------------------------------
+// >input
 // -------------------------------------------------------------------------------------------------
 #if SFTE_SELECTION
-static inline int _sfte_is_selected(sfte_ctx *ctx, int c, int logical_r);
+static inline int _sfte_input_is_selected(sfte_ctx *ctx, int c, int r);
 #endif  // SFTE_SELECTION
 #if SFTE_MOUSE
-static void _sfte_mouse_send_event(sfte_ctx *ctx, int btn, int is_release, int c, int r,
-                                   int is_motion);
+static void _sfte_input_send_mouse_event(sfte_ctx *ctx, int btn, int is_release, int c, int r,
+                                         int is_motion);
 #endif  // SFTE_MOUSE
-static void _sfte_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf);
 
 // -------------------------------------------------------------------------------------------------
 // >reflow
@@ -1608,6 +1612,27 @@ static void _sfte_grid_from_px(sfte_ctx *ctx, int px_x, int px_y, int *out_c, in
 }
 
 /*
+    Flags a range of logical rows as dirty to force a redraw.
+    Automatically handles min/max sorting, scrollback offset mapping,
+    and clamping to the visible physical screen.
+*/
+static inline void _sfte_grid_dirty_rows(sfte_ctx *ctx, int r1, int r2) {
+    int min_r = r1 < r2 ? r1 : r2;
+    int max_r = r1 > r2 ? r1 : r2;
+
+#if SFTE_SCROLLBACK_CAP
+    min_r += ctx->term.sb_offset;
+    max_r += ctx->term.sb_offset;
+#endif  // SFTE_SCROLLBACK_CAP
+
+    min_r = _SFTE_CLAMP(min_r, 0, ctx->term.rows);
+    max_r = _SFTE_CLAMP(max_r, 0, ctx->term.rows);
+
+    if (min_r <= max_r)
+        _sfte_grid_dirty_range(ctx, min_r * ctx->term.cols, (max_r - min_r + 1) * ctx->term.cols);
+}
+
+/*
     Flags a rectangular region of the grid as dirty, forcing a redraw on the next frame.
     Safely clips coordinates that fall outside the terminal boundaries.
 */
@@ -2041,118 +2066,17 @@ static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id) {
 }
 #endif  // SFTE_SIXEL || SFTE_KITTY_GRAPHICS
 // =================================================================================================
-// >>state
+// >>view
 // =================================================================================================
 
-#if SFTE_SELECTION
-static void _sfte_dirty_selection_rows(sfte_ctx *ctx, int y1, int y2) {
-    int min_y = y1 < y2 ? y1 : y2;
-    int max_y = y1 > y2 ? y1 : y2;
-
-#if SFTE_SCROLLBACK_CAP
-    min_y += ctx->term.sb_offset;
-    max_y += ctx->term.sb_offset;
-#endif  // SFTE_SCROLLBACK_CAP
-
-    if (min_y < 0) min_y = 0;
-    if (max_y >= ctx->term.rows) max_y = ctx->term.rows - 1;
-
-    if (min_y <= max_y) {
-        _sfte_grid_dirty_range(ctx, min_y * ctx->term.cols, (max_y - min_y + 1) * ctx->term.cols);
-    }
-}
-
-static inline int _sfte_is_selected(sfte_ctx *ctx, int c, int logical_r) {
-    if (!ctx->term.mouse_sel_active) return 0;
-
-    int sx = ctx->term.mouse_sel_start_x;
-    int sy = ctx->term.mouse_sel_start_y;
-    int ex = ctx->term.mouse_sel_end_x;
-    int ey = ctx->term.mouse_sel_end_y;
-
-    // if dragging backwards, flip start/end pnts
-    if (sy > ey || (sy == ey && sx > ex)) {
-        int tmp = sy;
-        sy = ey;
-        ey = tmp;
-        tmp = sx;
-        sx = ex;
-        ex = tmp;
-    }
-
-    if (logical_r < sy || logical_r > ey) return 0;
-    if (sy == ey) return (c >= sx && c <= ex);  // same line
-    if (logical_r == sy) return c >= sx;        // first line
-    if (logical_r == ey) return c <= ex;        // last line
-    return 1;                                   // middle lines
-}
-#endif  // SFTE_SELECTION
-
-#if SFTE_MOUSE
-static void _sfte_mouse_send_event(sfte_ctx *ctx, int btn, int is_release, int c, int r,
-                                   int is_motion) {
-    if (!ctx->term.mouse_mode) return;
-
-    // 0=LMB, 1=MMB, 2=RMB, 3=release, 64/65=scroll
-    int encoded_btn = btn;
-
-    if (is_release && ctx->term.mouse_ext != 1006) {
-        encoded_btn = 3;  // in x10 mode we don't know which button is released
-    }
-
-    if (is_motion) {
-        if (ctx->term.mouse_mode == 1002 && ctx->term.mouse_btn_state != 3)
-            encoded_btn = ctx->term.mouse_btn_state + 32;  // dragging
-        else if (ctx->term.mouse_mode == 1003)
-            encoded_btn = ctx->term.mouse_btn_state + 32;  // hover/dragging
-        else
-            return;  // 1000 ignores motion
-    }
-
-    char buf[32];
-    int len = 0;
-
-    int tc = c + 1;
-    int tr = r + 1;
-
-    if (ctx->term.mouse_ext == 1006) {
-        // SGR: ESC [ < btn ; x ; y M/m
-        char end_char = is_release ? 'm' : 'M';
-        len = snprintf(buf, sizeof(buf), "\033[<%d;%d;%d%c", encoded_btn, tc, tr, end_char);
-    } else {
-        // X10: ESC [ <btn+32> <x+32> <y+32>
-        // caps out at coord 223
-        if (tc > 223 || tr > 223) return;
-        len = snprintf(buf, sizeof(buf), "\033[M%c%c%c", encoded_btn + 32, tc + 32, tr + 32);
-    }
-
-    ctx->write_cb(ctx->user_data, buf, len);
-}
-#endif  // SFTE_MOUSE
-
-// convert raw pxs to grid coordinates
-static void _sfte_px_to_grid(sfte_ctx *ctx, int px_x, int px_y, int *out_c, int *out_r) {
-    int c = (px_x - SFTE_PAD_X) / ctx->font.cell_width;
-    int r = (px_y - SFTE_PAD_Y) / ctx->font.cell_height;
-
-    c = _SFTE_CLAMP(c, 0, ctx->term.cols - 1);
-    r = _SFTE_CLAMP(r, 0, ctx->term.rows - 1);
-
-#if SFTE_SCROLLBACK_CAP
-    r -= ctx->term.sb_offset;
-#endif  // SFTE_SCROLLBACK_CAP
-
-    if (out_c) *out_c = c;
-    if (out_r) *out_r = r;
-}
-
-static void _sfte_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf) {
+/*
+    Fills the padding regions around the terminal grid with the background color.
+*/
+static void _sfte_view_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf) {
     int w = ctx->width;
     int h = ctx->height;
-
     int grid_w = ctx->term.cols * ctx->font.cell_width;
     int grid_h = ctx->term.rows * ctx->font.cell_height;
-
     uint32_t bg = (SFTE_BG_OPACITY << 24) | SFTE_BG_COLOR;
 
 #if SFTE_PAD_Y
@@ -2164,13 +2088,106 @@ static void _sfte_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf) {
 #endif  // SFTE_PAD_Y
 
 #if SFTE_PAD_X
-    for (int y = SFTE_PAD_Y; y < SFTE_PAD_Y + grid_h && y < h; ++y)
+    for (int y = SFTE_PAD_Y; y < SFTE_PAD_Y + grid_h && y < h; ++y) {
         for (int x = 0; x < SFTE_PAD_X && x < w; ++x) px_buf[y * w + x] = bg;
-
-    for (int y = SFTE_PAD_Y; y < SFTE_PAD_Y + grid_h && y < h; ++y)
         for (int x = SFTE_PAD_X + grid_w; x < w; ++x) px_buf[y * w + x] = bg;
+    }
 #endif  // SFTE_PAD_X
 }
+
+// =================================================================================================
+// >>input
+// =================================================================================================
+
+#if SFTE_SELECTION
+/*
+    Determines if a specific cell falls within the active selection bounds.
+    Evaluates against logical rows, meaning selections correclty scroll with text history.
+*/
+static inline int _sfte_input_is_selected(sfte_ctx *ctx, int c, int r) {
+    if (!ctx->term.mouse_sel_active) return 0;
+
+    int sc = ctx->term.mouse_sel_start_c;
+    int sr = ctx->term.mouse_sel_start_r;
+    int ec = ctx->term.mouse_sel_end_c;
+    int er = ctx->term.mouse_sel_end_r;
+
+    // Normalize backward drags
+    if (sr > er || (sr == er && sc > ec)) {
+        int tmp = sr;
+        sr = er, er = tmp;
+        tmp = sc, sc = ec, ec = tmp;
+    }
+
+    if (r < sr || r > er) return 0;
+    if (sr == er) return (c >= sc && c <= ec);  // same line
+    if (r == sr) return c >= sc;                // first line
+    if (r == er) return c <= ec;                // last line
+    return 1;                                   // middle lines
+}
+#endif  // SFTE_SELECTION
+
+#if SFTE_MOUSE
+// Tracking modes (DECSET)
+#define SFTE_MOUSE_MODE_CLICK 1000   // Report button press/release only
+#define SFTE_MOUSE_MODE_DRAG 1002    // Report clicks and drag motion
+#define SFTE_MOUSE_MODE_MOTION 1003  // Report all hover and drag motion
+
+// Formatting extensions (DECSET)
+#define SFTE_MOUSE_EXT_DEFAULT 0  // Legacy X10 encoding
+#define SFTE_MOUSE_EXT_SGR 1006   // Modern SGR encoding
+
+// Encoding offsets
+#define SFTE_MOUSE_BTN_RELEASE 3     // The default "button released" state in legacy modes
+#define SFTE_MOUSE_MOTION_OFFSET 32  // Added to the button state to indicate motion/dragging
+#define SFTE_MOUSE_X10_OFFSET 32  // Added to coords to ensure they are printable ASCII characters
+#define SFTE_MOUSE_X10_MAX_COORD 223  // 255 (max byte) - 32 (offset)
+
+/*
+    Encodes and flushes mouse events back to the host application via terminal escape sequences.
+    Supports both legacy X10 (max coords 223) and modern SGR 1006 formats.
+    Must be fed `screen_r` coordinates, never `logical_r` coordinates.
+*/
+static void _sfte_input_send_mouse_event(sfte_ctx *ctx, int btn, int is_release, int c, int r,
+                                         int is_motion) {
+    if (!ctx->term.mouse_mode) return;
+
+    int encoded_btn = btn;
+    // Legacy modes cannot encode which button was released
+    if (is_release && ctx->term.mouse_ext != SFTE_MOUSE_EXT_SGR) {
+        encoded_btn = SFTE_MOUSE_BTN_RELEASE;
+    }
+
+    if (is_motion) {
+        if (ctx->term.mouse_mode == SFTE_MOUSE_MODE_DRAG &&
+            ctx->term.mouse_btn_state != SFTE_MOUSE_BTN_RELEASE)
+            encoded_btn = ctx->term.mouse_btn_state + SFTE_MOUSE_MOTION_OFFSET;  // Dragging
+        else if (ctx->term.mouse_mode == SFTE_MOUSE_MODE_MOTION)
+            encoded_btn = ctx->term.mouse_btn_state + SFTE_MOUSE_MOTION_OFFSET;  // Hover/dragging
+        else
+            return;  // Mode 1000 ignores motion
+    }
+
+    char buf[16];
+    int len = 0;
+    int tc = c + 1;
+    int tr = r + 1;  // 1-based indexing for terminal escape sequences
+
+    if (ctx->term.mouse_ext == SFTE_MOUSE_EXT_SGR) {
+        // SGR: ESC [ < btn ; x ; y M/m
+        char end_char = is_release ? 'm' : 'M';
+        len = snprintf(buf, sizeof(buf), "\033[<%d;%d;%d%c", encoded_btn, tc, tr, end_char);
+    } else {
+        // X10: ESC [ <btn+32> <x+32> <y+32>
+        if (tc > SFTE_MOUSE_X10_MAX_COORD || tr > SFTE_MOUSE_X10_MAX_COORD) return;
+        len = snprintf(buf, sizeof(buf), "\033[M%c%c%c", encoded_btn + SFTE_MOUSE_X10_OFFSET,
+                       tc + SFTE_MOUSE_X10_OFFSET, tr + SFTE_MOUSE_X10_OFFSET);
+    }
+
+    if (ctx->write_cb) ctx->write_cb(ctx->user_data, buf, len);
+}
+#endif  // SFTE_MOUSE
+
 // =================================================================================================
 // >>reflow
 // =================================================================================================
@@ -5500,7 +5517,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
     uint8_t pad_was_dirty = ctx->padding_dirty;
 
     if (ctx->padding_dirty > 0) {
-        _sfte_clear_padding_rects(ctx, px_buf);
+        _sfte_view_clear_padding_rects(ctx, px_buf);
         ctx->padding_dirty--;
         DAMAGE_ADD(0, 0, w, h);
     }
@@ -5551,7 +5568,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
 
 #if SFTE_WIDE_CHARS
     if (vis_cx > 0)
-        if (_sfte_get_view_cell(ctx, vis_cx, vis_cy)->attr & ATTR_DUMMY) vis_cx--;
+        if (_sfte_grid_get_cell(ctx, vis_cx, vis_cy)->attr & ATTR_DUMMY) vis_cx--;
 #endif  // SFTE_WIDE_CHARS
 
     // if cursor moved, dirty the old cell to erase it, and dirty the new cell to draw it
@@ -5689,19 +5706,17 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
             int idx = _SFTE_GRID_IDX(ctx, c, r);
             if (!ctx->term.cells[idx].dirty) continue;
 
-            sfte_cell *vcell = _sfte_get_view_cell(ctx, c, r);
+            sfte_cell *vcell = _sfte_grid_get_cell(ctx, c, r);
             uint32_t fg = vcell->fg ? vcell->fg : 0xFFFFFF;
             uint32_t bg = vcell->bg ? vcell->bg : SFTE_BG_COLOR;
             uint16_t attr = vcell->attr;
 
 #if SFTE_SELECTION
-            if (_sfte_is_selected(ctx, c,
-                                  r
+            int logical_r = r;
 #if SFTE_SCROLLBACK_CAP
-                                      - ctx->term.sb_offset
+            logical_r -= ctx->term.sb_offset;
 #endif  // SFTE_SCROLLBACK_CAP
-                                  ))
-                attr |= ATTR_REVERSE;
+            if (_sfte_input_is_selected(ctx, c, logical_r)) attr |= ATTR_REVERSE;
 #endif  // SFTE_SELECTION
 
             if (attr & ATTR_REVERSE) {
@@ -5738,7 +5753,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
             int idx = _SFTE_GRID_IDX(ctx, c, r);
             if (!ctx->term.cells[idx].dirty) continue;
 
-            sfte_cell *vcell = _sfte_get_view_cell(ctx, c, r);
+            sfte_cell *vcell = _sfte_grid_get_cell(ctx, c, r);
 #if SFTE_WIDE_CHARS
             if (vcell->attr & ATTR_DUMMY) {
                 DAMAGE_ADD(c * ctx->font.cell_width + SFTE_PAD_X,
@@ -6242,7 +6257,7 @@ void sfte_zoom(sfte_ctx *ctx, float delta) {
 #if SFTE_MOUSE
 void sfte_mouse_move(sfte_ctx *ctx, int px_x, int px_y) {
     int c, r;
-    _sfte_px_to_grid(ctx, px_x, px_y, &c, &r);
+    _sfte_grid_from_px(ctx, px_x, px_y, &c, &r, NULL);
 
     if (ctx->term.mouse_hover_x == c && ctx->term.mouse_hover_y) return;
 
@@ -6250,27 +6265,27 @@ void sfte_mouse_move(sfte_ctx *ctx, int px_x, int px_y) {
     ctx->term.mouse_hover_y = r;
 
     if (ctx->term.mouse_mode) {
-        _sfte_mouse_send_event(ctx, ctx->term.mouse_btn_state, 0, c, r, 1);
+        _sfte_input_send_mouse_event(ctx, ctx->term.mouse_btn_state, 0, c, r, 1);
         return;
     }
 
 #if SFTE_SELECTION
     if (!ctx->term.mouse_sel_dragging) return;
     sfte_term *term = &ctx->term;
-    if (term->mouse_sel_end_x == term->mouse_hover_x &&
-        term->mouse_sel_end_y == term->mouse_hover_y)
+    if (term->mouse_sel_end_c == term->mouse_hover_x &&
+        term->mouse_sel_end_r == term->mouse_hover_y)
         return;
 
-    _sfte_dirty_selection_rows(ctx, term->mouse_sel_start_y, term->mouse_sel_end_y);
-    term->mouse_sel_end_x = term->mouse_hover_x;
-    term->mouse_sel_end_y = term->mouse_hover_y;
-    _sfte_dirty_selection_rows(ctx, term->mouse_sel_start_y, term->mouse_sel_end_y);
+    _sfte_grid_dirty_rows(ctx, term->mouse_sel_start_r, term->mouse_sel_end_r);
+    term->mouse_sel_end_c = term->mouse_hover_x;
+    term->mouse_sel_end_r = term->mouse_hover_y;
+    _sfte_grid_dirty_rows(ctx, term->mouse_sel_start_r, term->mouse_sel_end_r);
 #endif  // SFTE_SELECTION
 }
 
 void sfte_mouse_click(sfte_ctx *ctx, int btn, int pressed, int px_x, int px_y) {
     int c, r;
-    _sfte_px_to_grid(ctx, px_x, px_y, &c, &r);
+    _sfte_grid_from_px(ctx, px_x, px_y, &c, &r, NULL);
     sfte_term *term = &ctx->term;
 
 #if SFTE_HYPERLINKS
@@ -6289,7 +6304,7 @@ void sfte_mouse_click(sfte_ctx *ctx, int btn, int pressed, int px_x, int px_y) {
         else
             term->mouse_btn_state = 3;
 
-        _sfte_mouse_send_event(ctx, btn, !pressed, c, r, 0);
+        _sfte_input_send_mouse_event(ctx, btn, !pressed, c, r, 0);
         return;
     }
 
@@ -6297,20 +6312,20 @@ void sfte_mouse_click(sfte_ctx *ctx, int btn, int pressed, int px_x, int px_y) {
     if (btn != 0) return;
     if (pressed) {
         if (term->mouse_sel_active)
-            _sfte_dirty_selection_rows(ctx, term->mouse_sel_start_x, term->mouse_sel_end_y);
-        term->mouse_sel_start_x = term->mouse_hover_x = c;
-        term->mouse_sel_start_y = term->mouse_hover_y = r;
-        term->mouse_sel_end_x = c;
-        term->mouse_sel_end_y = r;
+            _sfte_grid_dirty_rows(ctx, term->mouse_sel_start_c, term->mouse_sel_end_r);
+        term->mouse_sel_start_c = term->mouse_hover_x = c;
+        term->mouse_sel_start_r = term->mouse_hover_y = r;
+        term->mouse_sel_end_c = c;
+        term->mouse_sel_end_r = r;
         term->mouse_sel_active = 1;
         term->mouse_sel_dragging = 1;
-        _sfte_dirty_selection_rows(ctx, term->mouse_sel_start_y, term->mouse_sel_end_y);
+        _sfte_grid_dirty_rows(ctx, term->mouse_sel_start_r, term->mouse_sel_end_r);
     } else {
         term->mouse_sel_dragging = 0;
-        if (term->mouse_sel_start_x == term->mouse_sel_end_x &&
-            term->mouse_sel_start_y == term->mouse_sel_end_y) {
+        if (term->mouse_sel_start_c == term->mouse_sel_end_c &&
+            term->mouse_sel_start_r == term->mouse_sel_end_r) {
             term->mouse_sel_active = 0;
-            _sfte_dirty_selection_rows(ctx, term->mouse_sel_start_y, term->mouse_sel_end_y);
+            _sfte_grid_dirty_rows(ctx, term->mouse_sel_start_r, term->mouse_sel_end_r);
         }
     }
 #endif  // SFTE_SELECTION
@@ -6318,11 +6333,11 @@ void sfte_mouse_click(sfte_ctx *ctx, int btn, int pressed, int px_x, int px_y) {
 
 void sfte_mouse_scroll(sfte_ctx *ctx, int dir, int px_x, int px_y) {
     int c, r;
-    _sfte_px_to_grid(ctx, px_x, px_y, &c, &r);
+    _sfte_grid_from_px(ctx, px_x, px_y, &c, &r, NULL);
 
     if (ctx->term.mouse_mode) {
         int btn = (dir > 0) ? 64 : 65;
-        _sfte_mouse_send_event(ctx, btn, 0, c, r, 0);
+        _sfte_input_send_mouse_event(ctx, btn, 0, c, r, 0);
     }
 
 #if SFTE_SCROLLBACK_CAP
@@ -6431,10 +6446,10 @@ void sfte_view_scroll(sfte_ctx *ctx, int delta) {
 size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes) {
     if (!ctx->term.mouse_sel_active) return 0;
 
-    int sx = ctx->term.mouse_sel_start_x;
-    int sy = ctx->term.mouse_sel_start_y;
-    int ex = ctx->term.mouse_sel_end_x;
-    int ey = ctx->term.mouse_sel_end_y;
+    int sx = ctx->term.mouse_sel_start_c;
+    int sy = ctx->term.mouse_sel_start_r;
+    int ex = ctx->term.mouse_sel_end_c;
+    int ey = ctx->term.mouse_sel_end_r;
 
     // if dragging backwards, flip start/end pnts
     if (sy > ey || (sy == ey && sx > ex)) {
@@ -6461,7 +6476,7 @@ size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes) {
         int actual_end = row_end;
         if (actual_end == ctx->term.cols - 1) {
             while (actual_end >= row_start) {
-                sfte_cell *vcell = _sfte_get_view_cell(ctx, actual_end, phys_r);
+                sfte_cell *vcell = _sfte_grid_get_cell(ctx, actual_end, phys_r);
                 if (vcell->rune != ' ' && vcell->rune != 0) break;
                 actual_end--;
             }
@@ -6474,7 +6489,7 @@ size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes) {
     } while (0)
 
         for (int c = row_start; c <= actual_end; ++c) {
-            sfte_cell *vcell = _sfte_get_view_cell(ctx, c, phys_r);
+            sfte_cell *vcell = _sfte_grid_get_cell(ctx, c, phys_r);
             uint32_t rune = (vcell->rune && vcell->rune != ' ') ? vcell->rune : ' ';
 
             // convert 32b to UTF-8
@@ -6497,7 +6512,7 @@ size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes) {
 
         if (r < ey)
 #if SFTE_REFLOW
-            if (!_sfte_get_view_cell(ctx, ctx->term.cols - 1, phys_r)->wrapped)
+            if (!_sfte_grid_get_cell(ctx, ctx->term.cols - 1, phys_r)->wrapped)
 #endif  // SFTE_REFLOW
                 WRITE_CHAR('\n');
     }
