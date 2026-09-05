@@ -673,6 +673,13 @@ static const char *_sfte_log_messages[] = {_SFTE_LOG_ITEMS};
     } while (0)
 
 #endif  // !SFTE_NO_LOGGING
+
+#if SFTE_WIDE_CHARS
+#include <wchar.h>
+#define _SFTE_CHAR_WIDTH(rune) wcwidth(rune)
+#else
+#define _SFTE_CHAR_WIDTH(rune) 1
+#endif
 // =================================================================================================
 // >>internal data structures
 // =================================================================================================
@@ -1085,7 +1092,22 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
 // -------------------------------------------------------------------------------------------------
 // >utf8
 // -------------------------------------------------------------------------------------------------
-static int _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b);
+static uint8_t _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b);
+static inline void _sfte_utf8_write_cell(sfte_ctx *ctx, int idx, uint32_t rune, uint32_t fg,
+                                         uint32_t bg, uint32_t attr
+#if SFTE_HYPERLINKS
+                                         ,
+                                         uint16_t link_idx
+#endif  // SFTE_HYPERLINKS
+#if SFTE_EXT_UNDERLINES
+                                         ,
+                                         uint8_t ul_style
+#endif  // SFTE_EXT_UNDERLINES
+#if SFTE_COLOR_UNDERLINE
+                                         ,
+                                         uint32_t ul_color
+#endif  // SFTE_COLOR_UNDERLINE
+);
 static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune);
 
 // -------------------------------------------------------------------------------------------------
@@ -1377,27 +1399,26 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
 // =================================================================================================
 // >>utf8
 // =================================================================================================
-#if SFTE_WIDE_CHARS
-#include <wchar.h>
-#define _SFTE_CHAR_WIDTH(rune) wcwidth(rune)
-#else
-#define _SFTE_CHAR_WIDTH(rune) 1
-#endif
 
-// returns 1 if a full UTF-8 rune has been successfully decoded
-static int _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b) {
+/*
+    Feeds a single byte into the UTF-8 state machine.
+    Returns 1 if a complete rune has been successfully decoded.
+    Returns 0 if more bytes are needed, or if an invalid sequence was encountered (which aborts the
+   current sequence and resets the state machine).
+*/
+static uint8_t _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b) {
     if (ctx->term.utf8_bytes_left > 0) {
-        if ((b & 0xC0) == 0x80) {  // continuation byte
+        if ((b & 0xC0) == 0x80) {  // Continuation byte
             ctx->term.utf8_rune = (ctx->term.utf8_rune << 6) | (b & 0x3F);
             ctx->term.utf8_bytes_left--;
-            if (ctx->term.utf8_bytes_left == 0) return 1;
+            if (!ctx->term.utf8_bytes_left) return 1;
             return 0;
         } else
-            ctx->term.utf8_bytes_left = 0;  // invalid sequence, abort
+            ctx->term.utf8_bytes_left = 0;  // Invalid sequence, abort
     }
 
-    // start of a new rune
-    if ((b & 0x80) == 0) {
+    // Start of a new rune
+    if ((b & 0x80) == 0x00) {
         ctx->term.utf8_rune = b;
         ctx->term.utf8_bytes_left = 0;
         return 1;
@@ -1415,6 +1436,51 @@ static int _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b) {
     return 0;
 }
 
+/*
+    Copies the active cursor styling (colors, underlines, links) to a grid cell.
+    Dirties the cell and increments cursor column position.
+*/
+static inline void _sfte_utf8_write_cell(sfte_ctx *ctx, int idx, uint32_t rune, uint32_t fg,
+                                         uint32_t bg, uint32_t attr
+#if SFTE_HYPERLINKS
+                                         ,
+                                         uint16_t link_idx
+#endif  // SFTE_HYPERLINKS
+#if SFTE_EXT_UNDERLINES
+                                         ,
+                                         uint8_t ul_style
+#endif  // SFTE_EXT_UNDERLINES
+#if SFTE_COLOR_UNDERLINE
+                                         ,
+                                         uint32_t ul_color
+#endif  // SFTE_COLOR_UNDERLINE
+) {
+    sfte_cell *c = &ctx->term.cells[idx];
+    c->rune = rune;
+    c->fg = fg;
+    c->bg = bg;
+    c->attr = attr;
+    c->dirty = 1;
+
+#if SFTE_HYPERLINKS
+    c->link_idx = link_idx;
+#endif  // SFTE_HYPERLINKS
+#if SFTE_EXT_UNDERLINES
+    c->ul_style = ul_style;
+#endif  // SFTE_EXT_UNDERLINES
+#if SFTE_COLOR_UNDERLINE
+    c->ul_color = ul_color;
+#endif  // SFTE_COLOR_UNDERLINE
+
+    ctx->term.cursor_x++;
+}
+
+/*
+    Inserts a decoded unicode rune into the terminal grid at the current cursor position.
+    Combining characters (these of width 0) are appended to the previous logical cell.
+    Double-width characters (these of width 2) if placed on the last column, the column
+    is left blank, the line wraps early, and the character is placed on the next line.
+*/
 static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
     int w = _SFTE_CHAR_WIDTH(rune);
     if (w < 0) w = 1;
@@ -1439,79 +1505,44 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
         return;
     }
 
-    // evaluate line wrapping before drawing
-    // ensures chars placed in the final col enter a pending wrap state
-    // instead of immediately dropping to the next line
+    // Evaluate line wrapping before drawing,
+    // ensures characters placed in the final column enter a pending wrap state.
     _sfte_grid_check_wrap(ctx);
 
 #if SFTE_WIDE_CHARS
     if (w == 2) {
-        // wide char cannot be split across lines,
-        // if in last column, leave it blank and wrap early
+        // A wide character cannot be split across lines,
+        // if in last column, leave it blank and wrap early.
         if (ctx->term.cursor_x == ctx->term.cols - 1) {
             int idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y);
-            ctx->term.cells[idx].rune = ' ';
-            ctx->term.cells[idx].fg = 0xFFFFFF;
-            ctx->term.cells[idx].bg = SFTE_BG_COLOR;
-            ctx->term.cells[idx].attr = 0;
-#if SFTE_HYPERLINKS
-            ctx->term.cells[idx].link_idx = ctx->term.cur_link_idx;
-#endif  // SFTE_HYPERLINKS
-            ctx->term.cells[idx].dirty = 1;
+            _sfte_utf8_write_cell(ctx, idx, ' ', 0xFFFFFFFF, SFTE_BG_COLOR, 0, 0, 0, 0x00000000);
             ctx->term.cursor_x++;
             _sfte_grid_check_wrap(ctx);
         }
 
+        // If terminal grid has only one column, we can't draw the double-width character.
         if (ctx->term.cursor_x == ctx->term.cols - 1) return;
 
+        // Draw the actual character.
         int idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y);
-        ctx->term.cells[idx].rune = rune;
-        ctx->term.cells[idx].fg = ctx->term.cur_fg;
-        ctx->term.cells[idx].bg = ctx->term.cur_bg;
-        ctx->term.cells[idx].attr = ctx->term.cur_attr | ATTR_WIDE;
-#if SFTE_HYPERLINKS
-        ctx->term.cells[idx].link_idx = ctx->term.cur_link_idx;
-#endif  // SFTE_HYPERLINKS
-#if SFTE_EXT_UNDERLINES
-        ctx->term.cells[idx].ul_style = ctx->term.cur_ul_style;
-#endif  // SFTE_EXT_UNDERLINES
-#if SFTE_COLOR_UNDERLINE
-        ctx->term.cells[idx].ul_color = ctx->term.cur_ul_color;
-#endif  // SFTE_COLOR_UNDERLINE
-        ctx->term.cells[idx].dirty = 1;
+        _sfte_utf8_write_cell(ctx, idx, rune, ctx->term.cur_fg, ctx->term.cur_bg,
+                              ctx->term.cur_attr | ATTR_WIDE, ctx->term.cur_link_idx,
+                              ctx->term.cur_ul_style, ctx->term.cur_ul_color);
 
-        int dummy_idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x + 1, ctx->term.cursor_y);
-        ctx->term.cells[dummy_idx].rune = ' ';
-        ctx->term.cells[dummy_idx].fg = ctx->term.cur_fg;
-        ctx->term.cells[dummy_idx].bg = ctx->term.cur_bg;
-        ctx->term.cells[dummy_idx].attr = ctx->term.cur_attr | ATTR_DUMMY;
-#if SFTE_HYPERLINKS
-        ctx->term.cells[dummy_idx].link_idx = ctx->term.cur_link_idx;
-#endif  // SFTE_HYPERLINKS
-        ctx->term.cells[dummy_idx].dirty = 1;
+        // Place a dummy right after it so that it has enough space to render.
+        int dummy_idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y);
+        _sfte_utf8_write_cell(ctx, dummy_idx, ' ', ctx->term.cur_fg, ctx->term.cur_bg,
+                              ctx->term.cur_attr | ATTR_DUMMY, ctx->term.cur_link_idx,
+                              ctx->term.cur_ul_style, ctx->term.cur_ul_color);
 
-        ctx->term.cursor_x += 2;
-    } else
-#endif  // SFTE_WIDE_CHARS
-    {
-        int idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y);
-        ctx->term.cells[idx].rune = rune;
-        ctx->term.cells[idx].fg = ctx->term.cur_fg;
-        ctx->term.cells[idx].bg = ctx->term.cur_bg;
-        ctx->term.cells[idx].attr = ctx->term.cur_attr;
-#if SFTE_HYPERLINKS
-        ctx->term.cells[idx].link_idx = ctx->term.cur_link_idx;
-#endif  // SFTE_HYPERLINKS
-#if SFTE_EXT_UNDERLINES
-        ctx->term.cells[idx].ul_style = ctx->term.cur_ul_style;
-#endif  // SFTE_EXT_UNDERLINES
-#if SFTE_COLOR_UNDERLINE
-        ctx->term.cells[idx].ul_color = ctx->term.cur_ul_color;
-#endif  // SFTE_COLOR_UNDERLINE
-        ctx->term.cells[idx].dirty = 1;
-
-        ctx->term.cursor_x++;
+        return;
     }
+#endif  // SFTE_WIDE_CHARS
+
+    // Write a normal, one-width character.
+    int idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_x, ctx->term.cursor_y);
+    _sfte_utf8_write_cell(ctx, idx, rune, ctx->term.cur_fg, ctx->term.cur_bg, ctx->term.cur_attr,
+                          ctx->term.cur_link_idx, ctx->term.cur_ul_style, ctx->term.cur_ul_color);
 }
 
 // =================================================================================================
