@@ -1123,6 +1123,8 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune);
 // -------------------------------------------------------------------------------------------------
 #define _SFTE_GRID_IDX(ctx, c, r) ((r) * ctx->term.cols + (c))
 static inline sfte_cell *_sfte_grid_get_cell(sfte_ctx *ctx, int c, int r);
+static void _sfte_grid_from_px(sfte_ctx *ctx, int px_x, int px_y, int *out_c, int *out_logical_r,
+                               int *out_screen_r);
 static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int start_c, int start_r, int cols,
                                          int rows);
 static inline void _sfte_grid_dirty_range(sfte_ctx *ctx, int start_idx, int cnt);
@@ -1163,7 +1165,6 @@ static inline int _sfte_is_selected(sfte_ctx *ctx, int c, int logical_r);
 static void _sfte_mouse_send_event(sfte_ctx *ctx, int btn, int is_release, int c, int r,
                                    int is_motion);
 #endif  // SFTE_MOUSE
-static void _sfte_px_to_grid(sfte_ctx *ctx, int px_x, int px_y, int *out_c, int *out_r);
 static void _sfte_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf);
 
 // -------------------------------------------------------------------------------------------------
@@ -1583,6 +1584,27 @@ static inline sfte_cell *_sfte_grid_get_cell(sfte_ctx *ctx, int c, int r) {
 #else   // !SFTE_SCROLLBACK_CAP
     return &ctx->term.cells[_SFTE_GRID_IDX(ctx, c, r)];
 #endif  // !SFTE_SCROLLBACK_CAP
+}
+
+/*
+    Converts physical pixel coordinates into discrete grid coordinates.
+    `out_logical_r` includes scrollback offset (can be negative).
+    `out_screen_r` is strictly clamped to the physical screen (0 to rows-1).
+*/
+static void _sfte_grid_from_px(sfte_ctx *ctx, int px_x, int px_y, int *out_c, int *out_logical_r,
+                               int *out_screen_r) {
+    int c = _SFTE_CLAMP((px_x - SFTE_PAD_X) / ctx->font.cell_width, 0, ctx->term.cols - 1);
+    int r = _SFTE_CLAMP((px_y - SFTE_PAD_Y) / ctx->font.cell_height, 0, ctx->term.rows - 1);
+    if (out_c) *out_c = c;
+    if (out_screen_r) *out_screen_r = r;
+
+    if (out_logical_r) {
+#if SFTE_SCROLLBACK_CAP
+        *out_logical_r = r - ctx->term.sb_offset;
+#else   // !SFTE_SCROLLBACK_CAP
+        *out_logical_r = r;
+#endif  // !SFTE_SCROLLBACK_CAP
+    }
 }
 
 /*
