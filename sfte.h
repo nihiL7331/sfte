@@ -54,6 +54,13 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #define SFTE_WAYLAND 0
 #endif  // SFTE_CUSTOM_BACKEND
 
+typedef enum {
+    _SFTE_LOG_LVL_PANIC = 0,
+    _SFTE_LOG_LVL_ERROR = 1,
+    _SFTE_LOG_LVL_WARN = 2,
+    _SFTE_LOG_LVL_INFO = 3,
+} _sfte_log_level;
+
 // #################################################################################################
 // >>>CONFIGURATION
 // #################################################################################################
@@ -66,13 +73,22 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #define SFTE_FREE(p) free(p)
 #endif  // !SFTE_MALLOC
 
+#ifndef SFTE_ASSERT
+#include <assert.h>
+#define SFTE_ASSERT(c, m) assert((c) && (m))
+#endif  // SFTE_ASSERT
+
 #ifndef SFTE_LOG_LEVEL
-#define SFTE_LOG_LEVEL 0
+#define SFTE_LOG_LEVEL _SFTE_LOG_LVL_PANIC
 #endif  // SFTE_LOG_LEVEL
 
-#ifndef SFTE_LOGGER_FUNC
-#define SFTE_LOGGER_FUNC _sfte_logger_default
-#endif  // SFTE_LOGGER_FUNC
+#ifndef SFTE_LOG_TAG
+#define SFTE_LOG_TAG "sfte"
+#endif  // SFTE_LOG_TAG
+
+#ifndef SFTE_LOG_FUNC
+#define SFTE_LOG_FUNC _sfte_log_default_func
+#endif  // SFTE_LOG_FUNC
 
 #ifndef SFTE_TERM_ENV
 #define SFTE_TERM_ENV "xterm-256color"
@@ -629,17 +645,19 @@ int sfte_wayland_run(sfte_wayland_app *app);
     _SFTE_LOGITEM_XMACRO(CLIPBOARD_EMPTY, "clipboard call requested but buffer is empty")
 
 #define _SFTE_LOGITEM_XMACRO(item, msg) item,
-typedef enum { _SFTE_LOG_ITEMS } _sfte_log_item_t;
+typedef enum { _SFTE_LOG_ITEMS } _sfte_log_item;
 #undef _SFTE_LOGITEM_XMACRO
 
 #define _SFTE_LOGITEM_XMACRO(item, msg) #item ": " msg,
 static const char *_sfte_log_messages[] = {_SFTE_LOG_ITEMS};
 #undef _SFTE_LOGITEM_XMACRO
 
-#define _SFTE_PANIC(ctx, code, ...) _sfte_log(ctx, code, 0, __LINE__, ##__VA_ARGS__)
-#define _SFTE_ERROR(ctx, code, ...) _sfte_log(ctx, code, 1, __LINE__, ##__VA_ARGS__)
-#define _SFTE_WARN(ctx, code, ...) _sfte_log(ctx, code, 2, __LINE__, ##__VA_ARGS__)
-#define _SFTE_INFO(ctx, code, ...) _sfte_log(ctx, code, 3, __LINE__, ##__VA_ARGS__)
+#define _SFTE_PANIC(ctx, code, ...)                                                                \
+    _sfte_log(ctx, code, _SFTE_LOG_LVL_PANIC, __LINE__, ##__VA_ARGS__)
+#define _SFTE_ERROR(ctx, code, ...)                                                                \
+    _sfte_log(ctx, code, _SFTE_LOG_LVL_ERROR, __LINE__, ##__VA_ARGS__)
+#define _SFTE_WARN(ctx, code, ...) _sfte_log(ctx, code, _SFTE_LOG_LVL_WARN, __LINE__, ##__VA_ARGS__)
+#define _SFTE_INFO(ctx, code, ...) _sfte_log(ctx, code, _SFTE_LOG_LVL_INFO, __LINE__, ##__VA_ARGS__)
 
 #else
 
@@ -661,7 +679,7 @@ static const char *_sfte_log_messages[] = {_SFTE_LOG_ITEMS};
 #ifndef SFTE_NO_LOGGING
 typedef struct sfte_logger {
     void (*func)(const char *tag,              // always "sfte"
-                 uint32_t log_level,           // 0=panic, 1=error, 2=warning, 3=info
+                 _sfte_log_level log_level,    // 0=panic, 1=error, 2=warning, 3=info
                  const char *message_or_null,  // a message string, may be nullptr in release mode
                  uint32_t line_nr              // line number in sfte.h
     );
@@ -1048,12 +1066,12 @@ static const float _sfte_font_scales[SFTE_FONT_MAX_COUNT] = SFTE_FONT_SCALES;
 // =================================================================================================
 
 // -------------------------------------------------------------------------------------------------
-// >logging
+// >log
 // -------------------------------------------------------------------------------------------------
 #ifndef SFTE_NO_LOGGING
-static void _sfte_logger_default(const char *tag, uint32_t log_level, const char *msg,
-                                 uint32_t line_nr);
-static void _sfte_log(sfte_ctx *ctx, _sfte_log_item_t log_item, uint32_t log_level,
+static void _sfte_log_default_func(const char *tag, _sfte_log_level log_level, const char *msg,
+                                   uint32_t line_nr);
+static void _sfte_log(sfte_ctx *ctx, _sfte_log_item log_item, _sfte_log_level log_level,
                       uint32_t line_nr, ...);
 #endif  // !SFTE_NO_LOGGING
 
@@ -1250,48 +1268,57 @@ static void _sfte_wayland_loop(sfte_wayland_app *app);
     } while (0)
 
 // =================================================================================================
-// >>logging
+// >>log
 // =================================================================================================
-#ifndef SFTE_ASSERT
-#include <assert.h>
-#define SFTE_ASSERT(c, m) assert(c &&m)
-#endif  // SFTE_ASSERT
-
 #ifndef SFTE_NO_LOGGING
 
-static void _sfte_logger_default(const char *tag, uint32_t log_level, const char *msg,
-                                 uint32_t line_nr) {
+#define _SFTE_LOG_MAX_MSG_LEN 512
+
+/*
+    Default standard error logging sink.
+    Outputs logs in format: ['tag':'line_nr']('log_level') 'msg'
+*/
+static void _sfte_log_default_func(const char *tag, _sfte_log_level log_level, const char *msg,
+                                   uint32_t line_nr) {
     const char *level_str = "???";
     switch (log_level) {
-    case 0: level_str = "PANIC"; break;
-    case 1: level_str = "ERROR"; break;
-    case 2: level_str = "WARN"; break;
-    case 3: level_str = "INFO"; break;
+    case _SFTE_LOG_LVL_PANIC: level_str = "PANIC"; break;
+    case _SFTE_LOG_LVL_ERROR: level_str = "ERROR"; break;
+    case _SFTE_LOG_LVL_WARN: level_str = "WARN"; break;
+    case _SFTE_LOG_LVL_INFO: level_str = "INFO"; break;
     }
     fprintf(stderr, "[%s:%d](%s) %s\n", tag, line_nr, level_str, msg);
 }
 
-static void _sfte_log(sfte_ctx *ctx, _sfte_log_item_t log_item, uint32_t log_level,
+/*
+    Formats a log message from the X-Macro catalog passed by 'log_item' and dispatches it to the
+    active sink.
+
+    Routes to a user-provided logger if one is configured in 'ctx', otherwise falls
+    back to stderr. Aborts the process if 'log_level' is PANIC.
+
+    This function is not called directly, instead its used by macros (`_SFTE_PANIC/ERROR/WARN/INFO`)
+*/
+static void _sfte_log(sfte_ctx *ctx, _sfte_log_item log_item, _sfte_log_level log_level,
                       uint32_t line_nr, ...) {
     if (log_level > SFTE_LOG_LEVEL) return;
 
-    char buf[512];
+    char buf[_SFTE_LOG_MAX_MSG_LEN];
     va_list args;
     va_start(args, line_nr);
     vsnprintf(buf, sizeof(buf), _sfte_log_messages[log_item], args);
     va_end(args);
 
-    void (*log_func)(const char *, uint32_t, const char *,
-                     uint32_t) = ctx->logger.func ? ctx->logger.func : _sfte_logger_default;
+    void (*log_func)(const char *, _sfte_log_level, const char *,
+                     uint32_t) = ctx->logger.func ? ctx->logger.func : _sfte_log_default_func;
 
-    log_func("sfte", log_level, buf, line_nr);
+    log_func(SFTE_LOG_TAG, log_level, buf, line_nr);
 
     // for log level PANIC it would be 'undefined behaviour' to continue
-    if (log_level == 0) abort();
+    if (log_level == _SFTE_LOG_LVL_PANIC) abort();
 }
 
 #endif  // !SFTE_NO_LOGGING
-
 // =================================================================================================
 // >>b64
 // =================================================================================================
@@ -5795,7 +5822,7 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
     ctx->user_data = user_data;
 
 #ifndef SFTE_NO_LOGGING
-    ctx->logger.func = SFTE_LOGGER_FUNC;
+    ctx->logger.func = SFTE_LOG_FUNC;
 #endif  // !SFTE_NO_LOGGING
 
 #if SFTE_SIXEL
