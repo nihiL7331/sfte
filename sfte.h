@@ -1125,6 +1125,7 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune);
 static inline sfte_cell *_sfte_grid_get_cell(sfte_ctx *ctx, int c, int r);
 static void _sfte_grid_from_px(sfte_ctx *ctx, int px_x, int px_y, int *out_c, int *out_logical_r,
                                int *out_screen_r);
+static inline void _sfte_grid_dirty_rows(sfte_ctx *ctx, int r1, int r2);
 static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int start_c, int start_r, int cols,
                                          int rows);
 static inline void _sfte_grid_dirty_range(sfte_ctx *ctx, int start_idx, int cnt);
@@ -1158,7 +1159,6 @@ static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id);
 // >state
 // -------------------------------------------------------------------------------------------------
 #if SFTE_SELECTION
-static void _sfte_dirty_selection_rows(sfte_ctx *ctx, int y1, int y2);
 static inline int _sfte_is_selected(sfte_ctx *ctx, int c, int logical_r);
 #endif  // SFTE_SELECTION
 #if SFTE_MOUSE
