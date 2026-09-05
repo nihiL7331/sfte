@@ -1274,27 +1274,6 @@ static void _sfte_logger_default(const char *tag, uint32_t log_level, const char
     fprintf(stderr, "[%s:%d](%s) %s\n", tag, line_nr, level_str, msg);
 }
 
-#define _SFTE_LOG_ITEMS                                                                            \
-    _SFTE_LOGITEM_XMACRO(OK, "ok")                                                                 \
-    _SFTE_LOGITEM_XMACRO(FONT_LOADED, "font loaded and baked to atlas")                            \
-    _SFTE_LOGITEM_XMACRO(PTY_SPAWN, "master/slave pair successfully spawned")                      \
-    _SFTE_LOGITEM_XMACRO(PTY_FORK_FAIL, "forkpty failed with errno: '%d'")                         \
-    _SFTE_LOGITEM_XMACRO(UNHANDLED_CSI, "unhandled CSI command: '%c' with '%d' parms")             \
-    _SFTE_LOGITEM_XMACRO(UNHANDLED_OSC, "unhandled OSC payload: '%s'")                             \
-    _SFTE_LOGITEM_XMACRO(TERM_RESIZE, "resized grid to '%dx%d'")                                   \
-    _SFTE_LOGITEM_XMACRO(WAYLAND_REGISTRY_BOUND, "wayland globals bound")                          \
-    _SFTE_LOGITEM_XMACRO(KEYMAP_LOADED, "xkb keymap loaded from compositor")                       \
-    _SFTE_LOGITEM_XMACRO(SHELL_FALLBACK, "SHELL env var unset, falling back to /bin/sh")           \
-    _SFTE_LOGITEM_XMACRO(CLIPBOARD_EMPTY, "clipboard call requested but buffer is empty")
-
-#define _SFTE_LOGITEM_XMACRO(item, msg) item,
-typedef enum { _SFTE_LOG_ITEMS } _sfte_log_item_t;
-#undef _SFTE_LOGITEM_XMACRO
-
-#define _SFTE_LOGITEM_XMACRO(item, msg) #item ": " msg,
-static const char *_sfte_log_messages[] = {_SFTE_LOG_ITEMS};
-#undef _SFTE_LOGITEM_XMACRO
-
 static void _sfte_log(sfte_ctx *ctx, _sfte_log_item_t log_item, uint32_t log_level,
                       uint32_t line_nr, ...) {
     if (log_level > SFTE_LOG_LEVEL) return;
@@ -1313,24 +1292,6 @@ static void _sfte_log(sfte_ctx *ctx, _sfte_log_item_t log_item, uint32_t log_lev
     // for log level PANIC it would be 'undefined behaviour' to continue
     if (log_level == 0) abort();
 }
-
-#define _SFTE_PANIC(ctx, code, ...) _sfte_log(ctx, code, 0, __LINE__, ##__VA_ARGS__)
-#define _SFTE_ERROR(ctx, code, ...) _sfte_log(ctx, code, 1, __LINE__, ##__VA_ARGS__)
-#define _SFTE_WARN(ctx, code, ...) _sfte_log(ctx, code, 2, __LINE__, ##__VA_ARGS__)
-#define _SFTE_INFO(ctx, code, ...) _sfte_log(ctx, code, 3, __LINE__, ##__VA_ARGS__)
-
-#else
-
-#define _SFTE_PANIC(ctx, code, ...) abort()
-#define _SFTE_ERROR(ctx, code, ...)                                                                \
-    do {                                                                                           \
-    } while (0)
-#define _SFTE_WARN(ctx, code, ...)                                                                 \
-    do {                                                                                           \
-    } while (0)
-#define _SFTE_INFO(ctx, code, ...)                                                                 \
-    do {                                                                                           \
-    } while (0)
 
 #endif  // !SFTE_NO_LOGGING
 
@@ -1536,9 +1497,6 @@ static void _sfte_sixel_deinit(sfte_ctx *ctx) {
 // >>kitty
 // =================================================================================================
 #if SFTE_KITTY_GRAPHICS
-static void _sfte_grid_scroll(sfte_ctx *ctx, int lines);
-static inline int _sfte_grid_span(int px_len, int px_off, int cell_px);
-
 static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int sw, int sh, int dw, int dh) {
     uint32_t *dst = (uint32_t *)SFTE_MALLOC(dw * dh * sizeof(uint32_t));
     if (!dst) return NULL;
@@ -2518,61 +2476,6 @@ static void _sfte_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf) {
 // =================================================================================================
 #if SFTE_WAYLAND
 
-#include "xdg-shell.c"
-#include "xdg-shell.h"
-#include <wayland-client.h>
-
-struct sfte_wayland_app {
-    sfte_ctx *ctx;
-
-    struct wl_display *display;
-    struct wl_registry *registry;
-    struct wl_compositor *compositor;
-    struct wl_shm *shm;
-    struct wl_seat *seat;
-    struct wl_keyboard *keyboard;
-    struct xkb_context *xkb_context;
-    struct xkb_keymap *xkb_keymap;
-    struct xkb_state *xkb_state;
-#if SFTE_SELECTION
-    struct wl_pointer *pointer;
-#endif  // SFTE_SELECTION
-#if SFTE_CLIPBOARD
-    struct wl_data_device_manager *data_device_manager;
-    struct wl_data_device *data_device;
-    struct wl_data_source *data_source;
-    struct wl_data_offer *data_offer;
-    char *selection_text;
-#endif  // SFTE_CLIPBOARD
-#if SFTE_SELECTION || SFTE_CLIPBOARD
-    uint32_t serial;
-#endif  // SFTE_SELECTION || SFTE_CLIPBOARD
-    struct xdg_wm_base *xdg_wm_base;
-    struct wl_surface *surface;
-    struct xdg_surface *xdg_surface;
-    struct xdg_toplevel *xdg_toplevel;
-    struct wl_buffer *buffer;
-    uint32_t *shm_data;
-    int shm_size;
-#if SFTE_DOUBLE_BUFFER
-    uint32_t *back_buffer;
-#endif  // SFTE_DOUBLE_BUFFER
-
-    int pty_fd;     // master fd to r/w from
-    pid_t pty_pid;  // pid of shell
-
-    uint8_t running;
-    uint8_t needs_render;
-
-    int repeat_timer_fd;
-    int32_t repeat_rate;
-    int32_t repeat_delay;
-    uint32_t repeating_key;
-
-    int width, height;
-    int pending_width, pending_height;
-};
-
 static sfte_key _sfte_xkb_to_sfte_key(xkb_keysym_t sym) {
     switch (sym) {
     case XKB_KEY_Tab:
@@ -3522,15 +3425,6 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
 // >>reflow
 // =================================================================================================
 #if SFTE_REFLOW
-typedef struct {
-    sfte_cell *temp_rows;
-    int new_cols;
-    int tr, tc;
-    int new_cx, new_cy;
-    int target_old_cx, target_old_cy;
-    int is_live;
-} sfte_reflow_state;
-
 static void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell c, int is_cursor) {
 #if SFTE_WIDE_CHARS
     // if we're pushing a wide char and we're at last column, wrap early
