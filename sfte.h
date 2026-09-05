@@ -1048,13 +1048,6 @@ static const float _sfte_font_scales[SFTE_FONT_MAX_COUNT] = SFTE_FONT_SCALES;
 // =================================================================================================
 
 // -------------------------------------------------------------------------------------------------
-// >memory
-// -------------------------------------------------------------------------------------------------
-static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int start_c, int start_r, int cols,
-                                         int rows);
-static inline void _sfte_grid_dirty_range(sfte_ctx *ctx, int start_idx, int cnt);
-
-// -------------------------------------------------------------------------------------------------
 // >logging
 // -------------------------------------------------------------------------------------------------
 #ifndef SFTE_NO_LOGGING
@@ -1081,6 +1074,9 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune);
 // >grid
 // -------------------------------------------------------------------------------------------------
 #define _SFTE_GRID_IDX(ctx, c, r) ((r) * ctx->term.cols + (c))
+static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int start_c, int start_r, int cols,
+                                         int rows);
+static inline void _sfte_grid_dirty_range(sfte_ctx *ctx, int start_idx, int cnt);
 static inline int _sfte_grid_span(int px_len, int px_off, int cell_px);
 static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, int start_idx, int cnt);
 static void _sfte_grid_scroll(sfte_ctx *ctx, int lines);
