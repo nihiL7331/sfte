@@ -4896,6 +4896,9 @@ static void _sfte_render_decorations(sfte_ctx *ctx, uint32_t *px_buf, int c, int
 // =================================================================================================
 #if SFTE_WAYLAND
 
+/*
+    Maps Linux XKB keysyms to the emulators internal key enum.
+*/
 static sfte_key _sfte_xkb_to_sfte_key(xkb_keysym_t sym) {
     switch (sym) {
     case XKB_KEY_Tab:
@@ -4931,6 +4934,9 @@ static sfte_key _sfte_xkb_to_sfte_key(xkb_keysym_t sym) {
     }
 }
 
+/*
+    Callback triggered by the emulator core to send bytes back to the shell (PTY).
+*/
 static void _sfte_wayland_write_cb(void *user_data, const char *data, size_t len) {
     sfte_wayland_app *app = (sfte_wayland_app *)user_data;
     if (app->pty_fd > 0) write(app->pty_fd, data, len);
@@ -4972,10 +4978,15 @@ static void _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg) {
 }
 #endif  // SFTE_SCROLLBACK_CAP
 
+/*
+    Allocates a SHared Memory (SHM) buffer that both the emulator and
+    the Wayland compositor can access simultaneously.
+*/
 static void _sfte_wayland_create_buffer(sfte_wayland_app *app) {
-    int stride = app->width * 4;  // 4B/px (ARGB)
+    int stride = app->width * 4;  // 4 bytes per pixel (ARGB8888)
     app->shm_size = stride * app->height;
 
+    // memfd_create provides an anonymous file descriptor backed by RAM, not disk
     int fd = memfd_create("sfte-buffer", MFD_CLOEXEC);
     SFTE_ASSERT(fd != -1, "failed to create memfd");
     SFTE_ASSERT(ftruncate(fd, app->shm_size) != -1, "failed to truncate memfd");
@@ -4984,6 +4995,10 @@ static void _sfte_wayland_create_buffer(sfte_wayland_app *app) {
                                      0);
     SFTE_ASSERT(app->shm_data != MAP_FAILED, "failed to mmap shm data");
 
+    // NOTE:
+    // If enabled, we allocate a secondary heap buffer for the emulator to draw into.
+    // Once drawing is complete, we memcpy the damaged regions into the Wayland SHM
+    // buffer to prevent the compositor from displaying half-drawn frames.
 #if SFTE_DOUBLE_BUFFER
     if (app->back_buffer) SFTE_FREE(app->back_buffer);
     app->back_buffer = (uint32_t *)SFTE_MALLOC(app->shm_size);
@@ -5564,6 +5579,9 @@ static const struct xdg_toplevel_listener _sfte_wayland_xdg_toplevel_listener = 
     .close = _sfte_wayland_xdg_toplevel_close,
 };
 
+/*
+    Initializes the Wayland connection and binds global registry interfaces.
+*/
 static void _sfte_wayland_load(sfte_wayland_app *app) {
     app->xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     SFTE_ASSERT(app->xkb_context, "failed to create xkb context");
@@ -5574,6 +5592,7 @@ static void _sfte_wayland_load(sfte_wayland_app *app) {
     app->registry = wl_display_get_registry(app->display);
     wl_registry_add_listener(app->registry, &_sfte_wayland_registry_listener, app);
 
+    // Initial roundtrip to let the registry listener discover compositor/shm/seat
     wl_display_roundtrip(app->display);
     SFTE_ASSERT(app->compositor, "failed to initialize compositor\n");
     SFTE_ASSERT(app->shm, "compositor missing required interfaces\n");
@@ -5593,6 +5612,9 @@ static void _sfte_wayland_load(sfte_wayland_app *app) {
     _SFTE_INFO(app->ctx, WAYLAND_REGISTRY_BOUND);
 }
 
+/*
+    Cleans up all Wayland objects and memory mappings.
+*/
 static void _sfte_wayland_unload(sfte_wayland_app *app) {
 #if SFTE_DOUBLE_BUFFER
     SFTE_FREE(app->back_buffer);
@@ -5706,6 +5728,11 @@ static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg) {
 }
 #endif  // SFTE_CLIPBOARD
 
+/*
+    The primary event loop for the terminal emulator using Wayland.
+    Uses `poll` to simultaneously wait for Wayland compositor events,
+    shell output events (PTY data), and timer expirations (on cursor blink, key repeat, trail).
+*/
 static void _sfte_wayland_loop(sfte_wayland_app *app) {
     sfte_ctx *ctx = app->ctx;
 
@@ -5716,14 +5743,16 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
     int wl_fd = wl_display_get_fd(app->display);
 
     while (app->running) {
+        // Dispatch pending Wayland events before polling to prevent deadlock
         wl_display_dispatch_pending(app->display);
         wl_display_flush(app->display);
         struct pollfd fds[] = {{.fd = wl_fd, .events = POLLIN},
                                {.fd = app->pty_fd, .events = POLLIN},
                                {.fd = app->repeat_timer_fd, .events = POLLIN}};
-        int timeout = -1;
+        int timeout = -1 /* wait indefinetely by default */;
 
 #if SFTE_CURSOR_TRAIL
+        // If the cursor is moving, cap the poll timeout to 16ms (60fps) to animate the trail
         if (ctx->term.is_trailing)
             if (timeout == -1 || timeout > 16) timeout = 16;
 #endif  // SFTE_CURSOR_TRAIL
@@ -5738,15 +5767,15 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
         }
 #endif  // SFTE_CURSOR_BLINK
 
-        if (app->needs_render) timeout = 0;
+        if (app->needs_render) timeout = 0;  // Don't sleep if we already know we need to draw
 
-        if (poll(fds, _SFTE_ARRAY_LEN(fds), timeout /* default infinite timeout */) == -1) break;
+        if (poll(fds, _SFTE_ARRAY_LEN(fds), timeout) == -1) break;
 
 #if SFTE_CURSOR_BLINK
         if (ctx->term.blink_enabled) {
             now = SFTE_TIME_MS();
             if (now >= ctx->term.next_blink_ms) {
-                ctx->term.blink_visible = !ctx->term.blink_visible;
+                ctx->term.blink_visible ^= 1;
                 ctx->term.next_blink_ms = now + SFTE_CURSOR_BLINK_RATE;
                 int vis_cx = ctx->term.cursor_x >= ctx->term.cols ? ctx->term.cols - 1
                                                                   : ctx->term.cursor_x;
@@ -5756,9 +5785,11 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
         }
 #endif  // SFTE_CURSOR_BLINK
 
+        // Handle incoming Wayland events (keys, resizes)
         if (fds[0].revents & (POLLIN | POLLERR | POLLHUP))
             if (wl_display_dispatch(app->display) == -1) app->running = 0;
 
+        // Handle incoming text from the shell
         if (fds[1].revents & (POLLIN | POLLERR | POLLHUP)) {
             uint8_t buf[SFTE_PTY_BUF_SIZE];
             ssize_t n = read(app->pty_fd, buf, SFTE_PTY_BUF_SIZE);
@@ -5767,15 +5798,16 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
                 sfte_parse(app->ctx, buf, n);
                 app->needs_render = 1;
             } else
-                app->running = 0;
+                app->running = 0;  // Shell exited
         }
 
+        // Handle key repeat timer
         if (fds[2].revents & POLLIN) {
             uint64_t expirations;
             if (read(app->repeat_timer_fd, &expirations, sizeof(expirations)) == 0 ||
                 app->repeating_key == 0)
                 continue;
-            // simulate a key press to get autorepeat
+            // Simulate a key press to autorepeat
             _sfte_wayland_keyboard_key(app, app->keyboard, 0, 0, app->repeating_key,
                                        WL_KEYBOARD_KEY_STATE_PRESSED);
         }
@@ -5798,6 +5830,7 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
             float tx = target_rx - ctx->term.tail_rx;
             float ty = target_ry - ctx->term.tail_ry;
 
+            // Snap to target if we're close enough to stop animating
             if (tx * tx + ty * ty <= 0.5f) {
                 ctx->term.is_trailing = 0;
                 ctx->term.tail_rx = target_rx;
@@ -5814,6 +5847,7 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
         }
 #endif  // SFTE_CURSOR_TRAIL
 
+        // Dispatch render pass
         if (app->needs_render) {
             sfte_damage_rect dmg = {0};
 
