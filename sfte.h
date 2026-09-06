@@ -115,12 +115,6 @@ static inline int _sfte_stb_bounds(sfte_font_backend_info *info, uint32_t rune, 
                                    int *adv, int *x0, int *y0, int *x1, int *y1);
 static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, float scale,
                                   uint8_t *atlas_ptr, int gw, int gh, int atlas_stride);
-
-#define SFTE_FONT_INIT _sfte_stb_init
-#define SFTE_FONT_GET_SCALE _sfte_stb_get_scale
-#define SFTE_FONT_VMETRICS _sfte_stb_vmetrics
-#define SFTE_FONT_BOUNDS _sfte_stb_bounds
-#define SFTE_FONT_BAKE _sfte_stb_bake
 #else  // SFTE_CUSTOM_FONT_BACKEND
 #if !defined(SFTE_FONT_INIT) || !defined(SFTE_FONT_GET_SCALE) || !defined(SFTE_FONT_VMETRICS) ||   \
     !defined(SFTE_FONT_BOUNDS) || !defined(SFTE_FONT_BAKE)
@@ -1289,16 +1283,17 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b);
 // >font
 // -------------------------------------------------------------------------------------------------
 #ifndef SFTE_CUSTOM_FONT_BACKEND
-static inline void _sfte_stb_init(sfte_font_backend_info *info, const uint8_t *data);
-static inline float _sfte_stb_get_scale(sfte_font_backend_info *info, float px_hei);
-static inline void _sfte_stb_vmetrics(sfte_font_backend_info *info, int *ascent, int *descent,
-                                      int *linegap);
-static inline int _sfte_stb_bounds(sfte_font_backend_info *info, uint32_t rune, float scale,
-                                   int *adv, int *x0, int *y0, int *x1, int *y1);
-static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, float scale,
-                                  uint8_t *atlas_ptr, int gw, int gh, int atlas_stride);
+#define SFTE_FONT_INIT _sfte_stb_init
+#define SFTE_FONT_GET_SCALE _sfte_stb_get_scale
+#define SFTE_FONT_VMETRICS _sfte_stb_vmetrics
+#define SFTE_FONT_BOUNDS _sfte_stb_bounds
+#define SFTE_FONT_BAKE _sfte_stb_bake
 #endif  // !SFTE_CUSTOM_FONT_BACKEND
-static sfte_font_cache *_sfte_font_get_cache(sfte_ctx *ctx, int style);
+static inline sfte_font_cache *_sfte_font_get_cache(sfte_ctx *ctx, int style);
+static inline void _sfte_font_clear_cache(sfte_font_cache *cache);
+static inline void _sfte_font_update_scales(sfte_ctx *ctx, sfte_font_cache *cache);
+static inline void _sfte_font_pack_and_bake(sfte_font_cache *cache, sfte_glyph *g, int font_idx,
+                                            int glyph_idx, int gw, int gh);
 static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_ptr, uint32_t rune);
 static void _sfte_font_reset_cache(sfte_ctx *ctx);
 
@@ -4459,6 +4454,10 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
 // >>font
 // =================================================================================================
 #ifndef SFTE_CUSTOM_FONT_BACKEND
+/*
+    Default stb_truetype wrappers.
+    Can be overriden by defining SFTE_CUSTOM_FONT_BACKEND.
+*/
 static inline void _sfte_stb_init(sfte_font_backend_info *info, const uint8_t *data) {
     stbtt_InitFont(info, data, 0);
 }
@@ -4490,7 +4489,15 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 }
 #endif  // !SFTE_CUSTOM_FONT_BACKEND
 
-static sfte_font_cache *_sfte_font_get_cache(sfte_ctx *ctx, int style) {
+/*
+    Distance in pixels between each glyph in the atlas 2D texture.
+*/
+#define _SFTE_FONT_PADDING 1
+
+/*
+    Retrieves the active cache pool for a specific font style (regular/bold/italic/bold italic).
+*/
+static inline sfte_font_cache *_sfte_font_get_cache(sfte_ctx *ctx, int style) {
     if (style == SFTE_FONT_STYLE_REGULAR) return &ctx->font.regular;
 #ifdef SFTE_FONT_BOLD
     if (style == SFTE_FONT_STYLE_BOLD) return &ctx->font.bold;
@@ -4504,147 +4511,152 @@ static sfte_font_cache *_sfte_font_get_cache(sfte_ctx *ctx, int style) {
     return NULL;
 }
 
+/*
+    Clears a font cache's atlas texture and glyph hash map.
+*/
+static inline void _sfte_font_clear_cache(sfte_font_cache *cache) {
+    if (cache->atlas_pxs) memset(cache->atlas_pxs, 0, SFTE_FONT_ATLAS_SIZE * SFTE_FONT_ATLAS_SIZE);
+    if (cache->glyphs) memset(cache->glyphs, 0, SFTE_FONT_GLYPH_CAP * sizeof(sfte_glyph));
+    cache->atlas_x = 0;
+    cache->atlas_y = 0;
+    cache->atlas_row_h = 0;
+}
+
+/*
+    Recalculates font scales for the primary font and all fallbacks based on current size.
+*/
+static inline void _sfte_font_update_scales(sfte_ctx *ctx, sfte_font_cache *cache) {
+    for (int i = 0; i < cache->num_fonts; ++i) {
+        float tweak = _sfte_font_scales[i];
+        if (tweak <= 0.0f) tweak = 1.0f;
+        cache->scales[i] = SFTE_FONT_GET_SCALE(&cache->info[i], ctx->font.cur_size * tweak);
+    }
+}
+
+/*
+    Allocates space in the 2D texture atlas for a new glyph and bakes the pixels.
+    Glyphs are packed sequentially into rows. If a row runs out of horizontal space,
+    we step down by the height of the tallest glyph in that row.
+*/
+static inline void _sfte_font_pack_and_bake(sfte_font_cache *cache, sfte_glyph *g, int font_idx,
+                                            int glyph_idx, int gw, int gh) {
+    if (cache->atlas_x + gw >= SFTE_FONT_ATLAS_SIZE) {
+        cache->atlas_x = 0;
+        cache->atlas_y += cache->atlas_row_h + _SFTE_FONT_PADDING;
+        cache->atlas_row_h = 0;
+    }
+
+    SFTE_ASSERT(cache->atlas_y + gh < SFTE_FONT_ATLAS_SIZE, "glyph atlas full");
+
+    if (gh > cache->atlas_row_h) cache->atlas_row_h = gh;
+
+    g->x0 = cache->atlas_x;
+    g->y0 = cache->atlas_y;
+    g->x1 = g->x0 + gw;
+    g->y1 = g->y0 + gh;
+
+    if (gw > 0 && gh > 0) {
+        int atlas_idx = g->y0 * SFTE_FONT_ATLAS_SIZE + g->x0;
+        SFTE_FONT_BAKE(&cache->info[font_idx], glyph_idx, cache->scales[font_idx],
+                       &cache->atlas_pxs[atlas_idx], gw, gh, SFTE_FONT_ATLAS_SIZE);
+    }
+
+    cache->atlas_x += gw + _SFTE_FONT_PADDING;
+}
+
+/*
+    Retrieves a cached glyph raster, or bakes a new one on cache miss.
+
+    Handles cascading fallback fonts and cross-style fallbacks.
+    So, for example, on request of a nerd symbol in bold,
+    if it's not found in bold it falls back to regular,
+    and if it's not found in main regular it fallbacks to lower-priority fonts,
+    eventually finding the symbol.
+*/
 static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_ptr, uint32_t rune) {
     sfte_font_cache *cache = *cache_ptr;
-
     if (rune == 0) rune = ' ';
 
-    uint32_t h = rune;
-    h %= SFTE_FONT_GLYPH_CAP;
+    uint32_t h = rune % SFTE_FONT_GLYPH_CAP;
 
     // hash map logic
     for (int i = 0; i < SFTE_FONT_GLYPH_CAP; ++i) {
         int idx = (h + i) % SFTE_FONT_GLYPH_CAP;
 
-        if (cache->glyphs[idx].rune == rune) return &cache->glyphs[idx];
+        if (cache->glyphs[idx].rune == rune) return &cache->glyphs[idx];  // Cache hit
+        if (cache->glyphs[idx].rune != 0) continue;                       // Collision
 
-        if (cache->glyphs[idx].rune != 0) continue;  // cache miss, taken, continue
-
-        // fallback check
+        // Cache miss, look up bounds across primary and fallback fonts
         int font_idx = 0;
         int glyph_idx = 0;
+        int adv = 0, x0 = 0, y0 = 0, x1 = 0, y1 = 0;
 
-        int advance_width = 0, x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-
-        // start in primary font [0]
-        // then, look through fallback fonts [1-SFTE_FONTS_MAX_COUNT]
-        for (int i = 0; i < cache->num_fonts; ++i) {
-            glyph_idx = SFTE_FONT_BOUNDS(&cache->info[i], rune, cache->scales[i], &advance_width,
-                                         &x0, &y0, &x1, &y1);
+        // Start in primary font [0].
+        // Then look through fallback fonts [1-SFTE_FONTS_MAX_COUNT]
+        for (int f = 0; f < cache->num_fonts; ++f) {
+            glyph_idx = SFTE_FONT_BOUNDS(&cache->info[f], rune, cache->scales[f], &adv, &x0, &y0,
+                                         &x1, &y1);
             if (glyph_idx != 0) {
-                font_idx = i;
+                font_idx = f;
                 break;
             }
         }
 
-        // if glyph was not found and cache isn't regular, look in regular
-        // this is useful e.g. when a certain app tries to draw nerd symbols
+        // If a glyph was not found and cache isn't regular, look in regular.
+        // This is useful e.g. when a certain app tries to draw nerd symbols
         // in bold/italic/bold italic instead of regular.
         if (glyph_idx == 0 && cache != &ctx->font.regular) {
             *cache_ptr = &ctx->font.regular;
             return _sfte_font_get_glyph(ctx, cache_ptr, rune);
         }
 
-        sfte_font_backend_info *info = &cache->info[font_idx];
-        float font_scale = cache->scales[font_idx];
-
-        // cache miss, free, take space
         sfte_glyph *g = &cache->glyphs[idx];
         g->rune = rune;
-        g->xadvance = (int)(advance_width * font_scale + 0.5f);
-
-        int glyph_width = x1 - x0;
-        int glyph_height = y1 - y0;
-
-        // wrap to next row if out of horizontal space
-        if (cache->atlas_x + glyph_width >= SFTE_FONT_ATLAS_SIZE) {
-            cache->atlas_x = 0;
-            cache->atlas_y += cache->atlas_row_h + 1;
-            cache->atlas_row_h = 0;
-        }
-
-        SFTE_ASSERT(cache->atlas_y + glyph_height < SFTE_FONT_ATLAS_SIZE, "glyph atlas full");
-
-        if (glyph_height > cache->atlas_row_h) cache->atlas_row_h = glyph_height;
-
-        g->x0 = cache->atlas_x;
-        g->y0 = cache->atlas_y;
-        g->x1 = g->x0 + glyph_width;
-        g->y1 = g->y0 + glyph_height;
+        g->xadvance = (int)(adv * cache->scales[font_idx] + 0.5f);
         g->xoff = x0;
         g->yoff = y0;
 
-        if (glyph_width > 0 && glyph_height > 0) {
-            int byte_off = g->y0 * SFTE_FONT_ATLAS_SIZE + g->x0;
-            SFTE_FONT_BAKE(info, glyph_idx, font_scale, &cache->atlas_pxs[byte_off], glyph_width,
-                           glyph_height, SFTE_FONT_ATLAS_SIZE);
-        }
-
-        cache->atlas_x += glyph_width + 1;  // padding to prevent bleeding
+        _sfte_font_pack_and_bake(cache, g, font_idx, glyph_idx, x1 - x0, y1 - y0);
 
         return g;
     }
 
-    return NULL;  // out of space
+    return NULL;
 }
 
+/*
+    Purges all glyph atlases and recalculates strict terminal grid metrics.
+    Must be called on startup, and whenever the DPI or font size changes.
+*/
 static void _sfte_font_reset_cache(sfte_ctx *ctx) {
-#define CLEAR_CACHE(type)                                                                          \
-    do {                                                                                           \
-        if (type.atlas_pxs)                                                                        \
-            memset(type.atlas_pxs, 0, SFTE_FONT_ATLAS_SIZE * SFTE_FONT_ATLAS_SIZE);                \
-        if (type.glyphs) memset(type.glyphs, 0, SFTE_FONT_GLYPH_CAP * sizeof(sfte_glyph));         \
-        type.atlas_x = 0;                                                                          \
-        type.atlas_y = 0;                                                                          \
-        type.atlas_row_h = 0;                                                                      \
-    } while (0)
+    _sfte_font_clear_cache(&ctx->font.regular);
+    _sfte_font_update_scales(ctx, &ctx->font.regular);
 
-    CLEAR_CACHE(ctx->font.regular);
 #ifdef SFTE_FONT_BOLD
-    CLEAR_CACHE(ctx->font.bold);
+    _sfte_font_clear_cache(&ctx->font.bold);
+    _sfte_font_update_scales(ctx, &ctx->font.bold);
 #endif  // SFTE_FONT_BOLD
 #ifdef SFTE_FONT_ITALIC
-    CLEAR_CACHE(ctx->font.italic);
+    _sfte_font_clear_cache(&ctx->font.italic);
+    _sfte_font_update_scales(ctx, &ctx->font.italic);
 #endif  // SFTE_FONT_ITALIC
 #ifdef SFTE_FONT_BOLD_ITALIC
-    CLEAR_CACHE(ctx->font.bold_italic);
+    _sfte_font_clear_cache(&ctx->font.bold_italic);
+    _sfte_font_update_scales(ctx, &ctx->font.bold_italic);
 #endif  // SFTE_FONT_BOLD_ITALIC
 
-#undef CLEAR_CACHE
-
-#define SET_SCALES(type)                                                                           \
-    for (int i = 0; i < type.num_fonts; ++i) {                                                     \
-        float tweak = _sfte_font_scales[i];                                                        \
-        if (tweak <= 0.0f) tweak = 1.0f;                                                           \
-        type.scales[i] = SFTE_FONT_GET_SCALE(&type.info[i], ctx->font.cur_size * tweak);           \
-    }
-
-    SET_SCALES(ctx->font.regular);
-#ifdef SFTE_FONT_BOLD
-    SET_SCALES(ctx->font.bold);
-#endif  // SFTE_FONT_BOLD
-#ifdef SFTE_FONT_ITALIC
-    SET_SCALES(ctx->font.italic);
-#endif  // SFTE_FONT_ITALIC
-#ifdef SFTE_FONT_BOLD_ITALIC
-    SET_SCALES(ctx->font.bold_italic);
-#endif  // SFTE_FONT_BOLD_ITALIC
-
-#undef SET_SCALES
-
-    int unscaled_ascent, unscaled_descent, unscaled_line_gap;
-    SFTE_FONT_VMETRICS(&ctx->font.regular.info[0], &unscaled_ascent, &unscaled_descent,
-                       &unscaled_line_gap);
+    int ascent_u, descent_u, line_gap_u;
+    SFTE_FONT_VMETRICS(&ctx->font.regular.info[0], &ascent_u, &descent_u, &line_gap_u);
 
     float primary_scale = ctx->font.regular.scales[0];
-    ctx->font.ascent = (int)(unscaled_ascent * primary_scale + 0.5f);
-    ctx->font.descent = (int)(unscaled_descent * primary_scale -
-                              0.5f);  // descent is usually negative
-    ctx->font.line_gap = (int)(unscaled_line_gap * primary_scale + 0.5f);
-
+    ctx->font.ascent = (int)(ascent_u * primary_scale + 0.5f);
+    ctx->font.descent = (int)(descent_u * primary_scale -
+                              0.5f /* - instead of + because descent is natively negative */);
+    ctx->font.line_gap = (int)(line_gap_u * primary_scale + 0.5f);
     ctx->font.cell_height = ctx->font.ascent - ctx->font.descent + ctx->font.line_gap;
 
-    // monospace grid using standard 'M' glyph
+    // NOTE:
+    // Terminal column width is locked to advance of 'M'.
     sfte_font_cache *dummy = &ctx->font.regular;
     sfte_glyph *m = _sfte_font_get_glyph(ctx, &dummy, 'M');
     ctx->font.cell_width = m->xadvance;
