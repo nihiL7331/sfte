@@ -234,6 +234,10 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #define SFTE_UNDERLINE_THICK_RATIO 0.1f
 #endif  // SFTE_UNDERLINE_THICK_RATIO
 
+#ifndef SFTE_UNDERLINE_OFFSET_RATIO
+#define SFTE_UNDERLINE_OFFSET_RATIO 0.12f
+#endif  // SFTE_UNDERLINE_OFFSET_RATIO
+
 #ifndef SFTE_SCROLLBACK_CAP
 #define SFTE_SCROLLBACK_CAP 2000
 #endif  // SFTE_SCROLLBACK_CAP
@@ -1304,6 +1308,10 @@ static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, u
 static void _sfte_render_bg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, uint32_t bg);
 static void _sfte_render_fg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, uint32_t rune,
                             uint32_t fg, sfte_font_cache *target_cache);
+static inline void _sfte_render_underline(sfte_ctx *ctx, uint32_t *px_buf, int cx, int cy,
+                                          int render_w, sfte_cell *vcell);
+static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, uint32_t *px_buf, int cx, int cy,
+                                             int render_w);
 static void _sfte_render_decorations(sfte_ctx *ctx, uint32_t *px_buf, int c, int r,
                                      sfte_cell *vcell, int is_cursor, int w, int h);
 
@@ -4670,20 +4678,25 @@ static void _sfte_font_reset_cache(sfte_ctx *ctx) {
 #define _SFTE_CUR_STYLE(ctx) (SFTE_CURSOR_STYLE)
 #endif  // !SFTE_CURSOR_DYNAMIC
 
+#define SFTE_UL_STYLE_STRAIGHT 1
+#if SFTE_EXT_UNDERLINES
+#define SFTE_UL_STYLE_DOUBLE 2
+#define SFTE_UL_STYLE_CURLED 3
+#define SFTE_UL_STYLE_DOTTED 4
+#define SFTE_UL_STYLE_DASHED 5
+#endif  // SFTE_EXT_UNDERLINES
+
+/*
+    Fast integer-based alpha blending.
+    Used for cursor trails and antialiased font rendering to avoid slow floating-point math.
+*/
 static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, uint8_t src_a) {
-    if (src_a == 0) return dst;                                    // no trail
-    if (src_a == 255) return (0xFF << 24) | (src_col & 0xFFFFFF);  // solid trail
+    if (src_a == 0) return dst;                                             // no trail
+    if (src_a == 255) return SFTE_COLOR_ALPHA_MASK | (src_col & 0xFFFFFF);  // solid trail
 
-    // unpack dest
     uint8_t da = (dst >> 24) & 0xFF;
-    uint8_t dr = (dst >> 16) & 0xFF;
-    uint8_t dg = (dst >> 8) & 0xFF;
-    uint8_t db = dst & 0xFF;
-
-    // unpack src
-    uint8_t sr = (src_col >> 16) & 0xFF;
-    uint8_t sg = (src_col >> 8) & 0xFF;
-    uint8_t sb = src_col & 0xFF;
+    uint8_t dr = (dst >> 16) & 0xFF, dg = (dst >> 8) & 0xFF, db = dst & 0xFF;
+    uint8_t sr = (src_col >> 16) & 0xFF, sg = (src_col >> 8) & 0xFF, sb = src_col & 0xFF;
 
     uint8_t out_r = (sr * src_a + dr * (255 - src_a)) >> 8;
     uint8_t out_g = (sg * src_a + dg * (255 - src_a)) >> 8;
@@ -4693,10 +4706,13 @@ static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, u
     return (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
 }
 
+/*
+    Paints the solid background color for a terminal cell.
+*/
 static void _sfte_render_bg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, uint32_t bg) {
     int cx = col * ctx->font.cell_width + SFTE_PAD_X;
     int cy = row * ctx->font.cell_height + SFTE_PAD_Y;
-    uint32_t final_bg = (bg & 0x00FFFFFF) | (SFTE_BG_OPACITY << 24);
+    uint32_t final_bg = (SFTE_BG_OPACITY << 24) | (bg & ~SFTE_COLOR_ALPHA_MASK);
 
     for (int y = 0; y < ctx->font.cell_height; ++y) {
         for (int x = 0; x < ctx->font.cell_width; ++x) {
@@ -4706,6 +4722,11 @@ static void _sfte_render_bg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, u
     }
 }
 
+/*
+    Samples the font atlas and paints a glyph.
+    The texture atlas only stores alpha values.
+    It blends the requested foreground color into the existing background using this alpha mask.
+*/
 static void _sfte_render_fg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, uint32_t rune,
                             uint32_t fg, sfte_font_cache *target_cache) {
     if (rune == ' ') return;
@@ -4720,9 +4741,8 @@ static void _sfte_render_fg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, u
     int glyph_width = g->x1 - g->x0;
     int glyph_height = g->y1 - g->y0;
 
-    int baseline = ctx->font.ascent;
     int draw_x = cx + (int)g->xoff;
-    int draw_y = cy + baseline + (int)g->yoff;
+    int draw_y = cy + ctx->font.ascent + (int)g->yoff;
 
     uint8_t fg_r = (fg >> 16) & 0xFF, fg_g = (fg >> 8) & 0xFF, fg_b = fg & 0xFF;
 
@@ -4740,12 +4760,10 @@ static void _sfte_render_fg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, u
             int px_idx = screen_y * ctx->width + screen_x;
 
             if (alpha == 255)
-                px_buf[px_idx] = (0xFF << 24) | (fg & 0x00FFFFFF);
+                px_buf[px_idx] = SFTE_COLOR_ALPHA_MASK | (fg & ~SFTE_COLOR_ALPHA_MASK);
             else {
                 uint32_t dst = px_buf[px_idx];
-                uint8_t bg_r = (dst >> 16) & 0xFF;
-                uint8_t bg_g = (dst >> 8) & 0xFF;
-                uint8_t bg_b = dst & 0xFF;
+                uint8_t bg_r = (dst >> 16) & 0xFF, bg_g = (dst >> 8) & 0xFF, bg_b = dst & 0xFF;
 
                 uint8_t col_r = (fg_r * alpha + bg_r * (255 - alpha)) >> 8;
                 uint8_t col_g = (fg_g * alpha + bg_g * (255 - alpha)) >> 8;
@@ -4757,99 +4775,121 @@ static void _sfte_render_fg(sfte_ctx *ctx, uint32_t *px_buf, int col, int row, u
     }
 }
 
+/*
+    Renders extended underline styles (straight, double, undercurl, dotted, dotted, dashed).
+
+    Undercurls require a periodic wave. To avoid slow math calls per-pixel, this implementation
+    approximates a triangle wave using integer mod arithmetic.
+*/
+static inline void _sfte_render_underline(sfte_ctx *ctx, uint32_t *px_buf, int cx, int cy,
+                                          int render_w, sfte_cell *vcell) {
+    uint32_t base_ul_col = vcell->fg;
+#if SFTE_COLOR_UNDERLINE
+    if (vcell->ul_color != 0xFFFFFFFF) base_ul_col = vcell->ul_color;
+#endif  // SFTE_COLOR_UNDERLINE
+    uint32_t underline_col = SFTE_COLOR_ALPHA_MASK | (base_ul_col & ~SFTE_COLOR_ALPHA_MASK);
+
+    int thick = (int)(ctx->font.cell_height * SFTE_UNDERLINE_THICK_RATIO);
+    if (thick < 1) thick = 1;
+
+    int style = SFTE_UL_STYLE_STRAIGHT;
+#if SFTE_EXT_UNDERLINES
+    style = _SFTE_CLAMP(vcell->ul_style, SFTE_UL_STYLE_STRAIGHT, SFTE_UL_STYLE_DASHED);
+#endif  // SFTE_EXT_UNDERLINES
+
+    int offset = (int)(ctx->font.cell_height * SFTE_UNDERLINE_OFFSET_RATIO);
+    if (offset < 1) offset = 1;
+    int base_y = cy + ctx->font.ascent + offset;
+    if (base_y + thick > cy + ctx->font.cell_height) base_y = cy + ctx->font.cell_height - thick;
+
+    for (int x = cx; x < cx + render_w; ++x) {
+        if (x >= ctx->width) break;
+
+        int grid_x = x - SFTE_PAD_X;
+        int local_x = grid_x % ctx->font.cell_width;
+
+        switch (style) {
+        case SFTE_UL_STYLE_CURLED: {
+            int half_w = ctx->font.cell_width / 2;
+            if (half_w == 0) half_w = 1;
+
+            int amp = thick + 1;
+            int dist = local_x > half_w ? local_x - half_w : half_w - local_x;
+            int y_off = (dist * amp) / half_w - (amp / 2);
+
+            for (int dy = 0; dy < thick; ++dy) {
+                int py = base_y + y_off + dy;
+                if (py >= 0 && py < ctx->height) px_buf[py * ctx->width + x] = underline_col;
+            }
+            break;
+        }
+        case SFTE_UL_STYLE_DOUBLE: {
+            int half_thick = thick / 2;
+            if (half_thick < 1) half_thick = 1;
+            int gap = half_thick < 2 ? 1 : half_thick;
+            for (int dy = 0; dy < half_thick; ++dy) {
+                int py1 = base_y - half_thick + dy;
+                int py2 = base_y + gap + dy;
+                if (py1 >= 0 && py1 < ctx->height) px_buf[py1 * ctx->width + x] = underline_col;
+                if (py2 >= 0 && py2 < ctx->height) px_buf[py2 * ctx->width + x] = underline_col;
+            }
+            break;
+        }
+        case SFTE_UL_STYLE_DOTTED:
+            if ((grid_x / thick) % 2 != 0) break;
+        case SFTE_UL_STYLE_DASHED:
+            if (style == SFTE_UL_STYLE_DASHED && ((grid_x / thick) % 5 >= 3)) break;
+        case SFTE_UL_STYLE_STRAIGHT:
+        default:
+            for (int dy = 0; dy < thick; ++dy) {
+                int py = base_y + dy;
+                if (py >= 0 && py < ctx->height) px_buf[py * ctx->width + x] = underline_col;
+            }
+        }
+    }
+}
+
+/*
+    Renders non-block cursors (bar/underline).
+    Block cursors are rendered naturally by inverting the cells background/foreground colors.
+*/
+static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, uint32_t *px_buf, int cx, int cy,
+                                             int render_w) {
+    uint32_t cur_col = SFTE_COLOR_ALPHA_MASK | (SFTE_CURSOR_COLOR & ~SFTE_COLOR_ALPHA_MASK);
+
+    if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_UNDERLINE) {
+        int thick = (int)(ctx->font.cell_height * SFTE_CURSOR_THICK_RATIO);
+        if (thick < 1) thick = 1;
+
+        for (int y = cy + ctx->font.cell_height - thick; y < cy + ctx->font.cell_height; ++y)
+            for (int x = cx; x < cx + render_w; ++x)
+                if (x < ctx->width && y < ctx->height) px_buf[y * ctx->width + x] = cur_col;
+    } else if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_BAR) {
+        int thick = (int)(ctx->font.cell_width * SFTE_CURSOR_THICK_RATIO);
+        if (thick < 1) thick = 1;
+
+        for (int y = cy; y < cy + ctx->font.cell_height; ++y)
+            for (int x = cx; x < cx + thick; ++x)
+                if (x < ctx->width && y < ctx->height) px_buf[y * ctx->width + x] = cur_col;
+    }
+}
+
+/*
+    Dispatcher for terminal text decorations (underlines, cursor).
+*/
 static void _sfte_render_decorations(sfte_ctx *ctx, uint32_t *px_buf, int c, int r,
                                      sfte_cell *vcell, int is_cursor, int w, int h) {
-    uint16_t attr = vcell->attr;
-    uint32_t text_fg = vcell->fg;
-
     int cx = c * ctx->font.cell_width + SFTE_PAD_X;
     int cy = r * ctx->font.cell_height + SFTE_PAD_Y;
 
     int render_w = ctx->font.cell_width;
 #if SFTE_WIDE_CHARS
-    render_w *= (attr & ATTR_WIDE) ? 2 : 1;
+    render_w *= (vcell->attr & ATTR_WIDE) ? 2 : 1;
 #endif  // SFTE_WIDE_CHARS
 
-    if (attr & ATTR_UNDERLINE) {
-        uint32_t base_ul_col = text_fg;
-#if SFTE_COLOR_UNDERLINE
-        if (vcell->ul_color != 0xFFFFFFFF) base_ul_col = vcell->ul_color;
-#endif
-        uint32_t underline_col = (base_ul_col & 0x00FFFFFF) | (0xFF << 24);
-
-        int thickness = (int)(ctx->font.cell_height * SFTE_UNDERLINE_THICK_RATIO);
-        if (thickness < 1) thickness = 1;
-
-        int style = 1;  // default straight line
-#if SFTE_EXT_UNDERLINES
-        style = vcell->ul_style;
-        style = _SFTE_CLAMP(style, 1, 5);
-#endif
-
-        int base_y = cy + ctx->font.ascent + 2;
-        if (base_y + thickness > cy + ctx->font.cell_height)
-            base_y = cy + ctx->font.cell_height - thickness;
-
-        for (int x = cx; x < cx + render_w; ++x) {
-            if (x >= w) break;
-
-            int grid_x = x - SFTE_PAD_X;
-            int local_x = grid_x % ctx->font.cell_width;
-
-            if (style == 4 && ((grid_x / thickness) % 2) != 0) continue;  // dotted
-
-            if (style == 5 && ((grid_x / thickness) % 5) >= 3) continue;  // dashed
-
-            if (style == 3) {  // undercurl
-                int half_w = ctx->font.cell_width / 2;
-                if (half_w == 0) half_w = 1;
-
-                int amp = thickness + 1;
-                int dist = local_x > half_w ? local_x - half_w : half_w - local_x;
-                int y_off = (dist * amp) / half_w - (amp / 2);
-
-                for (int dy = 0; dy < thickness; ++dy) {
-                    int py = base_y + y_off + dy;
-                    if (py >= 0 && py < h) px_buf[py * w + x] = underline_col;
-                }
-            } else if (style == 2) {  // double underline
-                int thin = thickness / 2;
-                if (thin < 1) thin = 1;
-                for (int dy = 0; dy < thin; ++dy) {
-                    int py1 = base_y - thin + dy;
-                    int py2 = base_y + thin + dy + 1;
-                    if (py1 >= 0 && py1 < h) px_buf[py1 * w + x] = underline_col;
-                    if (py2 >= 0 && py2 < h) px_buf[py2 * w + x] = underline_col;
-                }
-            } else {  // straight underline
-                for (int dy = 0; dy < thickness; ++dy) {
-                    int py = base_y + dy;
-                    if (py >= 0 && py < h) px_buf[py * w + x] = underline_col;
-                }
-            }
-        }
-    }
-
-    if (is_cursor && _SFTE_CUR_STYLE(ctx) != SFTE_CURSOR_BLOCK) {
-        uint32_t cur_col = (SFTE_CURSOR_COLOR & 0x00FFFFFF) | (0xFF << 24);
-
-        if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_UNDERLINE) {
-            int thickness = (int)(ctx->font.cell_height * SFTE_CURSOR_THICK_RATIO);
-            if (thickness < 1) thickness = 1;
-
-            for (int y = cy + ctx->font.cell_height - thickness; y < cy + ctx->font.cell_height;
-                 ++y)
-                for (int x = cx; x < cx + render_w; ++x)
-                    if (x < w && y < h) px_buf[y * w + x] = cur_col;
-        } else if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_BAR) {
-            int thickness = (int)(ctx->font.cell_width * SFTE_CURSOR_THICK_RATIO);
-            if (thickness < 1) thickness = 1;
-
-            for (int y = cy; y < cy + ctx->font.cell_height; ++y)
-                for (int x = cx; x < cx + thickness; ++x)
-                    if (x < w && y < h) px_buf[y * w + x] = cur_col;
-        }
-    }
+    if (vcell->attr & ATTR_UNDERLINE) _sfte_render_underline(ctx, px_buf, cx, cy, render_w, vcell);
+    if (is_cursor && _SFTE_CUR_STYLE(ctx) != SFTE_CURSOR_BLOCK)
+        _sfte_render_cursor_shape(ctx, px_buf, cx, cy, render_w);
 }
 // =================================================================================================
 // >>wayland
