@@ -5082,9 +5082,9 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, uint32_t *px_buf, int vis
             int logical_r = r;
 #if SFTE_SCROLLBACK_CAP
             logical_r -= ctx->term.sb_offset;
-#endif
+#endif  // SFTE_SCROLLBACK_CAP
             if (_sfte_input_is_selected(ctx, c, logical_r)) attr |= ATTR_REVERSE;
-#endif
+#endif  // SFTE_SELECTION
 
             if (attr & ATTR_REVERSE) {
                 uint32_t tmp = fg;
@@ -5097,10 +5097,10 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, uint32_t *px_buf, int vis
             if (!is_cursor && (attr & ATTR_DUMMY) && c > 0 && c - 1 == vis_cx && r == vis_cy &&
                 !ctx->term.hide_cursor)
                 is_cursor = 1;
-#endif
+#endif  // SFTE_WIDE_CHARS
 #if SFTE_CURSOR_BLINK
             if (!ctx->term.blink_visible) is_cursor = 0;
-#endif
+#endif  // SFTE_CURSOR_BLINK
 
             if (is_cursor && _SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_BLOCK)
                 _sfte_render_bg_cell(ctx, px_buf, c, r, fg);  // Invert colors
