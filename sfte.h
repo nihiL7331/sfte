@@ -2673,6 +2673,12 @@ static void _sfte_sixel_deinit(sfte_ctx *ctx) {
 // >>kitty
 // =================================================================================================
 #if SFTE_KITTY_GRAPHICS
+
+/*
+    Performs bilinear interpolation for image scaling.
+    Kitty allows the terminal to dictate the final render size in rows/columns,
+    this is the main purpose for this function.
+*/
 static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int sw, int sh, int dw, int dh) {
     uint32_t *dst = (uint32_t *)SFTE_MALLOC(dw * dh * sizeof(uint32_t));
     if (!dst) return NULL;
@@ -2713,6 +2719,13 @@ static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int sw, int sh,
     return dst;
 }
 
+/*
+    Parses raw pixel buffers or delegates to stb_image for PNG/JPEG decoding.
+    This kitty protocol implementation supports:
+    - direct base64 pixel streams (via 'd'),
+    - reading from a local file path (via 'f', used by e.g. yazi),
+    - reading from a temporary file that the terminal is expected to delete after reading (via 't').
+*/
 static uint32_t *_sfte_kitty_decode_payload(sfte_ctx *ctx, uint8_t *raw_data, size_t raw_len,
                                             uint8_t is_file, const char *file_path, int *w,
                                             int *h) {
@@ -2763,6 +2776,9 @@ static uint32_t *_sfte_kitty_decode_payload(sfte_ctx *ctx, uint8_t *raw_data, si
     return pxs;
 }
 
+/*
+    Applies requested croppping limits before placing the image.
+*/
 static uint32_t *_sfte_kitty_apply_crop(sfte_ctx *ctx, uint32_t *pxs, int *w, int *h) {
     int cx = (unsigned int)_SFTE_CLAMP(ctx->kitty.crop_x, 0, *w);
     int cy = (unsigned int)_SFTE_CLAMP(ctx->kitty.crop_y, 0, *h);
@@ -2786,16 +2802,20 @@ static uint32_t *_sfte_kitty_apply_crop(sfte_ctx *ctx, uint32_t *pxs, int *w, in
     return cropped;
 }
 
+/*
+    Translates terminal cell bounds (columns/rows) into physical
+    pixel dimensions, and scales the raster to match.
+*/
 static uint32_t *_sfte_kitty_apply_scale(sfte_ctx *ctx, uint32_t *pxs, int *w, int *h) {
     if (ctx->kitty.cols <= 0 && ctx->kitty.rows <= 0) return pxs;
     int target_w = *w;
     int target_h = *h;
     if (ctx->kitty.cols && !ctx->kitty.rows) {
         target_w = ctx->kitty.cols * ctx->font.cell_width;
-        target_h = (target_w * *h) / *w;
+        target_h = (target_w * *h) / *w;  // Maintain aspect ratio
     } else if (!ctx->kitty.cols && ctx->kitty.rows) {
         target_h = ctx->kitty.rows * ctx->font.cell_height;
-        target_w = (target_h * *w) / *h;
+        target_w = (target_h * *w) / *h;  // Maintain aspect ratio
     } else {
         target_w = ctx->kitty.cols * ctx->font.cell_width;
         target_h = ctx->kitty.rows * ctx->font.cell_height;
@@ -2811,10 +2831,18 @@ static uint32_t *_sfte_kitty_apply_scale(sfte_ctx *ctx, uint32_t *pxs, int *w, i
         return scaled;
     }
 
-    // fall back to returning the unscaled image on 'scaled' allocation fail
+    // Fall back to returning the unscaled image on 'scaled' allocation fail
     return pxs;
 }
 
+/*
+    Evaluates the kitty deletion matrix to determine if a specific
+    placement should be destroyed. This protocol implementation allows wiping by:
+    - ID,
+    - Z index,
+    - viewport intersection,
+    - specific cursor locations.
+*/
 static uint8_t _sfte_kitty_should_delete(sfte_ctx *ctx, sfte_img_placement *p, sfte_img *img) {
     uint8_t matches_id = (!ctx->kitty.id || ctx->kitty.id == p->img_id);
     if (!matches_id) return 0;
@@ -2826,11 +2854,11 @@ static uint8_t _sfte_kitty_should_delete(sfte_ctx *ctx, sfte_img_placement *p, s
     uint8_t intersects_y = (target_r >= p->start_row && target_r < p->start_row + rows);
     switch (ctx->kitty.d_action) {
     case 'A':
-    case 'a': return 1;
+    case 'a': return 1;  // Delete all
     case 'I':
     case 'i': return !ctx->kitty.placement_id || ctx->kitty.placement_id == p->placement_id;
     case 'C':
-    case 'c':
+    case 'c':  // Delete if intersecting cursor
         return ctx->term.cursor_x >= p->start_col && ctx->term.cursor_x < p->start_col + cols &&
                ctx->term.cursor_y >= p->start_row && ctx->term.cursor_y < p->start_row + rows;
     case 'P':
@@ -2847,10 +2875,15 @@ static uint8_t _sfte_kitty_should_delete(sfte_ctx *ctx, sfte_img_placement *p, s
     }
 }
 
+/*
+    Garbage collection via a simple reference counting.
+    The image data is separated from image placements, we only free the image data
+    when its `ref_cnt` drops to 0 (no placements are actively displaying it).
+*/
 static void _sfte_kitty_gc_pool(sfte_ctx *ctx) {
     for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i) {
         sfte_img *img = &ctx->term.img_pool[i];
-        if (img->is_sixel || img->ref_cnt) continue;
+        if (img->is_sixel || img->ref_cnt) continue;  // Skip active and sixel
         uint8_t should_del = (ctx->kitty.d_action == 'A' || ctx->kitty.d_action == 'a') ||
                              ((ctx->kitty.d_action == 'I' || ctx->kitty.d_action == 'i') &&
                               img->id == ctx->kitty.id);
@@ -2860,6 +2893,13 @@ static void _sfte_kitty_gc_pool(sfte_ctx *ctx) {
     }
 }
 
+/*
+    Registers a new viewport placement for an existing image buffer,
+    incrementing its reference count.
+
+    Returns a error message used for acknowledgements if 'img' is NULL or placement pool is OOM.
+    Returns NULL on success.
+*/
 static const char *_sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img) {
     if (!img) return "EINVAL: cannot apply placement to NULL image";
     sfte_img_placement *p = _sfte_img_placement_insert(ctx,
@@ -2883,33 +2923,39 @@ static const char *_sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img) {
     return NULL;
 }
 
+/*
+    Queries the terminals image support or interrogates the status of a specific image ID.
+    If the terminal successfully parses the request, it replies with an OK status.
+
+    Always returns NULL.
+*/
 static const char *_sfte_kitty_exec_query(sfte_ctx *ctx) {
-    char reply[64];
+    char reply[16];
     int len = snprintf(reply, sizeof(reply), "\033_Gi=%u;OK\033\\", ctx->kitty.id);
     if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
     return NULL;
 }
 
+/*
+    Iterates through active image placements and removes those that match the requested
+    deletion criteria passed via a kitty sequence.
+
+    Returns a error message used for acknowledgements if no image is found to delete.
+    Returns NULL on success.
+*/
 static const char *_sfte_kitty_exec_delete(sfte_ctx *ctx) {
     for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
         sfte_img_placement *p = &ctx->term.img_placements[i];
         if (p->alt_screen != ctx->term.alt_active || p->is_sixel) continue;
 
-        sfte_img *img = NULL;
-        for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
-            if (ctx->term.img_pool[j].id == p->img_id) {
-                img = &ctx->term.img_pool[j];
-                break;
-            }
+        sfte_img *img = _sfte_img_find(ctx, p->img_id);
         if (!img) return "EINVAL: failed to find image to delete";
 
         if (_sfte_kitty_should_delete(ctx, p, img)) {
-            if (img) {
-                img->ref_cnt--;
-                int cols = _sfte_grid_span(img->width, p->x_off, ctx->font.cell_width);
-                int rows = _sfte_grid_span(img->height, p->y_off, ctx->font.cell_height);
-                _sfte_grid_dirty_rect(ctx, p->start_col, p->start_row, cols, rows);
-            }
+            img->ref_cnt--;
+            int cols = _sfte_grid_span(img->width, p->x_off, ctx->font.cell_width);
+            int rows = _sfte_grid_span(img->height, p->y_off, ctx->font.cell_height);
+            _sfte_grid_dirty_rect(ctx, p->start_col, p->start_row, cols, rows);
             ctx->term.img_placements[i--] = ctx->term
                                                 .img_placements[--ctx->term.img_placements_len];
         }
@@ -2919,6 +2965,18 @@ static const char *_sfte_kitty_exec_delete(sfte_ctx *ctx) {
     return NULL;
 }
 
+/*
+    Decodes the accumulated base64 payload into raw pixels, applies any requested
+    cropping and scaling, and stores the final raster in the image pool.
+
+    WARN:
+    If the transmission medium is 't', the client sent a path to a temp file containing the pixels.
+    The protocol dictates that the emulator assumes ownership of this file and MUST delete it
+    after decoding to prevent disk leaks.
+
+    Returns a error message used for acknowledgements if the base64 decode fails.
+    Returns NULL on success.
+*/
 static const char *_sfte_kitty_exec_transmit(sfte_ctx *ctx, sfte_img **out_img) {
     size_t raw_len = 0;
     uint8_t *raw_data = _sfte_b64_decode((uint8_t *)ctx->kitty.b64_buf, ctx->kitty.b64_len,
@@ -2937,7 +2995,6 @@ static const char *_sfte_kitty_exec_transmit(sfte_ctx *ctx, sfte_img **out_img) 
     int h = ctx->kitty.height;
     uint32_t *pxs = _sfte_kitty_decode_payload(ctx, raw_data, raw_len, is_file, file_path, &w, &h);
 
-    // if t=t, term should delete the temp file
     if (ctx->kitty.t_medium == 't' && is_file) remove(file_path);
     if (is_file) SFTE_FREE(file_path);
     SFTE_FREE(raw_data);
@@ -2961,6 +3018,13 @@ static const char *_sfte_kitty_exec_transmit(sfte_ctx *ctx, sfte_img **out_img) 
     return NULL;
 }
 
+/*
+    Creates a new visual placement on the grid for an image already residing in the pool.
+
+    Returns a error message used for acknowledgements if the requested image ID
+    was never transmitted or has been garbage collected, OR if `_sfte_kitty_apply_placement` fails.
+    Returns NULL on success.
+*/
 static const char *_sfte_kitty_exec_place(sfte_ctx *ctx) {
     for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
         if (ctx->term.img_pool[j].id == ctx->kitty.id)
@@ -2968,15 +3032,22 @@ static const char *_sfte_kitty_exec_place(sfte_ctx *ctx) {
     return "ENOENT: image id not found in pool";
 }
 
+/*
+    Sends an acknowledgement response back to the client application.
+    The `q` parameter dictates response verbosity.
+    - q=0: Send a response for both success and failure.
+    - q=1: Send a response ONLY on failure (defalut).
+    - q=2: Silent.
+*/
 static void _sfte_kitty_send_ack(sfte_ctx *ctx, const char *err_msg) {
     if (err_msg && (ctx->kitty.quiet == 0 || ctx->kitty.quiet == 1)) {
-        char reply[256];
+        char reply[128];
         int len = ctx->kitty.id > 0 ? snprintf(reply, sizeof(reply), "\033_Gi=%u;%s\033\\",
                                                ctx->kitty.id, err_msg)
                                     : snprintf(reply, sizeof(reply), "\033_G;%s\033\\", err_msg);
         if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
     } else if (!err_msg && !ctx->kitty.quiet) {
-        char reply[64];
+        char reply[16];
         int len = ctx->kitty.id > 0
                       ? snprintf(reply, sizeof(reply), "\033_Gi=%u;OK\033\\", ctx->kitty.id)
                       : snprintf(reply, sizeof(reply), "\033_G;OK\033\\");
@@ -2984,6 +3055,15 @@ static void _sfte_kitty_send_ack(sfte_ctx *ctx, const char *err_msg) {
     }
 }
 
+/*
+    The main entrypoint for kitty graphics sequences.
+    Because terminal parsers usually have hard limits on escape sequence length,
+    kitty protocol can send big image files across multiple escape sequences.
+
+    The `m=1` parameter indicates that more data is coming.
+    The base64 string is accumulated in `ctx->kitty.b64_buf` across multiple calls,
+    and the evalutaion is triggered the moment a sequence with `m=0` is received.
+*/
 static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
     const char *semi = strchr(payload, ';');
     // if there's no semicolon, the dictionary spans the entire payload
@@ -3065,7 +3145,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
         ctx->kitty.b64_len += b64_len;
     }
 
-    if (more) return;  // abort and wait for next sequence
+    if (more) return;  // Abort and wait for next sequence
 
     ctx->kitty.b64_buf[ctx->kitty.b64_len] = '\0';
     const char *err_msg = NULL;
