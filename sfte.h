@@ -284,6 +284,14 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #define SFTE_SIXEL 1
 #endif  // SFTE_SIXEL
 
+#ifndef SFTE_SIXEL_INIT_SIZE
+#define SFTE_SIXEL_INIT_SIZE 256
+#endif  // SFTE_SIXEL_INIT_SIZE
+
+#ifndef SFTE_SIXEL_MAX_SIZE
+#define SFTE_SIXEL_MAX_SIZE 4096
+#endif  // SFTE_SIXEL_MAX_SIZE
+
 #ifndef SFTE_KITTY_GRAPHICS
 #define SFTE_KITTY_GRAPHICS 1
 #endif  // SFTE_KITTY_GRAPHICS
@@ -353,6 +361,8 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #define SFTE_KITTY_FMT_RGB 24
 #define SFTE_KITTY_FMT_RGBA 32
 #define SFTE_KITTY_FMT_PNG_JPEG 100
+
+#define SFTE_COLOR_ALPHA_MASK 0xFF000000
 
 #define SFTE_MOD_CTRL 0b0001
 #define SFTE_MOD_ALT 0b0010
@@ -1194,6 +1204,11 @@ static _sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_ctx *ctx, sfte_ce
 // >sixel
 // -------------------------------------------------------------------------------------------------
 #if SFTE_SIXEL
+static void _sfte_sixel_ensure_cap(sfte_ctx *ctx, int req_w, int req_h);
+static void _sfte_sixel_draw_pattern(sfte_ctx *ctx, uint8_t pattern, int repeats);
+static inline float _sfte_sixel_hue_to_rgb(float p, float q, float t);
+static inline uint32_t _sfte_sixel_hls_to_rgb(uint16_t h_deg, uint16_t l_pct, uint16_t s_pct);
+static void _sfte_sixel_apply_color(sfte_ctx *ctx);
 static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b);
 static void _sfte_sixel_deinit(sfte_ctx *ctx);
 #endif  // SFTE_SIXEL
@@ -2424,107 +2439,219 @@ static _sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_ctx *ctx, sfte_ce
 // >>sixel
 // =================================================================================================
 #if SFTE_SIXEL
-static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b) {
-    switch (ctx->sixel.state) {
-    case SIXEL_GROUND:
-        if (b >= '?' && b <= '~') {
-            int pattern = b - '?';  // ASCII 63-126 to 0-63
-            int repeats = ctx->sixel.repeat_cnt > 0 ? ctx->sixel.repeat_cnt : 1;
-            uint32_t col = ctx->sixel.palette[ctx->sixel.col_idx];
 
-            int max_x = ctx->sixel.x + repeats - 1;
-            int max_y = ctx->sixel.y + 5;  // 6 pxs tall
+#define _SFTE_SIXEL_OFFSET 63         // ASCII offset ('?' is 63)
+#define _SFTE_SIXEL_BAND_HEIGHT 6     // Each sixel row represents 6 vertical pixels
+#define _SFTE_SIXEL_MAX_PARAMS 5      // Max parameters in a color definition
+#define _SFTE_SIXEL_RGB_MAX 100       // RGB values are set as percentages
+#define _SFTE_SIXEL_COLORSPACE_HLS 1  // HLS color space identifier
+#define _SFTE_SIXEL_COLORSPACE_RGB 2  // RGB color space identifier
 
-            if (max_x >= ctx->sixel.cap_w || max_y >= ctx->sixel.cap_h) {
-                int new_w = ctx->sixel.cap_w == 0 ? 256 : ctx->sixel.cap_w;
-                int new_h = ctx->sixel.cap_h == 0 ? 256 : ctx->sixel.cap_h;
-                while (max_x >= new_w) new_w *= 2;
-                while (max_y >= new_h) new_h *= 2;
+/*
+    Ensures the image buffer is large enough for the incoming pixels.
+    Size gets doubled on each dimension when the buffer is not big enough.
+    Maxes out at `SFTE_SIXEL_MAX_SIZE` x `SFTE_SIXEL_MAX_SIZE`.
+*/
+static void _sfte_sixel_ensure_cap(sfte_ctx *ctx, int req_w, int req_h) {
+    if (req_w < ctx->sixel.cap_w && req_h < ctx->sixel.cap_h) return;
 
-                uint32_t *new_pxs = (uint32_t *)SFTE_CALLOC(new_w * new_h, sizeof(uint32_t));
-                if (ctx->sixel.pxs) {
-                    for (int r = 0; r < ctx->sixel.height; ++r)
-                        memcpy(&new_pxs[r * new_w], &ctx->sixel.pxs[r * ctx->sixel.cap_w],
-                               ctx->sixel.width * sizeof(uint32_t));
-                    SFTE_FREE(ctx->sixel.pxs);
-                }
-                ctx->sixel.pxs = new_pxs;
-                ctx->sixel.cap_w = new_w;
-                ctx->sixel.cap_h = new_h;
-            }
+    int new_w = ctx->sixel.cap_w == 0 ? SFTE_SIXEL_INIT_SIZE : ctx->sixel.cap_w;
+    int new_h = ctx->sixel.cap_h == 0 ? SFTE_SIXEL_INIT_SIZE : ctx->sixel.cap_h;
 
-            for (int dx = 0; dx < repeats; ++dx) {
-                int px_x = ctx->sixel.x + dx;
+    while (new_w >= req_w && new_w < SFTE_SIXEL_MAX_SIZE) new_w *= 2;
+    while (new_h >= req_h && new_h < SFTE_SIXEL_MAX_SIZE) new_h *= 2;
 
-                for (int bit = 0; bit < 6; ++bit)
-                    if (pattern & (1 << bit)) {
-                        int px_y = ctx->sixel.y + bit;
-                        ctx->sixel.pxs[px_y * ctx->sixel.cap_w + px_x] = col;
+    if (new_w > SFTE_SIXEL_MAX_SIZE) new_w = SFTE_SIXEL_MAX_SIZE;
+    if (new_h > SFTE_SIXEL_MAX_SIZE) new_h = SFTE_SIXEL_MAX_SIZE;
 
-                        if (px_x >= ctx->sixel.width) ctx->sixel.width = px_x + 1;
-                        if (px_y >= ctx->sixel.height) ctx->sixel.height = px_y + 1;
-                    }
-            }
+    if (new_w <= ctx->sixel.cap_w && new_h <= ctx->sixel.cap_h) return;
 
-            ctx->sixel.x += repeats;
-            ctx->sixel.repeat_cnt = 0;
-        } else if (b == '$')  // carriage return
-            ctx->sixel.x = 0;
-        else if (b == '-') {  // move down one band
-            ctx->sixel.x = 0;
-            ctx->sixel.y += 6;
-        } else if (b == '!') {  // start repeat
-            ctx->sixel.state = SIXEL_REPEAT;
-            ctx->sixel.repeat_cnt = 0;
-        } else if (b == '#') {  // col def
-            ctx->sixel.state = SIXEL_COLOR_PARAM;
-            ctx->sixel.param_idx = 0;
-            memset(ctx->sixel.params, 0, sizeof(ctx->sixel.params));
+    uint32_t *new_pxs = (uint32_t *)SFTE_CALLOC(new_w * new_h, sizeof(uint32_t));
+    SFTE_ASSERT(new_pxs, "failed to allocate sixel buffer");
+
+    if (ctx->sixel.pxs) {
+        for (int r = 0; r < ctx->sixel.height; ++r)
+            memcpy(&new_pxs[r * new_w], &ctx->sixel.pxs[r * ctx->sixel.cap_w],
+                   ctx->sixel.width * sizeof(uint32_t));
+        SFTE_FREE(ctx->sixel.pxs);
+    }
+
+    ctx->sixel.pxs = new_pxs;
+    ctx->sixel.cap_w = new_w;
+    ctx->sixel.cap_h = new_h;
+}
+
+/*
+    Decodes a 6-bit bitmask and paints it onto the image buffer.
+    Handles buffer resizing if it's too small.
+
+    A sixel is a vertical column of 6 pixels encoded into a single ASCII character.
+    The bits (from LSB to MSB) represent pixels from top to bottom.
+    ASCII '?' (value 63) minus offset 63 = 000000 (all blank).
+    ASCII '~' (value 126) minus offset 63 = 111111 (all solid).
+*/
+static void _sfte_sixel_draw_pattern(sfte_ctx *ctx, uint8_t pattern, int repeats) {
+    int max_x = ctx->sixel.x + repeats - 1;
+    int max_y = ctx->sixel.y + _SFTE_SIXEL_BAND_HEIGHT - 1;
+
+    _sfte_sixel_ensure_cap(ctx, max_x, max_y);
+    uint32_t col = ctx->sixel.palette[ctx->sixel.col_idx];
+
+    for (int dx = 0; dx < repeats; ++dx) {
+        int px_x = ctx->sixel.x + dx;
+
+        for (uint8_t bit = 0; bit < _SFTE_SIXEL_BAND_HEIGHT; ++bit) {
+            if (!(pattern & (1 << bit))) continue;
+            int px_y = ctx->sixel.y + bit;
+
+            // Skip invalid sequence requests
+            if (px_x >= ctx->sixel.cap_w || px_y >= ctx->sixel.cap_h) continue;
+
+            ctx->sixel.pxs[px_y * ctx->sixel.cap_w + px_x] = col;
+
+            if (px_x >= ctx->sixel.width) ctx->sixel.width = px_x + 1;
+            if (px_y >= ctx->sixel.height) ctx->sixel.height = px_y + 1;
         }
-        break;
-    case SIXEL_REPEAT:
-        if (b >= '0' && b <= '9')
-            ctx->sixel.repeat_cnt = ctx->sixel.repeat_cnt * 10 + (b - '0');
-        else {  // done parsing repeat cnt, process the actual char
-            ctx->sixel.state = SIXEL_GROUND;
-            _sfte_sixel_parse_byte(ctx, b);  // re-eval in ground state
-        }
-        break;
-    case SIXEL_COLOR_INTRO:
-    case SIXEL_COLOR_PARAM:
-        if (b >= '0' && b <= '9')
-            ctx->sixel.params[ctx->sixel.param_idx] = ctx->sixel.params[ctx->sixel.param_idx] * 10 +
-                                                      (b - '0');
-        else if (b == ';') {  // move to next param with cap
-            if (ctx->sixel.param_idx < 4) ctx->sixel.param_idx++;
-        } else {
-            // color seq is terminated by any non-digit/semicolon byte
-            if (ctx->sixel.param_idx == 0 && ctx->sixel.params[0] < 256)  // 1 param - select color
-                ctx->sixel.col_idx = ctx->sixel.params[0];
-            else if (ctx->sixel.param_idx == 4) {  // 5 param - define color
-                int idx = ctx->sixel.params[0];
-                int space = ctx->sixel.params[1];
+    }
 
-                if (idx >= 0 && idx < 256) {
-                    if (space == 1) {  // HLS
+    ctx->sixel.x += repeats;
+}
 
-                    } else if (space == 2) {  // RGB
-                        uint8_t r = (ctx->sixel.params[2] * 255) / 100;
-                        uint8_t g = (ctx->sixel.params[3] * 255) / 100;
-                        uint8_t b = (ctx->sixel.params[4] * 255) / 100;
+/*
+    Converts a hue angle into a single RGB channel.
+*/
+static inline float _sfte_sixel_hue_to_rgb(float p, float q, float t) {
+    if (t < 0.0f) t += 1.0f;
+    if (t > 1.0f) t -= 1.0f;
+    if (t < 1.0f / 6.0f) return p + (q - p) * 6.0f * t;
+    if (t < 1.0f / 2.0f) return q;
+    if (t < 2.0f / 3.0f) return p + (q - p) * (2.0f / 3.0f - t) * 6.0f;
+    return p;
+}
 
-                        ctx->sixel.palette[idx] = 0xFF000000 | (r << 16) | (g << 8) | b;
-                    }
-                }
+/*
+    Converts HLS values to a packed 32-bit ARGB color.
+    Unlike modern HSL, sixel uses integer degrees for hue (0-360) and percentages for L/S (0-100).
+*/
+static inline uint32_t _sfte_sixel_hls_to_rgb(uint16_t h_deg, uint16_t l_pct, uint16_t s_pct) {
+    float h = h_deg / 360.0f;
+    float l = l_pct / 100.0f;
+    float s = s_pct / 100.0f;
+
+    uint8_t r, g, b;
+
+    if (s == 0.0f)
+        r = g = b = (uint8_t)(l * 255.0f);
+    else {
+        float q = l < 0.5f ? l * (1.0f + s) : l + s - l * s;
+        float p = 2.0f * l - q;
+        r = (uint8_t)(_sfte_sixel_hue_to_rgb(p, q, h + 1.0f / 3.0f) * 255.0f);
+        g = (uint8_t)(_sfte_sixel_hue_to_rgb(p, q, h) * 255.0f);
+        b = (uint8_t)(_sfte_sixel_hue_to_rgb(p, q, h - 1.0f / 3.0f) * 255.0f);
+    }
+
+    return SFTE_COLOR_ALPHA_MASK | (r << 16) | (g << 8) | b;
+}
+
+/*
+    Parses the accumulated numerical parameters to update the active color or palette.
+    Initiated by the pound symbol (`#`).
+    If one parameter is provided, the active color index gets changed to value of that parameter.
+    If five parameters are provided, it defines a new color.
+    Parameter values are as follows: #<idx>;<space>;<c1>;<c2>;<c3>.
+    Color space is 1 for HLS, 2 for RGB.
+*/
+static void _sfte_sixel_apply_color(sfte_ctx *ctx) {
+    if (ctx->sixel.param_idx == 0 && ctx->sixel.params[0] < 256)
+        ctx->sixel.col_idx = ctx->sixel.params[0];
+    else if (ctx->sixel.param_idx == 4) {
+        int idx = ctx->sixel.params[0];
+        int space = ctx->sixel.params[1];
+
+        if (idx >= 0 && idx <= 256) {
+            if (space == _SFTE_SIXEL_COLORSPACE_HLS)
+                ctx->sixel.palette[idx] = _sfte_sixel_hls_to_rgb(
+                    ctx->sixel.params[2], ctx->sixel.params[3], ctx->sixel.params[4]);
+            else if (space == _SFTE_SIXEL_COLORSPACE_RGB) {
+                uint8_t r = (ctx->sixel.params[2] * 255) / _SFTE_SIXEL_RGB_MAX;
+                uint8_t g = (ctx->sixel.params[3] * 255) / _SFTE_SIXEL_RGB_MAX;
+                uint8_t b = (ctx->sixel.params[4] * 255) / _SFTE_SIXEL_RGB_MAX;
+                ctx->sixel.palette[idx] = SFTE_COLOR_ALPHA_MASK | (r << 16) | (g << 8) | b;
             }
-
-            ctx->sixel.state = SIXEL_GROUND;
-            _sfte_sixel_parse_byte(ctx, b);
         }
-        break;
     }
 }
 
+/*
+    The core state machine for the sixel byte stream.
+
+    When parsing repeats (e.g. `!255`) or colors (e.g. `#1;2;100;0;0`), the terminal
+    receives ASCII digits one at a time. To convert these characters into integers
+    without external buffers, we use:
+        `acc = acc * 10 + (b - '0')`
+    `b - '0'` subtracts 48 to convert an ASCII character (e.g. `5`) to an integer (5).
+    `acc * 10` shifts the previously parsed value one decimal place to the left.
+
+    To avoid growing the call stack via recursion when a state
+    needs to hand a byte back to SIXEL_GROUND, it uses a while-loop based on the `cont` variable.
+*/
+static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b) {
+    uint8_t cont = 1;
+    while (cont) {
+        cont = 0;
+
+        switch (ctx->sixel.state) {
+        case SIXEL_GROUND:
+            if (b >= '?' && b <= '~') {
+                uint8_t pattern = b - _SFTE_SIXEL_OFFSET;
+                int repeats = ctx->sixel.repeat_cnt > 0 ? ctx->sixel.repeat_cnt : 1;
+                _sfte_sixel_draw_pattern(ctx, pattern, repeats);
+                ctx->sixel.repeat_cnt = 0;
+            } else if (b == '$')  // Carriage return
+                ctx->sixel.x = 0;
+            else if (b == '-') {  // Move down one band
+                ctx->sixel.x = 0;
+                ctx->sixel.y += _SFTE_SIXEL_BAND_HEIGHT;
+            } else if (b == '!') {  // Start repeat sequence
+                ctx->sixel.state = SIXEL_REPEAT;
+                ctx->sixel.repeat_cnt = 0;
+            } else if (b == '#') {  // Start color definition/selection
+                ctx->sixel.state = SIXEL_COLOR_PARAM;
+                ctx->sixel.param_idx = 0;
+                memset(ctx->sixel.params, 0, sizeof(ctx->sixel.params));
+            }
+            break;
+        case SIXEL_REPEAT:
+            if (b >= '0' && b <= '9')
+                ctx->sixel.repeat_cnt = ctx->sixel.repeat_cnt * 10 + (b - '0');
+            else {
+                // Done parsing repeat count, go back to ground state
+                ctx->sixel.state = SIXEL_GROUND;
+                cont = 1;
+            }
+            break;
+        case SIXEL_COLOR_INTRO:
+        case SIXEL_COLOR_PARAM:
+            if (b >= '0' && b <= '9')
+                ctx->sixel.params[ctx->sixel.param_idx] = ctx->sixel.params[ctx->sixel.param_idx] *
+                                                              10 +
+                                                          (b - '0');
+            else if (b == ';' && ctx->sixel.param_idx < _SFTE_SIXEL_MAX_PARAMS - 1)
+                // Move to next parameter
+                ctx->sixel.param_idx++;
+            else {  // Color sequence terminated by any non-digit/semicolon byte
+                _sfte_sixel_apply_color(ctx);
+                ctx->sixel.state = SIXEL_GROUND;
+                cont = 1;
+            }
+            break;
+        }
+    }
+}
+
+/*
+    Frees all sixel memory allocations.
+*/
 static void _sfte_sixel_deinit(sfte_ctx *ctx) {
     if (ctx->term.img_pool) {
         for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i)
@@ -5738,7 +5865,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int w, int h, sfte_damage_rect
                 if (!is_dirty) continue;                                                           \
                                                                                                    \
                 uint32_t img_pxs = img->pxs[iy * img->width + ix];                                 \
-                if (!(img_pxs & 0xFF000000)) continue;                                             \
+                if (!(img_pxs & SFTE_COLOR_ALPHA_MASK)) continue;                                  \
                 px_buf[out_y * ctx->width + out_x] = _sfte_render_blend_argb(                      \
                     px_buf[out_y * ctx->width + out_x], img_pxs, (uint8_t)(img_pxs >> 24));        \
             }                                                                                      \
@@ -6065,7 +6192,7 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
 
 #if SFTE_SIXEL
     for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_ansi_palette); ++i)
-        ctx->sixel.palette[i] = 0xFF000000 | _sfte_ansi_palette[i];
+        ctx->sixel.palette[i] = SFTE_COLOR_ALPHA_MASK | _sfte_ansi_palette[i];
 #endif  // SFTE_SIXEL
 
     ctx->term.cols = 80;
