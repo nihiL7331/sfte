@@ -1243,6 +1243,7 @@ static inline void _sfte_csi_exec_ich(sfte_ctx *ctx, int *p, int cx);
 static inline void _sfte_csi_exec_cnl(sfte_ctx *ctx, int *p);
 static inline void _sfte_csi_exec_cpl(sfte_ctx *ctx, int *p);
 static inline void _sfte_csi_exec_ed(sfte_ctx *ctx, int mode, int cx);
+static inline void _sfte_csi_exec_el(sfte_ctx *ctx, int mode, int cx);
 static inline void _sfte_csi_exec_il(sfte_ctx *ctx, int *p);
 static inline void _sfte_csi_exec_dl(sfte_ctx *ctx, int *p);
 static inline void _sfte_csi_exec_dch(sfte_ctx *ctx, int *p, int cx);
@@ -3433,6 +3434,21 @@ static inline void _sfte_csi_exec_ed(sfte_ctx *ctx, int mode, int cx) {
 }
 
 /*
+    Handles Erase Line / CSI K.
+
+    Erases part or all of the current line.
+*/
+static inline void _sfte_csi_exec_el(sfte_ctx *ctx, int mode, int cx) {
+    if (mode == 0)
+        _sfte_grid_clear_cells(ctx, _SFTE_GRID_IDX(ctx, cx, ctx->term.cursor_y),
+                               ctx->term.cols - cx);
+    else if (mode == 1)
+        _sfte_grid_clear_cells(ctx, _SFTE_GRID_IDX(ctx, 0, ctx->term.cursor_y), cx + 1);
+    else if (mode == 2)
+        _sfte_grid_clear_cells(ctx, _SFTE_GRID_IDX(ctx, 0, ctx->term.cursor_y), ctx->term.cols);
+}
+
+/*
     Handles Insert Line / CSI L.
 
     Inserts n blank lines at cursor position, pushing bottom lines off.
@@ -4041,14 +4057,8 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
     case 'J':
         for (int i = 0; i < cnt; ++i) _sfte_csi_exec_ed(ctx, p[i], cx);
         break;
-    case 'K':  // EL / Erase in Line
-        if (p[0] == 0)
-            _sfte_grid_clear_cells(ctx, _SFTE_GRID_IDX(ctx, cx, ctx->term.cursor_y),
-                                   ctx->term.cols - cx);
-        else if (p[0] == 1)
-            _sfte_grid_clear_cells(ctx, _SFTE_GRID_IDX(ctx, 0, ctx->term.cursor_y), cx + 1);
-        else if (p[0] == 2)
-            _sfte_grid_clear_cells(ctx, _SFTE_GRID_IDX(ctx, 0, ctx->term.cursor_y), ctx->term.cols);
+    case 'K':
+        for (int i = 0; i < cnt; ++i) _sfte_csi_exec_el(ctx, p[i], cx);
         break;
     case 'L': _sfte_csi_exec_il(ctx, p); break;
     case 'M': _sfte_csi_exec_dl(ctx, p); break;
