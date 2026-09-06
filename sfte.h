@@ -5093,6 +5093,12 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, uint32_t *px_buf, int vis
             }
 
             uint8_t is_cursor = (c == vis_cx && r == vis_cy && !ctx->term.hide_cursor);
+
+#if SFTE_SCROLLBACK_CAP
+            // Hide active cursor when viewing scrollback history
+            if (ctx->term.sb_offset > 0) is_cursor = 0;
+#endif  // SFTE_SCROLLBACK_CAP
+
 #if SFTE_WIDE_CHARS
             if (!is_cursor && (attr & ATTR_DUMMY) && c > 0 && c - 1 == vis_cx && r == vis_cy &&
                 !ctx->term.hide_cursor)
