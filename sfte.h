@@ -1242,7 +1242,7 @@ static inline uint32_t _sfte_csi_parse_truecolor(int *p, int i);
 static inline void _sfte_csi_exec_ich(sfte_ctx *ctx, int *p, int cx);
 static inline void _sfte_csi_exec_cnl(sfte_ctx *ctx, int *p);
 static inline void _sfte_csi_exec_cpl(sfte_ctx *ctx, int *p);
-static inline void _sfte_csi_exec_erase_display(sfte_ctx *ctx, int mode, int cx);
+static inline void _sfte_csi_exec_ed(sfte_ctx *ctx, int mode, int cx);
 static inline void _sfte_csi_exec_il(sfte_ctx *ctx, int *p);
 static inline void _sfte_csi_exec_dl(sfte_ctx *ctx, int *p);
 static inline void _sfte_csi_exec_dch(sfte_ctx *ctx, int *p, int cx);
@@ -3365,7 +3365,7 @@ static inline void _sfte_csi_exec_cpl(sfte_ctx *ctx, int *p) {
 /*
     Handles Erase in Display / CSI J.
 */
-static inline void _sfte_csi_exec_erase_display(sfte_ctx *ctx, int mode, int cx) {
+static inline void _sfte_csi_exec_ed(sfte_ctx *ctx, int mode, int cx) {
     // If we clear entire screen and scrollback exists,
     // push the data to scrollback instead of erasing it in its entirety
     if (mode == 2 || (mode == 0 && ctx->term.cursor_x == 0 && ctx->term.cursor_y == 0)) {
@@ -4038,7 +4038,9 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         ctx->term.cursor_x = _SFTE_CLAMP(_SFTE_P_IDX(p[1]), 0, ctx->term.cols - 1);
         ctx->term.cursor_y = _SFTE_CLAMP(_SFTE_P_IDX(p[0]), 0, ctx->term.rows - 1);
         break;
-    case 'J': _sfte_csi_exec_erase_display(ctx, p[0], cx); break;
+    case 'J':
+        for (int i = 0; i < cnt; ++i) _sfte_csi_exec_ed(ctx, p[i], cx);
+        break;
     case 'K':  // EL / Erase in Line
         if (p[0] == 0)
             _sfte_grid_clear_cells(ctx, _SFTE_GRID_IDX(ctx, cx, ctx->term.cursor_y),
