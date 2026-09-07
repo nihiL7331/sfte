@@ -190,6 +190,24 @@ typedef enum {
 #endif  // SFTE_TERM_SCROLL_STEP
 
 // =================================================================================================
+// >>window macros
+// =================================================================================================
+
+/*
+    Horizontal padding around the terminal grid in pixels.
+*/
+#ifndef SFTE_PAD_X
+#define SFTE_PAD_X 8
+#endif  // SFTE_PAD_X
+
+/*
+    Vertical padding around the terminal grid in pixels.
+*/
+#ifndef SFTE_PAD_Y
+#define SFTE_PAD_Y 8
+#endif  // SFTE_PAD_Y
+
+// =================================================================================================
 // >>color macros
 // =================================================================================================
 
@@ -328,24 +346,6 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #ifndef SFTE_FONT_MAX_COMBINING
 #define SFTE_FONT_MAX_COMBINING 2
 #endif  // SFTE_FONT_MAX_COMBINING
-
-/*
-    Horizontal padding around the terminal grid in pixels.
-    TODO:
-    Move this elsewhere
-*/
-#ifndef SFTE_PAD_X  // in pxs
-#define SFTE_PAD_X 8
-#endif  // SFTE_PAD_X
-
-/*
-    Vertical padding around the terminal grid in pixels.
-    TODO:
-    Move this elsewhere
-*/
-#ifndef SFTE_PAD_Y  // in pxs
-#define SFTE_PAD_Y 8
-#endif  // SFTE_PAD_Y
 
 // =================================================================================================
 // >>cursor macros
