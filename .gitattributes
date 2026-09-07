@@ -1,3 +1,5 @@
 *.h language=C
 xdg-shell.xml linguist-vendored
 nob.h linguist-vendored
+stb_image.h linguist-vendored
+stb_truetype.h linguist-vendored
