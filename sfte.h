@@ -212,16 +212,16 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 /*
     Horizontal padding around the terminal grid in pixels.
 */
-#ifndef SFTE_PAD_X
-#define SFTE_PAD_X 8
-#endif  // SFTE_PAD_X
+#ifndef SFTE_WINDOW_PAD_X
+#define SFTE_WINDOW_PAD_X 8
+#endif  // SFTE_WINDOW_PAD_X
 
 /*
     Vertical padding around the terminal grid in pixels.
 */
-#ifndef SFTE_PAD_Y
-#define SFTE_PAD_Y 8
-#endif  // SFTE_PAD_Y
+#ifndef SFTE_WINDOW_PAD_Y
+#define SFTE_WINDOW_PAD_Y 8
+#endif  // SFTE_WINDOW_PAD_Y
 
 // =================================================================================================
 // >>color macros
@@ -2162,8 +2162,10 @@ static inline sfte_cell *_sfte_grid_get_cell(sfte_ctx *ctx, int16_t col, int16_t
 */
 static void _sfte_grid_from_px(sfte_ctx *ctx, int32_t px_x, int32_t px_y, int16_t *out_c,
                                int16_t *out_logical_r, int16_t *out_screen_r) {
-    int16_t c = _SFTE_CLAMP((px_x - SFTE_PAD_X) / ctx->font.cell_width, 0, ctx->term.cols - 1);
-    int16_t r = _SFTE_CLAMP((px_y - SFTE_PAD_Y) / ctx->font.cell_height, 0, ctx->term.rows - 1);
+    int16_t c = _SFTE_CLAMP((px_x - SFTE_WINDOW_PAD_X) / ctx->font.cell_width, 0,
+                            ctx->term.cols - 1);
+    int16_t r = _SFTE_CLAMP((px_y - SFTE_WINDOW_PAD_Y) / ctx->font.cell_height, 0,
+                            ctx->term.rows - 1);
     if (out_c) *out_c = c;
     if (out_screen_r) *out_screen_r = r;
 
@@ -2645,20 +2647,20 @@ static void _sfte_view_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf) {
     int32_t grid_h = ctx->term.rows * ctx->font.cell_height;
     uint32_t bg = (SFTE_COLOR_BG_OPACITY << 24) | SFTE_COLOR_BG;
 
-#if SFTE_PAD_Y
-    for (int32_t y = 0; y < SFTE_PAD_Y && y < h; ++y)
+#if SFTE_WINDOW_PAD_Y
+    for (int32_t y = 0; y < SFTE_WINDOW_PAD_Y && y < h; ++y)
         for (int32_t x = 0; x < w; ++x) px_buf[y * w + x] = bg;
 
-    for (int32_t y = SFTE_PAD_Y + grid_h; y < h; ++y)
+    for (int32_t y = SFTE_WINDOW_PAD_Y + grid_h; y < h; ++y)
         for (int32_t x = 0; x < w; ++x) px_buf[y * w + x] = bg;
-#endif  // SFTE_PAD_Y
+#endif  // SFTE_WINDOW_PAD_Y
 
-#if SFTE_PAD_X
-    for (int32_t y = SFTE_PAD_Y; y < SFTE_PAD_Y + grid_h && y < h; ++y) {
-        for (int32_t x = 0; x < SFTE_PAD_X && x < w; ++x) px_buf[y * w + x] = bg;
-        for (int32_t x = SFTE_PAD_X + grid_w; x < w; ++x) px_buf[y * w + x] = bg;
+#if SFTE_WINDOW_PAD_X
+    for (int32_t y = SFTE_WINDOW_PAD_Y; y < SFTE_WINDOW_PAD_Y + grid_h && y < h; ++y) {
+        for (int32_t x = 0; x < SFTE_WINDOW_PAD_X && x < w; ++x) px_buf[y * w + x] = bg;
+        for (int32_t x = SFTE_WINDOW_PAD_X + grid_w; x < w; ++x) px_buf[y * w + x] = bg;
     }
-#endif  // SFTE_PAD_X
+#endif  // SFTE_WINDOW_PAD_X
 }
 
 // =================================================================================================
@@ -5312,8 +5314,8 @@ static inline void _sfte_render_images(sfte_ctx *ctx, uint32_t *px_buf, int32_t 
         sfte_img *img = _sfte_img_find(ctx, p->img_id);
         if (!img) continue;
 
-        int32_t base_x = (p->start_col * ctx->font.cell_width) + SFTE_PAD_X + p->x_off;
-        int32_t base_y = (p->start_row * ctx->font.cell_height) + SFTE_PAD_Y + p->y_off +
+        int32_t base_x = (p->start_col * ctx->font.cell_width) + SFTE_WINDOW_PAD_X + p->x_off;
+        int32_t base_y = (p->start_row * ctx->font.cell_height) + SFTE_WINDOW_PAD_Y + p->y_off +
                          base_y_off;
 
         int32_t draw_w = _SFTE_CLAMP(img->width, 0, ctx->width - base_x);
@@ -5341,12 +5343,13 @@ static inline void _sfte_render_images(sfte_ctx *ctx, uint32_t *px_buf, int32_t 
                 if (out_x < 0 || out_x >= ctx->width) continue;
 
                 uint8_t is_dirty = 0;
-                if (out_x < SFTE_PAD_X || out_y < SFTE_PAD_Y || out_x >= ctx->width - SFTE_PAD_X ||
-                    out_y >= ctx->height - SFTE_PAD_Y) {
+                if (out_x < SFTE_WINDOW_PAD_X || out_y < SFTE_WINDOW_PAD_Y ||
+                    out_x >= ctx->width - SFTE_WINDOW_PAD_X ||
+                    out_y >= ctx->height - SFTE_WINDOW_PAD_Y) {
                     is_dirty = pad_was_dirty;
                 } else {
-                    int16_t grid_c = (out_x - SFTE_PAD_X) / ctx->font.cell_width;
-                    int16_t grid_r = (out_y - SFTE_PAD_Y) / ctx->font.cell_height;
+                    int16_t grid_c = (out_x - SFTE_WINDOW_PAD_X) / ctx->font.cell_width;
+                    int16_t grid_r = (out_y - SFTE_WINDOW_PAD_Y) / ctx->font.cell_height;
                     is_dirty = ctx->term.cells[_SFTE_GRID_IDX(ctx, grid_c, grid_r)].dirty;
                 }
                 if (!is_dirty) continue;
@@ -5388,8 +5391,8 @@ static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, u
 */
 static void _sfte_render_bg_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, int16_t row,
                                  uint32_t bg) {
-    int32_t cx = col * ctx->font.cell_width + SFTE_PAD_X;
-    int32_t cy = row * ctx->font.cell_height + SFTE_PAD_Y;
+    int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
+    int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
     uint32_t final_bg = (SFTE_COLOR_BG_OPACITY << 24) | (bg & ~SFTE_COLOR_ALPHA_MASK);
 
     for (int32_t y = 0; y < ctx->font.cell_height; ++y) {
@@ -5413,8 +5416,8 @@ static void _sfte_render_fg_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, i
     sfte_glyph *g = _sfte_font_get_glyph(ctx, &actual_cache, rune);
     if (!g) return;
 
-    int32_t cx = col * ctx->font.cell_width + SFTE_PAD_X;
-    int32_t cy = row * ctx->font.cell_height + SFTE_PAD_Y;
+    int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
+    int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
 
     int32_t glyph_width = g->x1 - g->x0;
     int32_t glyph_height = g->y1 - g->y0;
@@ -5485,7 +5488,7 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, uint32_t *px_buf, 
     for (int32_t x = cx; x < cx + render_w; ++x) {
         if (x >= ctx->width) break;
 
-        int32_t grid_x = x - SFTE_PAD_X;
+        int32_t grid_x = x - SFTE_WINDOW_PAD_X;
         int32_t local_x = grid_x % ctx->font.cell_width;
 
         switch (style) {
@@ -5559,8 +5562,8 @@ static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, uint32_t *px_buf, in
 */
 static void _sfte_render_decorations_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, int16_t row,
                                           sfte_cell *vcell, uint8_t is_cursor) {
-    int32_t cx = col * ctx->font.cell_width + SFTE_PAD_X;
-    int32_t cy = row * ctx->font.cell_height + SFTE_PAD_Y;
+    int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
+    int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
 
     int32_t render_w = ctx->font.cell_width;
 #if SFTE_FONT_WIDE_CHARS
@@ -5647,8 +5650,9 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t
             sfte_cell *vcell = _sfte_grid_get_cell(ctx, c, logical_r);
 #if SFTE_FONT_WIDE_CHARS
             if (vcell->attr & _SFTE_ATTR_DUMMY) {
-                _sfte_render_damage_add(bx0, by0, bx1, by1, c * ctx->font.cell_width + SFTE_PAD_X,
-                                        r * ctx->font.cell_height + SFTE_PAD_Y,
+                _sfte_render_damage_add(bx0, by0, bx1, by1,
+                                        c * ctx->font.cell_width + SFTE_WINDOW_PAD_X,
+                                        r * ctx->font.cell_height + SFTE_WINDOW_PAD_Y,
                                         ctx->font.cell_width, ctx->font.cell_height);
                 ctx->term.cells[idx].dirty = 0;
                 continue;
@@ -5693,12 +5697,12 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t
             _sfte_render_fg_cell(ctx, px_buf, c, r, rune, draw_fg, target_cache);
             _sfte_render_decorations_cell(ctx, px_buf, c, r, vcell, is_cursor);
 
-            int32_t dmg_cy = r * ctx->font.cell_height + SFTE_PAD_Y;
+            int32_t dmg_cy = r * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
             int32_t dmg_ch = ctx->font.cell_height;
 
             if (r == 0) {
                 dmg_cy = 0;
-                dmg_ch += SFTE_PAD_Y;
+                dmg_ch += SFTE_WINDOW_PAD_Y;
             } else if (r == ctx->term.rows - 1) {
                 dmg_ch += ctx->height - (dmg_cy + dmg_ch);
             }
@@ -5984,8 +5988,9 @@ static void _sfte_wayland_pointer_button(void *data, struct wl_pointer *pointer,
 #endif  // SFTE_CLIPBOARD
 
     sfte_mouse_click(app->ctx, SFTE_MOUSE_BUTTON_LEFT, state == WL_POINTER_BUTTON_STATE_PRESSED,
-                     app->ctx->term.mouse_hover_col * app->ctx->font.cell_width + SFTE_PAD_X,
-                     app->ctx->term.mouse_hover_row * app->ctx->font.cell_height + SFTE_PAD_Y);
+                     app->ctx->term.mouse_hover_col * app->ctx->font.cell_width + SFTE_WINDOW_PAD_X,
+                     app->ctx->term.mouse_hover_row * app->ctx->font.cell_height +
+                         SFTE_WINDOW_PAD_Y);
     app->needs_render = 1;
 
 #if SFTE_CLIPBOARD
@@ -6002,9 +6007,10 @@ static void _sfte_wayland_pointer_axis(void *data, struct wl_pointer *pointer, u
 
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     int8_t dir = (wl_fixed_to_double(value) < 0) ? 1 : -1;
-    sfte_mouse_scroll(app->ctx, dir,
-                      app->ctx->term.mouse_hover_col * app->ctx->font.cell_width + SFTE_PAD_X,
-                      app->ctx->term.mouse_hover_row * app->ctx->font.cell_height + SFTE_PAD_Y);
+    sfte_mouse_scroll(
+        app->ctx, dir,
+        app->ctx->term.mouse_hover_col * app->ctx->font.cell_width + SFTE_WINDOW_PAD_X,
+        app->ctx->term.mouse_hover_row * app->ctx->font.cell_height + SFTE_WINDOW_PAD_Y);
     app->needs_render = 1;
 #endif  // SFTE_INPUT_MOUSE
 }
@@ -6712,8 +6718,8 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int32_t w, int32_t h, sfte_dam
         _sfte_render_damage_add(&bx0, &by0, &bx1, &by1, 0, 0, w, h);
     }
 
-    int16_t new_cols = (w - (2 * SFTE_PAD_X)) / ctx->font.cell_width;
-    int16_t new_rows = (h - (2 * SFTE_PAD_Y)) / ctx->font.cell_height;
+    int16_t new_cols = (w - (2 * SFTE_WINDOW_PAD_X)) / ctx->font.cell_width;
+    int16_t new_rows = (h - (2 * SFTE_WINDOW_PAD_Y)) / ctx->font.cell_height;
     if (new_cols != ctx->term.cols || new_rows != ctx->term.rows)
         _sfte_grid_resize(ctx, new_cols, new_rows);
 
@@ -6767,9 +6773,9 @@ void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
     ctx->height = h;
     ctx->padding_dirty = 1;
 
-    int16_t new_cols = (w - (2 * SFTE_PAD_X)) / ctx->font.cell_width;
+    int16_t new_cols = (w - (2 * SFTE_WINDOW_PAD_X)) / ctx->font.cell_width;
     if (new_cols < 1) new_cols = 1;
-    int16_t new_rows = (h - (2 * SFTE_PAD_Y)) / ctx->font.cell_height;
+    int16_t new_rows = (h - (2 * SFTE_WINDOW_PAD_Y)) / ctx->font.cell_height;
     if (new_rows < 1) new_rows = 1;
 
     if (new_cols != ctx->term.cols || new_rows != ctx->term.rows) {
@@ -6786,8 +6792,8 @@ void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
 
 void sfte_get_ideal_size(sfte_ctx *ctx, int16_t cols, int16_t rows, int32_t *out_w,
                          int32_t *out_h) {
-    if (out_w) *out_w = cols * ctx->font.cell_width + (2 * SFTE_PAD_X);
-    if (out_h) *out_h = rows * ctx->font.cell_height + (2 * SFTE_PAD_Y);
+    if (out_w) *out_w = cols * ctx->font.cell_width + (2 * SFTE_WINDOW_PAD_X);
+    if (out_h) *out_h = rows * ctx->font.cell_height + (2 * SFTE_WINDOW_PAD_Y);
 }
 
 void sfte_parse(sfte_ctx *ctx, const uint8_t *data, size_t len) {
