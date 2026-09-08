@@ -6729,7 +6729,9 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int32_t w, int32_t h, sfte_dam
     vis_row += ctx->term.sb_offset;
 #endif  // SFTE_TERM_SCROLLBACK_CAP
 #if SFTE_FONT_WIDE_CHARS
-    if (vis_col > 0 && (_sfte_grid_get_cell(ctx, vis_col, vis_row)->attr & _SFTE_ATTR_DUMMY))
+    uint8_t cursor_is_visible = (vis_row >= 0 && vis_row < ctx->term.rows);
+    if (cursor_is_visible && vis_col > 0 &&
+        (_sfte_grid_get_cell(ctx, vis_col, vis_row)->attr & _SFTE_ATTR_DUMMY))
         vis_col--;
 #endif  // SFTE_FONT_WIDE_CHARS
 
