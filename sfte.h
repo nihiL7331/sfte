@@ -3841,7 +3841,7 @@ static inline void _sfte_csi_exec_ich(sfte_ctx *ctx, uint16_t *p, int16_t col) {
     int16_t rem = ctx->term.cols - col;
     if (n > rem) n = rem;
     int16_t move_cnt = rem - n;
-    int16_t base_idx = _SFTE_GRID_IDX(ctx, 0, ctx->term.cursor_row);
+    int32_t base_idx = _SFTE_GRID_IDX(ctx, 0, ctx->term.cursor_row);
     if (move_cnt > 0)
         memmove(&ctx->term.cells[base_idx + col + n], &ctx->term.cells[base_idx + col],
                 move_cnt * sizeof(sfte_cell));
@@ -3925,10 +3925,10 @@ static inline void _sfte_csi_exec_ed(sfte_ctx *ctx, int16_t mode, int16_t col) {
     }
 
     if (mode == 0) {
-        int16_t start_idx = _SFTE_GRID_IDX(ctx, col, ctx->term.cursor_row);
+        int32_t start_idx = _SFTE_GRID_IDX(ctx, col, ctx->term.cursor_row);
         _sfte_grid_clear_cells(ctx, start_idx, (ctx->term.rows * ctx->term.cols) - start_idx);
     } else if (mode == 1) {
-        int16_t end_idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_col, ctx->term.cursor_row) + 1;
+        int32_t end_idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_col, ctx->term.cursor_row) + 1;
         _sfte_grid_clear_cells(ctx, 0, end_idx);
     } else if (mode == 3) {
 #if SFTE_TERM_SCROLLBACK_CAP && SFTE_TERM_SCROLLBACK_CLEAR
@@ -4006,7 +4006,7 @@ static inline void _sfte_csi_exec_dch(sfte_ctx *ctx, uint16_t *p, int16_t col) {
     int16_t rem = ctx->term.cols - col;
     if (n > rem) n = rem;
     int16_t move_cnt = rem - n;
-    int16_t base_idx = _SFTE_GRID_IDX(ctx, 0, ctx->term.cursor_row);
+    int32_t base_idx = _SFTE_GRID_IDX(ctx, 0, ctx->term.cursor_row);
     if (move_cnt > 0)
         memmove(&ctx->term.cells[base_idx + col], &ctx->term.cells[base_idx + col + n],
                 move_cnt * sizeof(sfte_cell));
@@ -5584,7 +5584,7 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t
                                         int16_t vis_row) {
     for (int16_t r = 0; r < ctx->term.rows; ++r)
         for (int16_t c = 0; c < ctx->term.cols; ++c) {
-            int16_t idx = _SFTE_GRID_IDX(ctx, c, r);
+            int32_t idx = _SFTE_GRID_IDX(ctx, c, r);
             if (!ctx->term.cells[idx].dirty) continue;
 
             int32_t logical_r = r;
@@ -5639,7 +5639,7 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t
                                         int32_t *by1) {
     for (int16_t r = 0; r < ctx->term.rows; ++r) {
         for (int16_t c = 0; c < ctx->term.cols; ++c) {
-            int16_t idx = _SFTE_GRID_IDX(ctx, c, r);
+            int32_t idx = _SFTE_GRID_IDX(ctx, c, r);
             if (!ctx->term.cells[idx].dirty) continue;
 
             int32_t logical_r = r;
@@ -6763,7 +6763,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int32_t w, int32_t h, sfte_dam
         out_dmg->y = _SFTE_CLAMP(by0, 0, h);
         out_dmg->w = _SFTE_CLAMP(bx1, 0, w) - out_dmg->x;
         out_dmg->h = _SFTE_CLAMP(by1, 0, h) - out_dmg->y;
-        for (int16_t i = 0; i < ctx->term.rows * ctx->term.cols; ++i) ctx->term.cells[i].dirty = 0;
+        for (int32_t i = 0; i < ctx->term.rows * ctx->term.cols; ++i) ctx->term.cells[i].dirty = 0;
     } else
         out_dmg->w = 0, out_dmg->h = 0;
 }
