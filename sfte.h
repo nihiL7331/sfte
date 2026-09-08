@@ -6448,8 +6448,23 @@ static void _sfte_wayland_unload(sfte_wayland_app *app) {
     if (app->xdg_surface) xdg_surface_destroy(app->xdg_surface);
     if (app->surface) wl_surface_destroy(app->surface);
     if (app->xdg_wm_base) xdg_wm_base_destroy(app->xdg_wm_base);
+
     if (app->keyboard) wl_keyboard_release(app->keyboard);
+#if SFTE_INPUT_MOUSE
+    if (app->pointer) wl_pointer_release(app->pointer);
+#endif  // SFTE_INPUT_MOUSE
+#if SFTE_CLIPBOARD
+    if (app->data_offer) wl_data_offer_destroy(app->data_offer);
+    if (app->data_source) wl_data_source_destroy(app->data_source);
+    if (app->data_device) wl_data_device_release(app->data_device);
+    if (app->data_device_manager) wl_data_device_manager_destroy(app->data_device_manager);
+    if (app->selection_text) SFTE_FREE(app->selection_text);
+#endif  // SFTE_CLIPBOARD
+
     if (app->seat) wl_seat_release(app->seat);
+
+    if (app->shm) wl_shm_destroy(app->shm);
+    if (app->compositor) wl_compositor_destroy(app->compositor);
 
     wl_registry_destroy(app->registry);
     wl_display_disconnect(app->display);
