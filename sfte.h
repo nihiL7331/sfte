@@ -4309,7 +4309,7 @@ static inline void _sfte_csi_exec_sgr(sfte_ctx *ctx, uint16_t *p, uint16_t cnt) 
         else if (p[i] >= 30 && p[i] <= 37)  // Regular foreground
             ctx->term.cur_fg = _sfte_ansi_palette[p[i] - 30];
         else if (p[i] >= 90 && p[i] <= 97)  // Bright foreground
-            ctx->term.cur_fg = _sfte_ansi_palette[(p[i] = 90) + 8];
+            ctx->term.cur_fg = _sfte_ansi_palette[(p[i] - 90) + 8];
         else if (p[i] == 39)  // Set default foreground
             ctx->term.cur_fg = SFTE_COLOR_FG;
         else if (p[i] >= 40 && p[i] <= 47)  // Regular background
