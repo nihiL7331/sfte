@@ -6782,12 +6782,13 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int32_t w, int32_t h, sfte_dam
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 
     // Rendering order:
-    // BG images -> BG grid -> FG grid -> FG images
+    // BG grid -> BG images -> FG grid -> FG images
+    _sfte_render_bg_grid(ctx, px_buf, vis_col, vis_row);
+
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
     _sfte_render_images(ctx, px_buf, &bx0, &by0, &bx1, &by1, 1, base_y_off, pad_was_dirty);
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 
-    _sfte_render_bg_grid(ctx, px_buf, vis_col, vis_row);
     _sfte_render_fg_grid(ctx, px_buf, vis_col, vis_row, &bx0, &by0, &bx1, &by1);
 
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
