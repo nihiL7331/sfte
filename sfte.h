@@ -1620,8 +1620,8 @@ static inline sfte_cell *_sfte_grid_get_cell(sfte_ctx *ctx, int16_t col, int32_t
 static void _sfte_grid_from_px(sfte_ctx *ctx, int32_t px_x, int32_t px_y, int16_t *out_col,
                                int32_t *out_logical_row, int16_t *out_screen_row);
 static inline void _sfte_grid_dirty_rows(sfte_ctx *ctx, int32_t logical_row1, int32_t logical_row2);
-static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int16_t start_col, int16_t start_row,
-                                         int16_t cols, int16_t rows);
+static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int16_t start_col,
+                                         int32_t start_logical_row, int16_t cols, int16_t rows);
 static inline void _sfte_grid_dirty_range(sfte_ctx *ctx, uint32_t start_idx, uint32_t cnt);
 static inline int16_t _sfte_grid_span(int32_t px_len, int32_t px_off, int32_t cell_px);
 #if SFTE_IMG_SIXEL
@@ -1972,7 +1972,7 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
 
     size_t i = 0, j = 0;
     uint32_t acc = 0;
-    int bits = 0;
+    uint8_t bits = 0;
 
     while (i < len) {
         int8_t v = _sfte_b64_table[src[i++]];
@@ -2211,15 +2211,28 @@ static inline void _sfte_grid_dirty_rows(sfte_ctx *ctx, int32_t logical_row1,
     Flags a rectangular region of the grid as dirty, forcing a redraw on the next frame.
     Safely clips coordinates that fall outside the terminal boundaries.
 */
-static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int16_t start_col, int16_t start_row,
-                                         int16_t cols, int16_t rows) {
-    for (int16_t r = start_row; r < start_row + rows; ++r) {
-        if (r < 0 || r >= ctx->term.rows) continue;
-        for (int16_t c = start_col; c < start_col + cols; ++c) {
-            if (c < 0 || c >= ctx->term.cols) continue;
+static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int16_t start_col,
+                                         int32_t start_logical_row, int16_t cols, int16_t rows) {
+    // Convert logical -> visual
+    int32_t start_visual_r = start_logical_row;
+#if SFTE_TERM_SCROLLBACK_CAP
+    start_visual_r += ctx->term.sb_offset;
+#endif  // SFTE_TERM_SCROLLBACK_CAP
+
+    int16_t end_visual_r = start_visual_r + rows - 1;
+    int16_t end_c = start_col + cols - 1;
+
+    if (end_visual_r < 0 || start_visual_r >= ctx->term.rows) return;
+    if (end_c < 0 || start_col >= ctx->term.cols) return;
+
+    start_visual_r = _SFTE_CLAMP(start_visual_r, 0, ctx->term.rows - 1);
+    end_visual_r = _SFTE_CLAMP(end_visual_r, 0, ctx->term.rows - 1);
+    int16_t start_c = _SFTE_CLAMP(start_col, 0, ctx->term.cols - 1);
+    end_c = _SFTE_CLAMP(end_c, 0, ctx->term.cols - 1);
+
+    for (int16_t r = start_visual_r; r <= end_visual_r; ++r)
+        for (int16_t c = start_c; c <= end_c; ++c)
             ctx->term.cells[_SFTE_GRID_IDX(ctx, c, r)].dirty = 1;
-        }
-    }
 }
 
 /*
@@ -3558,7 +3571,7 @@ static const char *_sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img) {
     Always returns NULL.
 */
 static const char *_sfte_kitty_exec_query(sfte_ctx *ctx) {
-    char reply[16];
+    char reply[64];
     size_t len = snprintf(reply, sizeof(reply), "\033_Gi=%u;OK\033\\", ctx->kitty.id);
     if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
     return NULL;
@@ -3670,13 +3683,13 @@ static const char *_sfte_kitty_exec_place(sfte_ctx *ctx) {
 */
 static void _sfte_kitty_send_ack(sfte_ctx *ctx, const char *err_msg) {
     if (err_msg && (ctx->kitty.quiet == 0 || ctx->kitty.quiet == 1)) {
-        char reply[128];
+        char reply[256];
         size_t len = ctx->kitty.id > 0 ? snprintf(reply, sizeof(reply), "\033_Gi=%u;%s\033\\",
                                                   ctx->kitty.id, err_msg)
                                        : snprintf(reply, sizeof(reply), "\033_G;%s\033\\", err_msg);
         if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
     } else if (!err_msg && !ctx->kitty.quiet) {
-        char reply[16];
+        char reply[64];
         size_t len = ctx->kitty.id > 0
                          ? snprintf(reply, sizeof(reply), "\033_Gi=%u;OK\033\\", ctx->kitty.id)
                          : snprintf(reply, sizeof(reply), "\033_G;OK\033\\");
@@ -4853,13 +4866,13 @@ static inline void _sfte_parser_dcs_dispatch(sfte_ctx *ctx, uint8_t terminator) 
 
 #if SFTE_IMG_KITTY
     if (ctx->term.osc_payload[0] == 'G')
-        _sfte_kitty_parse_graphics(ctx, ctx->term.osc_payload + (strlen("G") - 1));
+        _sfte_kitty_parse_graphics(ctx, ctx->term.osc_payload + strlen("G"));
     else
 #endif  // SFTE_IMG_KITTY
         if (strncmp(ctx->term.osc_payload, "+q", 2) == 0) {
             char reply[128];
             size_t len = snprintf(reply, sizeof(reply), "\033P0+r%s%s",
-                                  ctx->term.osc_payload + (strlen("+q") - 1), term);
+                                  ctx->term.osc_payload + strlen("+q"), term);
             if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
         }
 }
@@ -6769,12 +6782,13 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int32_t w, int32_t h, sfte_dam
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 
     // Rendering order:
-    // BG images -> BG grid -> FG grid -> FG images
+    // BG grid -> BG images -> FG grid -> FG images
+    _sfte_render_bg_grid(ctx, px_buf, vis_col, vis_row);
+
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
     _sfte_render_images(ctx, px_buf, &bx0, &by0, &bx1, &by1, 1, base_y_off, pad_was_dirty);
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 
-    _sfte_render_bg_grid(ctx, px_buf, vis_col, vis_row);
     _sfte_render_fg_grid(ctx, px_buf, vis_col, vis_row, &bx0, &by0, &bx1, &by1);
 
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
