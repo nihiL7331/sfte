@@ -3571,7 +3571,7 @@ static const char *_sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img) {
     Always returns NULL.
 */
 static const char *_sfte_kitty_exec_query(sfte_ctx *ctx) {
-    char reply[16];
+    char reply[64];
     size_t len = snprintf(reply, sizeof(reply), "\033_Gi=%u;OK\033\\", ctx->kitty.id);
     if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
     return NULL;
@@ -3683,13 +3683,13 @@ static const char *_sfte_kitty_exec_place(sfte_ctx *ctx) {
 */
 static void _sfte_kitty_send_ack(sfte_ctx *ctx, const char *err_msg) {
     if (err_msg && (ctx->kitty.quiet == 0 || ctx->kitty.quiet == 1)) {
-        char reply[128];
+        char reply[256];
         size_t len = ctx->kitty.id > 0 ? snprintf(reply, sizeof(reply), "\033_Gi=%u;%s\033\\",
                                                   ctx->kitty.id, err_msg)
                                        : snprintf(reply, sizeof(reply), "\033_G;%s\033\\", err_msg);
         if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
     } else if (!err_msg && !ctx->kitty.quiet) {
-        char reply[16];
+        char reply[64];
         size_t len = ctx->kitty.id > 0
                          ? snprintf(reply, sizeof(reply), "\033_Gi=%u;OK\033\\", ctx->kitty.id)
                          : snprintf(reply, sizeof(reply), "\033_G;OK\033\\");
