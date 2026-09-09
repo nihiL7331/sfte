@@ -1972,7 +1972,7 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
 
     size_t i = 0, j = 0;
     uint32_t acc = 0;
-    int bits = 0;
+    uint8_t bits = 0;
 
     while (i < len) {
         int8_t v = _sfte_b64_table[src[i++]];
