@@ -1620,8 +1620,8 @@ static inline sfte_cell *_sfte_grid_get_cell(sfte_ctx *ctx, int16_t col, int32_t
 static void _sfte_grid_from_px(sfte_ctx *ctx, int32_t px_x, int32_t px_y, int16_t *out_col,
                                int32_t *out_logical_row, int16_t *out_screen_row);
 static inline void _sfte_grid_dirty_rows(sfte_ctx *ctx, int32_t logical_row1, int32_t logical_row2);
-static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int16_t start_col, int16_t start_row,
-                                         int16_t cols, int16_t rows);
+static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int16_t start_col,
+                                         int32_t start_logical_row, int16_t cols, int16_t rows);
 static inline void _sfte_grid_dirty_range(sfte_ctx *ctx, uint32_t start_idx, uint32_t cnt);
 static inline int16_t _sfte_grid_span(int32_t px_len, int32_t px_off, int32_t cell_px);
 #if SFTE_IMG_SIXEL
@@ -2211,15 +2211,28 @@ static inline void _sfte_grid_dirty_rows(sfte_ctx *ctx, int32_t logical_row1,
     Flags a rectangular region of the grid as dirty, forcing a redraw on the next frame.
     Safely clips coordinates that fall outside the terminal boundaries.
 */
-static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int16_t start_col, int16_t start_row,
-                                         int16_t cols, int16_t rows) {
-    for (int16_t r = start_row; r < start_row + rows; ++r) {
-        if (r < 0 || r >= ctx->term.rows) continue;
-        for (int16_t c = start_col; c < start_col + cols; ++c) {
-            if (c < 0 || c >= ctx->term.cols) continue;
+static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int16_t start_col,
+                                         int32_t start_logical_row, int16_t cols, int16_t rows) {
+    // Convert logical -> visual
+    int32_t start_visual_r = start_logical_row;
+#if SFTE_TERM_SCROLLBACK_CAP
+    start_visual_r += ctx->term.sb_offset;
+#endif  // SFTE_TERM_SCROLLBACK_CAP
+
+    int16_t end_visual_r = start_visual_r + rows - 1;
+    int16_t end_c = start_col + cols - 1;
+
+    if (end_visual_r < 0 || start_visual_r >= ctx->term.rows) return;
+    if (end_c < 0 || start_col >= ctx->term.cols) return;
+
+    start_visual_r = _SFTE_CLAMP(start_visual_r, 0, ctx->term.rows - 1);
+    end_visual_r = _SFTE_CLAMP(end_visual_r, 0, ctx->term.rows - 1);
+    int16_t start_c = _SFTE_CLAMP(start_col, 0, ctx->term.cols - 1);
+    end_c = _SFTE_CLAMP(end_c, 0, ctx->term.cols - 1);
+
+    for (int16_t r = start_visual_r; r <= end_visual_r; ++r)
+        for (int16_t c = start_c; c <= end_c; ++c)
             ctx->term.cells[_SFTE_GRID_IDX(ctx, c, r)].dirty = 1;
-        }
-    }
 }
 
 /*
