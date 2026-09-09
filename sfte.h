@@ -4866,13 +4866,13 @@ static inline void _sfte_parser_dcs_dispatch(sfte_ctx *ctx, uint8_t terminator) 
 
 #if SFTE_IMG_KITTY
     if (ctx->term.osc_payload[0] == 'G')
-        _sfte_kitty_parse_graphics(ctx, ctx->term.osc_payload + (strlen("G") - 1));
+        _sfte_kitty_parse_graphics(ctx, ctx->term.osc_payload + strlen("G"));
     else
 #endif  // SFTE_IMG_KITTY
         if (strncmp(ctx->term.osc_payload, "+q", 2) == 0) {
             char reply[128];
             size_t len = snprintf(reply, sizeof(reply), "\033P0+r%s%s",
-                                  ctx->term.osc_payload + (strlen("+q") - 1), term);
+                                  ctx->term.osc_payload + strlen("+q"), term);
             if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
         }
 }
