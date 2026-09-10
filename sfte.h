@@ -6665,12 +6665,6 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
                                {.fd = app->repeat_timer_fd, .events = POLLIN}};
         int timeout = -1 /* wait indefinetely by default */;
 
-#if SFTE_CURSOR_TRAIL
-        // If the cursor is moving, cap the poll timeout to 16ms (60fps) to animate the trail
-        if (ctx->term.is_trailing)
-            if (timeout == -1 || timeout > 16) timeout = 16;
-#endif  // SFTE_CURSOR_TRAIL
-
 #if SFTE_CURSOR_BLINK
         uint64_t now = SFTE_TIME_MS();
         if (ctx->term.blink_enabled) {
@@ -6681,7 +6675,13 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
         }
 #endif  // SFTE_CURSOR_BLINK
 
-        if (app->needs_render) timeout = 0;  // Don't sleep if we already know we need to draw
+#if SFTE_CURSOR_TRAIL
+        // If the cursor is moving, cap the poll timeout to 16ms (60fps) to animate the trail
+        if (ctx->term.is_trailing && (timeout == -1 || timeout > 16))
+            timeout = 16;
+        else
+#endif                                           // SFTE_CURSOR_TRAIL
+            if (app->needs_render) timeout = 0;  // Don't sleep if we already know we need to draw
 
         if (poll(fds, _SFTE_ARRAY_LEN(fds), timeout) == -1) break;
 
