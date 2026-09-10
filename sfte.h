@@ -5288,13 +5288,24 @@ static void _sfte_font_reset_cache(sfte_ctx *ctx) {
 /*
     Safely expands a bounding box to encompass a new dirty region.
 */
-static inline void _sfte_render_damage_add(sfte_damage_rect *dmg, int32_t px, int32_t py,
-                                           int32_t pw, int32_t ph) {
-    if (px < dmg->x) dmg->x = px;
-    if (py < dmg->y) dmg->y = py;
-    // Can't just check width against width since px != dmg->x
-    if (px + pw > dmg->x + dmg->w) dmg->w = pw;
-    if (py + ph > dmg->y + dmg->h) dmg->h = ph;
+static inline void _sfte_render_damage_add(sfte_damage_rect *dmg, int32_t x, int32_t y, int32_t w,
+                                           int32_t h) {
+    if (w <= 0 || h <= 0) return;
+
+    if (dmg->w <= 0 || dmg->h <= 0) {
+        dmg->x = x, dmg->y = y;
+        dmg->w = w, dmg->h = h;
+        return;
+    }
+
+    dmg->x = (dmg->x < x) ? dmg->x : x;
+    dmg->y = (dmg->y < y) ? dmg->y : y;
+
+    int32_t max_r = (dmg->x + dmg->w > x + w) ? dmg->x + dmg->w : x + w;
+    int32_t max_b = (dmg->y + dmg->h > y + h) ? dmg->y + dmg->h : y + h;
+
+    dmg->w = max_r - dmg->x;
+    dmg->h = max_b - dmg->y;
 }
 
 /*
