@@ -1331,8 +1331,7 @@ typedef struct {
     uint32_t utf8_rune;  // Accumulator for incoming multi-byte UTF-8 streams
 #if SFTE_CURSOR_TRAIL
     float tail_rx, tail_ry;
-    int32_t trail_damage_x, trail_damage_y;
-    int32_t trail_damage_w, trail_damage_h;
+    sfte_damage_rect trail_dmg;
 #endif  // SFTE_CURSOR_TRAIL
 #if SFTE_TERM_SCROLLBACK_CAP
     int32_t sb_cap;
@@ -1666,6 +1665,9 @@ static inline void _sfte_grid_dirty_rows(sfte_ctx *ctx, int32_t logical_row1, in
 static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int16_t start_col,
                                          int32_t start_logical_row, int16_t cols, int16_t rows);
 static inline void _sfte_grid_dirty_range(sfte_ctx *ctx, uint32_t start_idx, uint32_t cnt);
+#if SFTE_CURSOR_TRAIL
+static inline void _sfte_grid_dirty_trail(sfte_ctx *ctx);
+#endif  // SFTE_CURSOR_TRAIL
 static inline int16_t _sfte_grid_span(int32_t px_len, int32_t px_off, int32_t cell_px);
 #if SFTE_IMG_SIXEL
 static void _sfte_grid_clear_sixel(sfte_ctx *ctx, int32_t start_idx, int32_t cnt);
@@ -1837,8 +1839,8 @@ static void _sfte_font_reset_cache(sfte_ctx *ctx);
 // -------------------------------------------------------------------------------------------------
 // >render
 // -------------------------------------------------------------------------------------------------
-static inline void _sfte_render_damage_add(sfte_damage_rect *dmg, int32_t px, int32_t py,
-                                           int32_t pw, int32_t ph);
+static inline void _sfte_render_damage_add(sfte_damage_rect *dmg, int32_t x, int32_t y, int32_t w,
+                                           int32_t h);
 static inline void _sfte_render_propagate_damage(sfte_ctx *ctx, int16_t vis_col, int16_t vis_row);
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 static inline void _sfte_render_sort_images(sfte_ctx *ctx);
@@ -1846,6 +1848,9 @@ static inline void _sfte_render_images(sfte_ctx *ctx, uint32_t *px_buf, sfte_dam
                                        uint8_t is_bg_pass, int32_t base_y_off,
                                        uint8_t pad_was_dirty);
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
+#if SFTE_CURSOR_TRAIL
+static inline void _sfte_render_trail(sfte_ctx *ctx, uint32_t *px_buf, sfte_damage_rect *out_dmg);
+#endif  // SFTE_CURSOR_TRAIL
 static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, uint8_t src_a);
 static void _sfte_render_bg_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, int16_t row,
                                  uint32_t bg);
@@ -2287,6 +2292,27 @@ static inline void _sfte_grid_dirty_range(sfte_ctx *ctx, uint32_t start_idx, uin
 
     for (uint32_t i = 0; i < cnt; ++i) ctx->term.cells[start_idx + i].dirty = 1;
 }
+
+#if SFTE_CURSOR_TRAIL
+/*
+    Flags the AABB of the cursor trail as dirty.
+*/
+static inline void _sfte_grid_dirty_trail(sfte_ctx *ctx) {
+    if (ctx->term.trail_dmg.w <= 0 || ctx->term.trail_dmg.h <= 0) return;
+
+    int16_t start_c, end_c;
+    int32_t start_logical_r, end_logical_r;
+    _sfte_grid_from_px(ctx, ctx->term.trail_dmg.x, ctx->term.trail_dmg.y, &start_c,
+                       &start_logical_r, NULL);
+    _sfte_grid_from_px(ctx, ctx->term.trail_dmg.x + ctx->term.trail_dmg.w,
+                       ctx->term.trail_dmg.y + ctx->term.trail_dmg.h, &end_c, &end_logical_r, NULL);
+    if (start_logical_r < 0 || end_logical_r < 0) return;
+
+    _sfte_grid_dirty_rect(ctx, start_c, start_logical_r, (end_c - start_c) + 1,
+                          (end_logical_r - start_logical_r) + 1);
+    _sfte_grid_dirty_rect(ctx, 0, 0, ctx->term.cols, ctx->term.rows);
+}
+#endif  // SFTE_CURSOR_TRAIL
 
 /*
     Calculates how many terminal cells are spanned by a given pixel dimension,
@@ -4312,7 +4338,7 @@ static inline void _sfte_csi_reset_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt
                 ctx->term.is_trailing = 0;
                 ctx->term.tail_rx = ctx->term.cursor_col * ctx->font.cell_width;
                 ctx->term.tail_ry = ctx->term.cursor_row * ctx->font.cell_height;
-                ctx->term.trail_damage_w = 0;
+                ctx->term.trail_dmg.w = 0;
 #endif  // SFTE_CURSOR_TRAIL
             }
         }
@@ -5443,6 +5469,91 @@ static inline void _sfte_render_images(sfte_ctx *ctx, uint32_t *px_buf, sfte_dam
     }
 }
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
+
+#if SFTE_CURSOR_TRAIL
+/*
+    Compositor pass for the cursor trail.
+    Drawn as the last element in the rendering loop.
+*/
+static inline void _sfte_render_trail(sfte_ctx *ctx, uint32_t *px_buf, sfte_damage_rect *out_dmg) {
+    if (ctx->term.trail_dmg.w > 0 && ctx->term.trail_dmg.h > 0)
+        _sfte_render_damage_add(out_dmg, ctx->term.trail_dmg.x, ctx->term.trail_dmg.y,
+                                ctx->term.trail_dmg.w, ctx->term.trail_dmg.h);
+
+    if (ctx->term.hide_cursor || !ctx->term.is_trailing) {
+        ctx->term.trail_dmg.w = 0;
+        ctx->term.trail_dmg.h = 0;
+        return;
+    }
+
+    float target_x = ctx->term.cursor_col * ctx->font.cell_width;
+    float target_y = ctx->term.cursor_row * ctx->font.cell_height;
+
+    float trail_w = ctx->font.cell_width;
+    float trail_h = ctx->font.cell_height;
+    float y_off = 0;
+
+    if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_UNDERLINE) {
+        trail_h = ctx->font.cell_height * SFTE_CURSOR_THICK_RATIO;
+        if (trail_h < 1.0f) trail_h = 1.0f;
+        y_off = ctx->font.cell_height - trail_h;
+    } else if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BAR) {
+        trail_w = ctx->font.cell_width * SFTE_CURSOR_THICK_RATIO;
+        if (trail_w < 1.0f) trail_w = 1.0f;
+    }
+
+    float rx = trail_w * 0.5f;
+    float ry = trail_h * 0.5f;
+
+    float cx0 = ctx->term.tail_rx + rx;
+    float cx1 = target_x + rx;
+    float cy0 = ctx->term.tail_ry + y_off + ry;
+    float cy1 = target_y + y_off + ry;
+
+    float ab_x = cx1 - cx0, ab_y = cy1 - cy0;
+
+    float l2 = ab_x * ab_x + ab_y * ab_y;
+    if (l2 < 0.001f) return;
+
+    float inv_l2 = 1.0f / l2;
+
+    int32_t min_x = _SFTE_CLAMP((cx0 < cx1 ? cx0 : cx1) - rx + SFTE_WINDOW_PAD_X, 0, ctx->width);
+    int32_t max_x = _SFTE_CLAMP((cx0 > cx1 ? cx0 : cx1) + rx + SFTE_WINDOW_PAD_X, 0, ctx->width);
+    int32_t min_y = _SFTE_CLAMP((cy0 < cy1 ? cy0 : cy1) - ry + SFTE_WINDOW_PAD_Y, 0, ctx->height);
+    int32_t max_y = _SFTE_CLAMP((cy0 > cy1 ? cy0 : cy1) + ry + SFTE_WINDOW_PAD_Y, 0, ctx->height);
+
+    for (int32_t y = min_y; y < max_y; ++y) {
+        float up_y = (float)(y - SFTE_WINDOW_PAD_Y) + 0.5f;
+        float dy_from_cy0 = up_y - cy0;
+
+        for (int32_t x = min_x; x < max_x; ++x) {
+            float up_x = (float)(x - SFTE_WINDOW_PAD_X) + 0.5f;
+
+            if (up_x >= target_x && up_x < target_x + trail_w && up_y >= target_y + y_off &&
+                up_y < target_y + y_off + trail_h)
+                continue;
+
+            float dx_from_cx0 = up_x - cx0;
+            float t = _SFTE_CLAMP((dx_from_cx0 * ab_x + dy_from_cy0 * ab_y) * inv_l2, 0.0f, 1.0f);
+
+            if (fabsf(up_x - cx0 + t * ab_x) <= rx && fabsf(up_y - cy0 + t * ab_y) <= ry) {
+                uint8_t alpha = (uint8_t)(128.0f * t);
+                if (alpha > 0)
+                    px_buf[y * ctx->width + x] = _sfte_render_blend_argb(
+                        px_buf[y * ctx->width + x], SFTE_CURSOR_TRAIL_COLOR, alpha);
+            }
+        }
+    }
+
+    ctx->term.trail_dmg.x = min_x;
+    ctx->term.trail_dmg.y = min_y;
+    ctx->term.trail_dmg.w = max_x - min_x;
+    ctx->term.trail_dmg.h = max_y - min_y;
+
+    _sfte_render_damage_add(out_dmg, ctx->term.trail_dmg.x, ctx->term.trail_dmg.y,
+                            ctx->term.trail_dmg.w, ctx->term.trail_dmg.h);
+}
+#endif
 
 /*
     Fast integer-based alpha blending.
@@ -6830,6 +6941,10 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int32_t w, int32_t h, sfte_dam
 
     _sfte_render_propagate_damage(ctx, vis_col, vis_row);
 
+#if SFTE_CURSOR_TRAIL
+    _sfte_grid_dirty_trail(ctx);
+#endif  // SFTE_CURSOR_TRAIL
+
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
     _sfte_render_sort_images(ctx);
     int32_t base_y_off = 0;
@@ -6851,6 +6966,10 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int32_t w, int32_t h, sfte_dam
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
     _sfte_render_images(ctx, px_buf, out_dmg, 0, base_y_off, pad_was_dirty);
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
+
+#if SFTE_CURSOR_TRAIL
+    _sfte_render_trail(ctx, px_buf, out_dmg);
+#endif  // SFTE_CURSOR_TRAIL
 
     if (out_dmg->w > 0 && out_dmg->h > 0) {
         out_dmg->x = _SFTE_CLAMP(out_dmg->x, 0, w);
@@ -6881,7 +7000,7 @@ void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
         ctx->term.tail_rx = ctx->term.cursor_col * ctx->font.cell_width;
         ctx->term.tail_ry = ctx->term.cursor_row * ctx->font.cell_height;
         ctx->term.is_trailing = 0;
-        ctx->term.trail_damage_w = 0;
+        ctx->term.trail_dmg.w = 0;
 #endif  // SFTE_CURSOR_TRAIL
     }
 }
@@ -6981,10 +7100,10 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
 #if SFTE_CURSOR_TRAIL
     ctx->term.tail_rx = 0.0f;
     ctx->term.tail_ry = 0.0f;
-    ctx->term.trail_damage_x = 0.0f;
-    ctx->term.trail_damage_y = 0.0f;
-    ctx->term.trail_damage_w = 0.0f;
-    ctx->term.trail_damage_h = 0.0f;
+    ctx->term.trail_dmg.x = 0.0f;
+    ctx->term.trail_dmg.y = 0.0f;
+    ctx->term.trail_dmg.w = 0.0f;
+    ctx->term.trail_dmg.h = 0.0f;
     ctx->term.last_grid_col = 0;
     ctx->term.last_grid_row = 0;
     ctx->term.last_move_ms = 0;
