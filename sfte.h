@@ -1837,13 +1837,12 @@ static void _sfte_font_reset_cache(sfte_ctx *ctx);
 // -------------------------------------------------------------------------------------------------
 // >render
 // -------------------------------------------------------------------------------------------------
-static inline void _sfte_render_damage_add(int32_t *x0, int32_t *y0, int32_t *x1, int32_t *y1,
-                                           int32_t px, int32_t py, int32_t pw, int32_t ph);
+static inline void _sfte_render_damage_add(sfte_damage_rect *dmg, int32_t px, int32_t py,
+                                           int32_t pw, int32_t ph);
 static inline void _sfte_render_propagate_damage(sfte_ctx *ctx, int16_t vis_col, int16_t vis_row);
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 static inline void _sfte_render_sort_images(sfte_ctx *ctx);
-static inline void _sfte_render_images(sfte_ctx *ctx, uint32_t *px_buf, int32_t *b_x0,
-                                       int32_t *b_y0, int32_t *b_x1, int32_t *b_y1,
+static inline void _sfte_render_images(sfte_ctx *ctx, uint32_t *px_buf, sfte_damage_rect *out_dmg,
                                        uint8_t is_bg_pass, int32_t base_y_off,
                                        uint8_t pad_was_dirty);
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
@@ -1861,8 +1860,7 @@ static void _sfte_render_decorations_cell(sfte_ctx *ctx, uint32_t *px_buf, int16
 static inline void _sfte_render_bg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t vis_col,
                                         int16_t vis_row);
 static inline void _sfte_render_fg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t vis_col,
-                                        int16_t vis_row, int32_t *bx0, int32_t *by0, int32_t *bx1,
-                                        int32_t *by1);
+                                        int16_t vis_row, sfte_damage_rect *out_dmg);
 
 // -------------------------------------------------------------------------------------------------
 // >wayland
@@ -5290,12 +5288,13 @@ static void _sfte_font_reset_cache(sfte_ctx *ctx) {
 /*
     Safely expands a bounding box to encompass a new dirty region.
 */
-static inline void _sfte_render_damage_add(int32_t *x0, int32_t *y0, int32_t *x1, int32_t *y1,
-                                           int32_t px, int32_t py, int32_t pw, int32_t ph) {
-    if (px < *x0) *x0 = px;
-    if (py < *y0) *y0 = py;
-    if (px + pw > *x1) *x1 = px + pw;
-    if (py + ph > *y1) *y1 = py + ph;
+static inline void _sfte_render_damage_add(sfte_damage_rect *dmg, int32_t px, int32_t py,
+                                           int32_t pw, int32_t ph) {
+    if (px < dmg->x) dmg->x = px;
+    if (py < dmg->y) dmg->y = py;
+    // Can't just check width against width since px != dmg->x
+    if (px + pw > dmg->x + dmg->w) dmg->w = pw;
+    if (py + ph > dmg->y + dmg->h) dmg->h = ph;
 }
 
 /*
@@ -5371,8 +5370,7 @@ static inline void _sfte_render_sort_images(sfte_ctx *ctx) {
     Compositor pass for images.
     Images can be drawn behind text (is_bg_pass = 1) or in front of text (is_bg_pass = 0).
 */
-static inline void _sfte_render_images(sfte_ctx *ctx, uint32_t *px_buf, int32_t *b_x0,
-                                       int32_t *b_y0, int32_t *b_x1, int32_t *b_y1,
+static inline void _sfte_render_images(sfte_ctx *ctx, uint32_t *px_buf, sfte_damage_rect *out_dmg,
                                        uint8_t is_bg_pass, int32_t base_y_off,
                                        uint8_t pad_was_dirty) {
     for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
@@ -5402,8 +5400,7 @@ static inline void _sfte_render_images(sfte_ctx *ctx, uint32_t *px_buf, int32_t 
             dmg_y = 0;
         }
 
-        if (dmg_w && dmg_h)
-            _sfte_render_damage_add(b_x0, b_y0, b_x1, b_y1, dmg_x, dmg_y, dmg_w, dmg_h);
+        if (dmg_w && dmg_h) _sfte_render_damage_add(out_dmg, dmg_x, dmg_y, dmg_w, dmg_h);
 
         for (int32_t iy = 0; iy < img->height; ++iy) {
             int out_y = base_y + iy;
@@ -5706,8 +5703,7 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t
     Renders the whole grid, contrary to `_sfte_render_fg_cell`.
 */
 static inline void _sfte_render_fg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t vis_col,
-                                        int16_t vis_row, int32_t *bx0, int32_t *by0, int32_t *bx1,
-                                        int32_t *by1) {
+                                        int16_t vis_row, sfte_damage_rect *out_dmg) {
     for (int16_t r = 0; r < ctx->term.rows; ++r) {
         for (int16_t c = 0; c < ctx->term.cols; ++c) {
             int32_t idx = _SFTE_GRID_IDX(ctx, c, r);
@@ -5721,8 +5717,7 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t
             sfte_cell *vcell = _sfte_grid_get_cell(ctx, c, logical_r);
 #if SFTE_FONT_WIDE_CHARS
             if (vcell->attr & _SFTE_ATTR_DUMMY) {
-                _sfte_render_damage_add(bx0, by0, bx1, by1,
-                                        c * ctx->font.cell_width + SFTE_WINDOW_PAD_X,
+                _sfte_render_damage_add(out_dmg, c * ctx->font.cell_width + SFTE_WINDOW_PAD_X,
                                         r * ctx->font.cell_height + SFTE_WINDOW_PAD_Y,
                                         ctx->font.cell_width, ctx->font.cell_height);
                 ctx->term.cells[idx].dirty = 0;
@@ -5777,7 +5772,7 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t
             } else if (r == ctx->term.rows - 1) {
                 dmg_ch += ctx->height - (dmg_cy + dmg_ch);
             }
-            _sfte_render_damage_add(bx0, by0, bx1, by1, 0, dmg_cy, ctx->width, dmg_ch);
+            _sfte_render_damage_add(out_dmg, 0, dmg_cy, ctx->width, dmg_ch);
         }
     }
 }
@@ -6795,8 +6790,6 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
 // =================================================================================================
 
 void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int32_t w, int32_t h, sfte_damage_rect *out_dmg) {
-    int32_t bx0 = w, by0 = h, bx1 = 0, by1 = 0;  // Bounds trackers
-
     ctx->width = w;
     ctx->height = h;
     uint8_t pad_was_dirty = ctx->padding_dirty;
@@ -6804,7 +6797,7 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int32_t w, int32_t h, sfte_dam
     if (ctx->padding_dirty) {
         _sfte_view_clear_padding_rects(ctx, px_buf);
         ctx->padding_dirty--;
-        _sfte_render_damage_add(&bx0, &by0, &bx1, &by1, 0, 0, w, h);
+        _sfte_render_damage_add(out_dmg, 0, 0, w, h);
     }
 
     int16_t new_cols = (w - (2 * SFTE_WINDOW_PAD_X)) / ctx->font.cell_width;
@@ -6839,20 +6832,20 @@ void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int32_t w, int32_t h, sfte_dam
     _sfte_render_bg_grid(ctx, px_buf, vis_col, vis_row);
 
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
-    _sfte_render_images(ctx, px_buf, &bx0, &by0, &bx1, &by1, 1, base_y_off, pad_was_dirty);
+    _sfte_render_images(ctx, px_buf, out_dmg, 1, base_y_off, pad_was_dirty);
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 
-    _sfte_render_fg_grid(ctx, px_buf, vis_col, vis_row, &bx0, &by0, &bx1, &by1);
+    _sfte_render_fg_grid(ctx, px_buf, vis_col, vis_row, out_dmg);
 
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
-    _sfte_render_images(ctx, px_buf, &bx0, &by0, &bx1, &by1, 0, base_y_off, pad_was_dirty);
+    _sfte_render_images(ctx, px_buf, out_dmg, 0, base_y_off, pad_was_dirty);
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 
-    if (bx0 < bx1 && by0 < by1) {
-        out_dmg->x = _SFTE_CLAMP(bx0, 0, w);
-        out_dmg->y = _SFTE_CLAMP(by0, 0, h);
-        out_dmg->w = _SFTE_CLAMP(bx1, 0, w) - out_dmg->x;
-        out_dmg->h = _SFTE_CLAMP(by1, 0, h) - out_dmg->y;
+    if (out_dmg->w > 0 && out_dmg->h > 0) {
+        out_dmg->x = _SFTE_CLAMP(out_dmg->x, 0, w);
+        out_dmg->y = _SFTE_CLAMP(out_dmg->y, 0, h);
+        out_dmg->w = _SFTE_CLAMP(out_dmg->w, 0, w);
+        out_dmg->h = _SFTE_CLAMP(out_dmg->h, 0, h);
         for (int32_t i = 0; i < ctx->term.rows * ctx->term.cols; ++i) ctx->term.cells[i].dirty = 0;
     } else
         out_dmg->w = 0, out_dmg->h = 0;
