@@ -5663,11 +5663,10 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, uint32_t *px_buf, sfte_dama
             float dx_from_cx0 = up_x - cx0;
             float t = _SFTE_CLAMP((dx_from_cx0 * ab_x + dy_from_cy0 * ab_y) * inv_l2, 0.0f, 1.0f);
 
-            if (fabsf(up_x - cx0 + t * ab_x) <= rx && fabsf(up_y - cy0 + t * ab_y) <= ry) {
+            if (fabsf(up_x - cx0 - t * ab_x) <= rx && fabsf(up_y - cy0 - t * ab_y) <= ry) {
                 uint8_t alpha = (uint8_t)(128.0f * t);
-                if (alpha > 0)
-                    px_buf[y * ctx->width + x] = _sfte_render_blend_argb(
-                        px_buf[y * ctx->width + x], SFTE_CURSOR_TRAIL_COLOR, alpha);
+                px_buf[y * ctx->width + x] = _sfte_render_blend_argb(
+                    px_buf[y * ctx->width + x], SFTE_CURSOR_TRAIL_COLOR, alpha);
             }
         }
     }
