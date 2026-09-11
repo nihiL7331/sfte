@@ -1155,8 +1155,12 @@ typedef struct sfte_logger {
 
 #if SFTE_COLOR_TRUECOLOR
 typedef uint32_t sfte_color;
-#else   // !SFTE_COLOR_TRUECOLOR
-typedef uint16_t sfte_color;
+#define _SFTE_COLOR_FG_DEFAULT SFTE_COLOR_FG
+#define _SFTE_COLOR_BG_DEFAULT SFTE_COLOR_BG
+#else  // !SFTE_COLOR_TRUECOLOR
+typedef uint8_t sfte_color;
+#define _SFTE_COLOR_FG_DEFAULT 254
+#define _SFTE_COLOR_BG_DEFAULT 255
 #endif  // !SFTE_COLOR_TRUECOLOR
 
 typedef enum {
@@ -1176,20 +1180,20 @@ typedef enum {
 */
 typedef struct {
     uint32_t rune;
-    sfte_color fg;
-    sfte_color bg;
-#if SFTE_UNDERLINE_COLORED
-    sfte_color ul_color;
-#endif  // SFTE_UNDERLINE_COLORED
 #if SFTE_FONT_WIDE_CHARS
     uint32_t combining_runes[SFTE_FONT_MAX_COMBINING];
 #endif  // SFTE_FONT_WIDE_CHARS
 
-    uint16_t attr;  // Bitmask of sfte_attr
 #if SFTE_INPUT_HYPERLINKS
     uint16_t link_idx;  // 0=no link, >0=index to `term.link_pool`
 #endif                  // SFTE_INPUT_HYPERLINKS
 
+    sfte_color fg;
+    sfte_color bg;
+#if SFTE_UNDERLINE_COLORED
+    sfte_color ul_color;
+#endif             // SFTE_UNDERLINE_COLORED
+    uint8_t attr;  // Bitmask of sfte_attr
 #if SFTE_FONT_WIDE_CHARS
     uint8_t combining_cnt;
 #endif  // SFTE_FONT_WIDE_CHARS
@@ -1328,9 +1332,8 @@ typedef struct {
     uint64_t last_trail_update_ms;
 #endif  // SFTE_CURSOR_TRAIL
 
-    uint32_t saved_fg[2];    // 0=main, 1=alt
-    uint32_t saved_bg[2];    // 0=main, 1=alt
-    uint32_t saved_attr[2];  // 0=main, 1=alt
+    uint32_t saved_fg[2];  // 0=main, 1=alt
+    uint32_t saved_bg[2];  // 0=main, 1=alt
     sfte_color cur_fg, cur_bg;
     uint32_t utf8_rune;  // Accumulator for incoming multi-byte UTF-8 streams
 #if SFTE_CURSOR_TRAIL
@@ -1390,6 +1393,7 @@ typedef struct {
 
     char title[256];
     char saved_title[256];
+    uint8_t saved_attr[2];  // 0=main, 1=alt
     uint8_t auto_wrap;
     uint8_t origin_mode;
     uint8_t hide_cursor;
@@ -1633,14 +1637,6 @@ typedef enum sfte_underline_style {
     _SFTE_UNDERLINE_STYLE_DASHED = 5,
 } _sfte_underline_style;
 
-#if SFTE_COLOR_TRUECOLOR
-#define _SFTE_COLOR_FG_DEFAULT SFTE_COLOR_FG
-#define _SFTE_COLOR_BG_DEFAULT SFTE_COLOR_BG
-#else  // !SFTE_COLOR_TRUECOLOR
-#define _SFTE_COLOR_FG_DEFAULT 256
-#define _SFTE_COLOR_BG_DEFAULT 257
-#endif  // !SFTE_COLOR_TRUECOLOR
-
 // -------------------------------------------------------------------------------------------------
 // >log
 // -------------------------------------------------------------------------------------------------
@@ -1663,7 +1659,7 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
 // -------------------------------------------------------------------------------------------------
 static uint8_t _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b);
 static inline void _sfte_utf8_stamp_cell(sfte_ctx *ctx, uint32_t idx, uint32_t rune,
-                                         uint32_t extra_attr);
+                                         uint8_t extra_attr);
 static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune);
 
 // -------------------------------------------------------------------------------------------------
@@ -2105,7 +2101,7 @@ static uint8_t _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b) {
     Does NOT advance the cursor.
 */
 static inline void _sfte_utf8_stamp_cell(sfte_ctx *ctx, uint32_t idx, uint32_t rune,
-                                         uint32_t extra_attr) {
+                                         uint8_t extra_attr) {
     sfte_cell *c = &ctx->term.cells[idx];
     c->rune = rune;
     c->fg = ctx->term.cur_fg;
@@ -2209,7 +2205,9 @@ static inline uint16_t _sfte_color_rgb_to_256(uint8_t r, uint8_t g, uint8_t b) {
     if (r == g && g == b) {
         if (r < 8) return 16;     // Black color index
         if (r > 248) return 231;  // White color index
-        return 232 + (uint16_t)(((r - 8) * 24) / 247);
+        uint8_t idx = 232 + ((r - 8) * 24) / 247;
+        if (idx >= _SFTE_COLOR_FG_DEFAULT) return _SFTE_COLOR_FG_DEFAULT - 1;
+        return idx;
     }
     // Map to the color region (6x6x6)
     uint16_t cr = (r * 5) / 255;
@@ -2228,6 +2226,8 @@ static inline uint32_t _sfte_color_from_idx(uint16_t idx) {
 #if SFTE_COLOR_TRUECOLOR
     return _sfte_palette_256[idx];
 #else   // !SFTE_COLOR_TRUECOLOR
+    // Last two indices are reserved for default colors
+    if (idx >= _SFTE_COLOR_FG_DEFAULT) return _SFTE_COLOR_FG_DEFAULT - 1;
     return idx;
 #endif  // !SFTE_COLOR_TRUECOLOR
 }
@@ -5894,7 +5894,7 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t
             sfte_cell *vcell = _sfte_grid_get_cell(ctx, c, logical_r);
             uint32_t fg = _sfte_grid_get_fg(vcell);
             uint32_t bg = _sfte_grid_get_bg(vcell);
-            uint16_t attr = vcell->attr;
+            uint8_t attr = vcell->attr;
 
 #if SFTE_INPUT_SELECTION
             if (_sfte_input_is_selected(ctx, c, logical_r)) attr |= _SFTE_ATTR_REVERSE;
@@ -5959,7 +5959,7 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t
             uint32_t rune = vcell->rune ? vcell->rune : ' ';
             uint32_t fg = _sfte_grid_get_fg(vcell);
             uint32_t bg = _sfte_grid_get_bg(vcell);
-            uint16_t attr = vcell->attr;
+            uint8_t attr = vcell->attr;
 
             if (attr & _SFTE_ATTR_REVERSE) {
                 uint32_t tmp = fg;
