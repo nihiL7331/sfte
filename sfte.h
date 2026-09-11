@@ -2719,22 +2719,22 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows)
 #if SFTE_TERM_ALT_SCREEN
     sfte_cell *main_old = ctx->term.alt_active ? ctx->term.alt_cells : ctx->term.cells;
     sfte_cell *alt_old = ctx->term.alt_active ? ctx->term.cells : NULL;
-    int16_t target_cx = ctx->term.alt_active ? ctx->term.saved_col[0] : ctx->term.cursor_col;
-    int16_t target_cy = ctx->term.alt_active ? ctx->term.saved_row[0] : ctx->term.cursor_row;
+    int16_t target_col = ctx->term.alt_active ? ctx->term.saved_col[0] : ctx->term.cursor_col;
+    int16_t target_row = ctx->term.alt_active ? ctx->term.saved_row[0] : ctx->term.cursor_row;
 #else
     sfte_cell *main_old = ctx->term.cells;
-    int16_t target_cx = ctx->term.cursor_col;
-    int16_t target_cy = ctx->term.cursor_row;
+    int16_t target_col = ctx->term.cursor_col;
+    int16_t target_row = ctx->term.cursor_row;
 #endif  // !SFTE_TERM_ALT_SCREEN
 
     _sfte_resize_buffers out = {0};
 
 #if SFTE_TERM_REFLOW
-    out = _sfte_reflow_generate_buffers(ctx, main_old, new_cols, new_rows, target_cx, target_cy);
+    out = _sfte_reflow_generate_buffers(ctx, main_old, new_cols, new_rows, target_col, target_row);
 #else  // !SFTE_TERM_REFLOW
     out.main_grid = _sfte_grid_resize_dumb_copy(main_old, old_cols, old_rows, new_cols, new_rows);
-    out.new_cx = _SFTE_CLAMP(target_cx, 0, new_cols - 1);
-    out.new_cy = _SFTE_CLAMP(target_cy, 0, new_rows - 1);
+    out.new_col = _SFTE_CLAMP(target_col, 0, new_cols - 1);
+    out.new_row = _SFTE_CLAMP(target_row, 0, new_rows - 1);
 #if SFTE_TERM_SCROLLBACK_CAP
     out.sb_grid = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
     out.sb_lines = 0;
