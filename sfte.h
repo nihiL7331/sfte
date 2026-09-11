@@ -1860,6 +1860,9 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd);
 // -------------------------------------------------------------------------------------------------
 // >parser
 // -------------------------------------------------------------------------------------------------
+#if SFTE_CURSOR_DYNAMIC
+static inline uint32_t _sfte_parser_osc_color(const char *str, uint32_t fallback);
+#endif  // SFTE_CURSOR_DYNAMIC
 static inline void _sfte_parser_append_payload(sfte_ctx *ctx, uint8_t b);
 static inline void _sfte_parser_c0_lf(sfte_ctx *ctx);
 static inline void _sfte_parser_c0_ht(sfte_ctx *ctx);
@@ -4892,6 +4895,64 @@ typedef enum {
     VT_SIXEL,
 #endif  // SFTE_IMG_SIXEL
 } sfte_vt_state;
+
+#if SFTE_CURSOR_DYNAMIC
+/*
+    Parses an X11/OSC color string into a 24-bit RGB uint32_t.
+    Supports #RRGGBB and rgb:R/G/B.
+    Returns the `fallback` color if parsing fails.
+*/
+static inline uint32_t _sfte_parser_osc_color(const char *str, uint32_t fallback) {
+    if (!str || !*str) return fallback;
+
+    if (str[0] == '#') {  // #RRGGBB
+        uint32_t val = 0;
+        for (uint8_t i = 1; i <= 6; ++i) {
+            char c = str[i];
+            val <<= 4;
+            if (c >= '0' && c <= '9')
+                val |= (c - '0');
+            else if (c >= 'a' && c <= 'f')
+                val |= (c - 'a' + 10);
+            else if (c >= 'A' && c <= 'F')
+                val |= (c - 'A' + 10);
+            else
+                return fallback;
+        }
+        return val;
+    }
+
+    if (strncmp(str, "rgb:", 4) == 0) {  // rgb:R/G/B
+        const char *p = str + strlen("rgb:");
+        uint32_t rgb = 0;
+        for (uint8_t c = 0; c < 3; ++c) {
+            uint32_t channel = 0;
+            uint8_t digits = 0;
+            while (*p != '/' && *p != '\0' && digits < 4) {
+                char ch = *p++;
+                channel <<= 4;
+                if (ch >= '0' && ch <= '9')
+                    channel |= (ch - '0');
+                else if (ch >= 'a' && ch <= 'f')
+                    channel |= (ch - 'a' + 10);
+                else if (ch >= 'A' && ch <= 'F')
+                    channel |= (ch - 'A' + 10);
+                else
+                    return fallback;
+                digits++;
+            }
+            if (*p == '/') p++;
+
+            // If 16 bit channel, truncate to 8 bit
+            if (digits > 2) channel >>= (digits - 2) * 4;
+            rgb = (rgb << 8) | (channel & 0xFF);
+        }
+        return rgb;
+    }
+
+    return fallback;
+}
+#endif  // SFTE_CURSOR_DYNAMIC
 
 /*
     Appends a byte to the shared OSC/DCS payload buffer.
