@@ -483,15 +483,6 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #endif  // SFTE_CURSOR_TRAIL
 
 /*
-    Color of the cursor trail.
-    Defaults to the cursor color, but can be overwritten for some interesting combinations.
-    The trail by default has its alpha interpolated across its length. RGB888 format.
-*/
-#ifndef SFTE_CURSOR_TRAIL_COLOR
-#define SFTE_CURSOR_TRAIL_COLOR SFTE_CURSOR_COLOR
-#endif  // SFTE_CURSOR_TRAIL_COLOR
-
-/*
     Affects how fast the trail disappears.
 */
 #ifndef SFTE_CURSOR_TRAIL_DECAY
@@ -5792,6 +5783,12 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
     int32_t min_y = _SFTE_CLAMP((cy0 < cy1 ? cy0 : cy1) - ry + SFTE_WINDOW_PAD_Y, 0, ctx->height);
     int32_t max_y = _SFTE_CLAMP((cy0 > cy1 ? cy0 : cy1) + ry + SFTE_WINDOW_PAD_Y, 0, ctx->height);
 
+#if SFTE_CURSOR_DYNAMIC
+    uint32_t trail_color = ctx->term.cursor_color;
+#else   // !SFTE_CURSOR_DYNAMIC
+    uint32_t trail_color = SFTE_CURSOR_COLOR;
+#endif  // !SFTE_CURSOR_DYNAMIC
+
     for (int32_t y = min_y; y < max_y; ++y) {
         float up_y = (float)(y - SFTE_WINDOW_PAD_Y) + 0.5f;
         float dy_from_cy0 = up_y - cy0;
@@ -5808,7 +5805,7 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
 
             if (fabsf(up_x - cx0 - t * ab_x) <= rx && fabsf(up_y - cy0 - t * ab_y) <= ry) {
                 uint8_t alpha = (uint8_t)(128.0f * t);
-                SFTE_COLOR_BLEND_PIXEL(px_buf, x, y, ctx->width, SFTE_CURSOR_TRAIL_COLOR, alpha);
+                SFTE_COLOR_BLEND_PIXEL(px_buf, x, y, ctx->width, trail_color, alpha);
             }
         }
     }
