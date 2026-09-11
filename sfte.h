@@ -5741,8 +5741,6 @@ static void _sfte_render_fg_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, i
     int32_t draw_x = cx + (int)g->xoff;
     int32_t draw_y = cy + ctx->font.ascent + (int)g->yoff;
 
-    uint8_t fg_r = (fg >> 16) & 0xFF, fg_g = (fg >> 8) & 0xFF, fg_b = fg & 0xFF;
-
     for (int32_t y = 0; y < glyph_height; ++y) {
         for (int32_t x = 0; x < glyph_width; ++x) {
             int32_t screen_x = draw_x + x;
@@ -5751,24 +5749,11 @@ static void _sfte_render_fg_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, i
                 continue;
 
             uint8_t alpha = actual_cache
-                                ->atlas_pxs[(g->y0 + y) * SFTE_FONT_ATLAS_SIZE + (g->x0 + x)];
-            if (alpha == 0) continue;
+                                ->atlas_pxs[(g->y0 + y) * SFTE_FONT_ATLAS_SIZE + (g->x0 + x)] &
+                            0xFF;
 
             int32_t px_idx = screen_y * ctx->width + screen_x;
-
-            if (alpha == 255)
-                px_buf[px_idx] = SFTE_COLOR_ALPHA_MASK | (fg & ~SFTE_COLOR_ALPHA_MASK);
-            else {
-                uint32_t dst = px_buf[px_idx];
-                uint8_t bg_r = (dst >> 16) & 0xFF, bg_g = (dst >> 8) & 0xFF, bg_b = dst & 0xFF;
-
-                uint8_t col_r = (fg_r * alpha + bg_r * (255 - alpha)) >> 8;
-                uint8_t col_g = (fg_g * alpha + bg_g * (255 - alpha)) >> 8;
-                uint8_t col_b = (fg_b * alpha + bg_b * (255 - alpha)) >> 8;
-
-                px_buf[px_idx] = (SFTE_COLOR_BG_OPACITY << 24) | (col_r << 16) | (col_g << 8) |
-                                 col_b;
-            }
+            px_buf[px_idx] = _sfte_render_blend_argb(px_buf[px_idx], fg, alpha);
         }
     }
 }
