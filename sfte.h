@@ -483,15 +483,6 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #endif  // SFTE_CURSOR_TRAIL
 
 /*
-    Color of the cursor trail.
-    Defaults to the cursor color, but can be overwritten for some interesting combinations.
-    The trail by default has its alpha interpolated across its length. RGB888 format.
-*/
-#ifndef SFTE_CURSOR_TRAIL_COLOR
-#define SFTE_CURSOR_TRAIL_COLOR SFTE_CURSOR_COLOR
-#endif  // SFTE_CURSOR_TRAIL_COLOR
-
-/*
     Affects how fast the trail disappears.
 */
 #ifndef SFTE_CURSOR_TRAIL_DECAY
@@ -1394,6 +1385,7 @@ typedef struct {
     uint32_t img_placements_len;
     uint32_t next_img_id;
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
+    uint32_t cursor_color;
 
     int16_t cols;
     int16_t rows;
@@ -1860,6 +1852,9 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd);
 // -------------------------------------------------------------------------------------------------
 // >parser
 // -------------------------------------------------------------------------------------------------
+#if SFTE_CURSOR_DYNAMIC
+static inline uint32_t _sfte_parser_osc_color(const char *str, uint32_t fallback);
+#endif  // SFTE_CURSOR_DYNAMIC
 static inline void _sfte_parser_append_payload(sfte_ctx *ctx, uint8_t b);
 static inline void _sfte_parser_c0_lf(sfte_ctx *ctx);
 static inline void _sfte_parser_c0_ht(sfte_ctx *ctx);
@@ -4658,6 +4653,7 @@ static inline void _sfte_csi_exec_decstr(sfte_ctx *ctx, int16_t col) {
     ctx->term.last_move_ms = 0;
 #endif  // SFTE_CURSOR_TRAIL
 #if SFTE_CURSOR_DYNAMIC
+    ctx->term.cursor_color = SFTE_CURSOR_COLOR;
     ctx->term.cursor_style = SFTE_CURSOR_STYLE;
 #endif  // SFTE_CURSOR_DYNAMIC
 #if SFTE_UNDERLINE_COLORED
@@ -4893,6 +4889,64 @@ typedef enum {
 #endif  // SFTE_IMG_SIXEL
 } sfte_vt_state;
 
+#if SFTE_CURSOR_DYNAMIC
+/*
+    Parses an X11/OSC color string into a 24-bit RGB uint32_t.
+    Supports #RRGGBB and rgb:R/G/B.
+    Returns the `fallback` color if parsing fails.
+*/
+static inline uint32_t _sfte_parser_osc_color(const char *str, uint32_t fallback) {
+    if (!str || !*str) return fallback;
+
+    if (str[0] == '#') {  // #RRGGBB
+        uint32_t val = 0;
+        for (uint8_t i = 1; i <= 6; ++i) {
+            char c = str[i];
+            val <<= 4;
+            if (c >= '0' && c <= '9')
+                val |= (c - '0');
+            else if (c >= 'a' && c <= 'f')
+                val |= (c - 'a' + 10);
+            else if (c >= 'A' && c <= 'F')
+                val |= (c - 'A' + 10);
+            else
+                return fallback;
+        }
+        return val;
+    }
+
+    if (strncmp(str, "rgb:", 4) == 0) {  // rgb:R/G/B
+        const char *p = str + strlen("rgb:");
+        uint32_t rgb = 0;
+        for (uint8_t c = 0; c < 3; ++c) {
+            uint32_t channel = 0;
+            uint8_t digits = 0;
+            while (*p != '/' && *p != '\0' && digits < 4) {
+                char ch = *p++;
+                channel <<= 4;
+                if (ch >= '0' && ch <= '9')
+                    channel |= (ch - '0');
+                else if (ch >= 'a' && ch <= 'f')
+                    channel |= (ch - 'a' + 10);
+                else if (ch >= 'A' && ch <= 'F')
+                    channel |= (ch - 'A' + 10);
+                else
+                    return fallback;
+                digits++;
+            }
+            if (*p == '/') p++;
+
+            // If 16 bit channel, truncate to 8 bit
+            if (digits > 2) channel >>= (digits - 2) * 4;
+            rgb = (rgb << 8) | (channel & 0xFF);
+        }
+        return rgb;
+    }
+
+    return fallback;
+}
+#endif  // SFTE_CURSOR_DYNAMIC
+
 /*
     Appends a byte to the shared OSC/DCS payload buffer.
     If the buffer is too small, reallocates it with size doubled,
@@ -5042,16 +5096,31 @@ static inline void _sfte_parser_osc_dispatch(sfte_ctx *ctx, uint8_t terminator) 
     ctx->term.osc_payload[ctx->term.osc_len] = '\0';
 
     if (strncmp(ctx->term.osc_payload, "10;?", 4) == 0 ||
-        strncmp(ctx->term.osc_payload, "11;?", 4) == 0) {
-        uint8_t is_bg = ctx->term.osc_payload[1] == '1';
-        uint32_t col = is_bg ? SFTE_COLOR_BG : SFTE_COLOR_FG;
+        strncmp(ctx->term.osc_payload, "11;?", 4) == 0 ||
+#if SFTE_CURSOR_DYNAMIC
+        strncmp(ctx->term.osc_payload, "12;?", 4) == 0
+#endif  // SFTE_CURSOR_DYNAMIC
+    ) {
+        uint8_t code_char = ctx->term.osc_payload[1];
+        uint8_t code = (code_char == '0') ? 10 : ((code_char == '1') ? 11 : 12);
+        uint32_t col = (code == 11) ? SFTE_COLOR_BG : SFTE_COLOR_FG;
+#if SFTE_CURSOR_DYNAMIC
+        if (code == 12) col = ctx->term.cursor_color;
+#endif  // SFTE_CURSOR_DYNAMIC
         uint8_t cr = (col >> 16) & 0xFF, cg = (col >> 8) & 0xFF, cb = col & 0xFF;
 
         char reply[64];
         size_t len = snprintf(reply, sizeof(reply), "\033]%d;rgb:%02x%02x/%02x%02x/%02x%02x%s",
-                              is_bg ? 11 : 10, cr, cr, cg, cg, cb, cb, term);
+                              code, cr, cr, cg, cg, cb, cb, term);
         if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
     }
+#if SFTE_CURSOR_DYNAMIC
+    else if (strncmp(ctx->term.osc_payload, "12;", 3) == 0)
+        ctx->term.cursor_color = _sfte_parser_osc_color(ctx->term.osc_payload + 3,
+                                                        ctx->term.cursor_color);
+    else if (strncmp(ctx->term.osc_payload, "112", 3) == 0)
+        ctx->term.cursor_color = SFTE_CURSOR_COLOR;
+#endif  // SFTE_CURSOR_DYNAMIC
 #if SFTE_CLIPBOARD && SFTE_CLIPBOARD_OSC52
     else if (strncmp(ctx->term.osc_payload, "52;", 3) == 0) {  // Remote Clipboard (OSC 52)
         char *p = ctx->term.osc_payload + (strlen("52;") - 1);
@@ -5714,6 +5783,12 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
     int32_t min_y = _SFTE_CLAMP((cy0 < cy1 ? cy0 : cy1) - ry + SFTE_WINDOW_PAD_Y, 0, ctx->height);
     int32_t max_y = _SFTE_CLAMP((cy0 > cy1 ? cy0 : cy1) + ry + SFTE_WINDOW_PAD_Y, 0, ctx->height);
 
+#if SFTE_CURSOR_DYNAMIC
+    uint32_t trail_color = ctx->term.cursor_color;
+#else   // !SFTE_CURSOR_DYNAMIC
+    uint32_t trail_color = SFTE_CURSOR_COLOR;
+#endif  // !SFTE_CURSOR_DYNAMIC
+
     for (int32_t y = min_y; y < max_y; ++y) {
         float up_y = (float)(y - SFTE_WINDOW_PAD_Y) + 0.5f;
         float dy_from_cy0 = up_y - cy0;
@@ -5730,7 +5805,7 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
 
             if (fabsf(up_x - cx0 - t * ab_x) <= rx && fabsf(up_y - cy0 - t * ab_y) <= ry) {
                 uint8_t alpha = (uint8_t)(128.0f * t);
-                SFTE_COLOR_BLEND_PIXEL(px_buf, x, y, ctx->width, SFTE_CURSOR_TRAIL_COLOR, alpha);
+                SFTE_COLOR_BLEND_PIXEL(px_buf, x, y, ctx->width, trail_color, alpha);
             }
         }
     }
@@ -5901,7 +5976,12 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int3
 */
 static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
                                              int32_t render_w) {
-    uint32_t cur_col = SFTE_COLOR_ALPHA_MASK | (SFTE_CURSOR_COLOR & ~SFTE_COLOR_ALPHA_MASK);
+#if SFTE_CURSOR_DYNAMIC
+    uint32_t active_cur_color = ctx->term.cursor_color;
+#else   // !SFTE_CURSOR_DYNAMIC
+    uint32_t active_cur_color = SFTE_CURSOR_COLOR;
+#endif  // !SFTE_CURSOR_DYNAMIC
+    uint32_t cur_col = SFTE_COLOR_ALPHA_MASK | (active_cur_color & ~SFTE_COLOR_ALPHA_MASK);
 
     if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_UNDERLINE) {
         int32_t thick = ctx->font.cell_height * SFTE_CURSOR_THICK_RATIO;
@@ -5988,9 +6068,13 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
             if (!ctx->term.blink_visible) is_cursor = 0;
 #endif  // SFTE_CURSOR_BLINK
 
-            if (is_cursor && _SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BLOCK)
-                _sfte_render_bg_cell(ctx, px_buf, c, r, fg);  // Invert colors
-            else
+            if (is_cursor && _SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BLOCK) {
+#if SFTE_CURSOR_DYNAMIC
+                _sfte_render_bg_cell(ctx, px_buf, c, r, ctx->term.cursor_color);
+#else   // !SFTE_CURSOR_DYNAMIC
+                _sfte_render_bg_cell(ctx, px_buf, c, r, SFTE_CURSOR_COLOR);
+#endif  // !SFTE_CURSOR_DYNAMIC
+            } else
                 _sfte_render_bg_cell(ctx, px_buf, c, r, bg);
         }
 }
@@ -6040,8 +6124,7 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
 #if SFTE_CURSOR_BLINK
             if (!ctx->term.blink_visible) is_cursor = 0;
 #endif
-            uint32_t draw_fg = (is_cursor && _SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BLOCK) ? bg
-                                                                                              : fg;
+            if (is_cursor && _SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BLOCK) fg = bg;
 
             sfte_font_cache *target_cache = &ctx->font.regular;
 #ifdef SFTE_FONT_BOLD_ITALIC
@@ -6057,7 +6140,7 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
                 target_cache = &ctx->font.italic;
 #endif
 
-            _sfte_render_fg_cell(ctx, px_buf, c, r, rune, draw_fg, target_cache);
+            _sfte_render_fg_cell(ctx, px_buf, c, r, rune, fg, target_cache);
             _sfte_render_decorations_cell(ctx, px_buf, c, r, vcell, is_cursor);
 
             int32_t dmg_cy = r * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
@@ -7285,6 +7368,7 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
     ctx->term.is_trailing = 0;
 #endif  // SFTE_CURSOR_TRAIL
 #if SFTE_CURSOR_DYNAMIC
+    ctx->term.cursor_color = SFTE_CURSOR_COLOR;
     ctx->term.cursor_style = SFTE_CURSOR_STYLE;
 #endif  // SFTE_CURSOR_DYNAMIC
 #if SFTE_UNDERLINE_COLORED
