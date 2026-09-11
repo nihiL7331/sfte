@@ -205,6 +205,14 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #define SFTE_TERM_SCROLL_STEP 3
 #endif  // SFTE_TERM_SCROLL_STEP
 
+/*
+    Narrows the allowed characters range to ASCII, lowering the memory usage.
+    Enabling this allows the terminal to store each rune as a `uint8_t` rather than a `uint32_t`.
+*/
+#ifndef SFTE_TERM_ASCII_CHARSET
+#define SFTE_TERM_ASCII_CHARSET 0
+#endif  // SFTE_TERM_ASCII_CHARSET
+
 // =================================================================================================
 // >>window macros
 // =================================================================================================
@@ -1163,25 +1171,31 @@ typedef uint8_t sfte_color;
 #define _SFTE_COLOR_BG_DEFAULT 255
 #endif  // !SFTE_COLOR_TRUECOLOR
 
+#if SFTE_TERM_ASCII_CHARSET
+typedef uint8_t sfte_rune;
+#else   // !SFTE_TERM_ASCII_CHARSET
+typedef uint32_t sfte_rune;
+#endif  // SFTE_TERM_ASCII_CHARSET
+
 typedef enum {
-    _SFTE_ATTR_NONE = 0b00000,
-    _SFTE_ATTR_BOLD = 0b00001,
-    _SFTE_ATTR_ITALIC = 0b00010,
-    _SFTE_ATTR_UNDERLINE = 0b00100,
-    _SFTE_ATTR_REVERSE = 0b01000,
+    _SFTE_ATTR_NONE = 0,
+    _SFTE_ATTR_BOLD = 1 << 0,
+    _SFTE_ATTR_ITALIC = 1 << 1,
+    _SFTE_ATTR_UNDERLINE = 1 << 2,
+    _SFTE_ATTR_REVERSE = 1 << 3,
 #if SFTE_FONT_WIDE_CHARS
-    _SFTE_ATTR_WIDE = 0b010000,
-    _SFTE_ATTR_DUMMY = 0b100000,  // Marks skipped trailing cell after wide rune
-#endif                            // SFTE_FONT_WIDE_CHARS
+    _SFTE_ATTR_WIDE = 1 << 4,
+    _SFTE_ATTR_DUMMY = 1 << 5,  // Marks skipped trailing cell after wide rune
+#endif                          // SFTE_FONT_WIDE_CHARS
 } sfte_attr;
 
 /*
     Represents a single cell on the terminal grid.
 */
 typedef struct {
-    uint32_t rune;
+    sfte_rune rune;
 #if SFTE_FONT_WIDE_CHARS
-    uint32_t combining_runes[SFTE_FONT_MAX_COMBINING];
+    sfte_rune combining_runes[SFTE_FONT_MAX_COMBINING];
 #endif  // SFTE_FONT_WIDE_CHARS
 
 #if SFTE_INPUT_HYPERLINKS
@@ -1210,7 +1224,7 @@ typedef struct {
     Represents a baked texture atlas entry for a single character.
 */
 typedef struct {
-    uint32_t rune;
+    sfte_rune rune;
     uint16_t x0, y0, x1, y1;  // Atlas texture coordinates
     int16_t xoff, yoff;       // Render offsets
     int16_t xadvance;
@@ -1335,7 +1349,9 @@ typedef struct {
     uint32_t saved_fg[2];  // 0=main, 1=alt
     uint32_t saved_bg[2];  // 0=main, 1=alt
     sfte_color cur_fg, cur_bg;
-    uint32_t utf8_rune;  // Accumulator for incoming multi-byte UTF-8 streams
+#if !SFTE_TERM_ASCII_CHARSET
+    uint32_t utf8_rune_acc;  // Accumulator for incoming multi-byte UTF-8 streams
+#endif                       // !SFTE_TERM_ASCII_CHARSET
 #if SFTE_CURSOR_TRAIL
     float tail_rx, tail_ry;
     sfte_damage_rect trail_dmg;
@@ -1655,12 +1671,12 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
 #endif  // (SFTE_CLIPBOARD && SFTE_CLIPBOARD_OSC52) || SFTE_IMG_KITTY
 
 // -------------------------------------------------------------------------------------------------
-// >utf8
+// >rune
 // -------------------------------------------------------------------------------------------------
-static uint8_t _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b);
-static inline void _sfte_utf8_stamp_cell(sfte_ctx *ctx, uint32_t idx, uint32_t rune,
+static inline void _sfte_rune_stamp_cell(sfte_ctx *ctx, uint32_t idx, sfte_rune rune,
                                          uint8_t extra_attr);
-static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune);
+static void _sfte_rune_insert(sfte_ctx *ctx, sfte_rune rune);
+static uint8_t _sfte_rune_utf8_decode(sfte_ctx *ctx, uint8_t b);
 
 // -------------------------------------------------------------------------------------------------
 // >color
@@ -1851,7 +1867,7 @@ static inline void _sfte_font_clear_cache(sfte_font_cache *cache);
 static inline void _sfte_font_update_scales(sfte_ctx *ctx, sfte_font_cache *cache);
 static inline void _sfte_font_pack_and_bake(sfte_font_cache *cache, sfte_glyph *g, int32_t font_idx,
                                             int32_t glyph_idx, int32_t gw, int32_t gh);
-static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_ptr, uint32_t rune);
+static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_ptr, sfte_rune rune);
 static void _sfte_font_reset_cache(sfte_ctx *ctx);
 
 // -------------------------------------------------------------------------------------------------
@@ -1873,7 +1889,7 @@ static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, u
 static void _sfte_render_bg_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, int16_t row,
                                  uint32_t bg);
 static void _sfte_render_fg_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, int16_t row,
-                                 uint32_t rune, uint32_t fg, sfte_font_cache *target_cache);
+                                 sfte_rune rune, uint32_t fg, sfte_font_cache *target_cache);
 static inline void _sfte_render_underline_cell(sfte_ctx *ctx, uint32_t *px_buf, int32_t cx,
                                                int32_t cy, int32_t render_w, sfte_cell *vcell);
 static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, uint32_t *px_buf, int32_t cx,
@@ -2056,51 +2072,15 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
 }
 #endif  // (SFTE_CLIPBOARD && SFTE_CLIPBOARD_OSC52) || SFTE_IMG_KITTY
 // =================================================================================================
-// >>utf8
+// >>rune
 // =================================================================================================
-
-/*
-    Feeds a single byte into the UTF-8 state machine.
-    Returns 1 if a complete rune has been successfully decoded.
-    Returns 0 if more bytes are needed, or if an invalid sequence was encountered (which aborts the
-   current sequence and resets the state machine).
-*/
-static uint8_t _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b) {
-    if (ctx->term.utf8_bytes_left > 0) {
-        if ((b & 0xC0) == 0x80) {  // Continuation byte
-            ctx->term.utf8_rune = (ctx->term.utf8_rune << 6) | (b & 0x3F);
-            ctx->term.utf8_bytes_left--;
-            if (!ctx->term.utf8_bytes_left) return 1;
-            return 0;
-        } else
-            ctx->term.utf8_bytes_left = 0;  // Invalid sequence, abort
-    }
-
-    // Start of a new rune
-    if ((b & 0x80) == 0x00) {
-        ctx->term.utf8_rune = b;
-        ctx->term.utf8_bytes_left = 0;
-        return 1;
-    } else if ((b & 0xE0) == 0xC0) {
-        ctx->term.utf8_rune = b & 0x1F;
-        ctx->term.utf8_bytes_left = 1;
-    } else if ((b & 0xF0) == 0xE0) {
-        ctx->term.utf8_rune = b & 0x0F;
-        ctx->term.utf8_bytes_left = 2;
-    } else if ((b & 0xF8) == 0xF0) {
-        ctx->term.utf8_rune = b & 0x07;
-        ctx->term.utf8_bytes_left = 3;
-    }
-
-    return 0;
-}
 
 /*
     Stamps the active terminal cursor styling onto a specific grid cell.
     Isolates all feature-toggle macros to keep call sites clean.
     Does NOT advance the cursor.
 */
-static inline void _sfte_utf8_stamp_cell(sfte_ctx *ctx, uint32_t idx, uint32_t rune,
+static inline void _sfte_rune_stamp_cell(sfte_ctx *ctx, uint32_t idx, sfte_rune rune,
                                          uint8_t extra_attr) {
     sfte_cell *c = &ctx->term.cells[idx];
     c->rune = rune;
@@ -2126,7 +2106,7 @@ static inline void _sfte_utf8_stamp_cell(sfte_ctx *ctx, uint32_t idx, uint32_t r
     Double-width characters (these of width 2) if placed on the last column, the column
     is left blank, the line wraps early, and the character is placed on the next line.
 */
-static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
+static void _sfte_rune_insert(sfte_ctx *ctx, sfte_rune rune) {
     int8_t w = _SFTE_CHAR_WIDTH(rune);
     if (w < 0) w = 1;
 
@@ -2160,7 +2140,7 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
         // if in last column, leave it blank and wrap early.
         if (ctx->term.cursor_col == ctx->term.cols - 1) {
             int32_t idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_col, ctx->term.cursor_row);
-            _sfte_utf8_stamp_cell(ctx, idx, ' ', 0);
+            _sfte_rune_stamp_cell(ctx, idx, ' ', 0);
             ctx->term.cells[idx].fg = _SFTE_COLOR_FG_DEFAULT;
             ctx->term.cells[idx].bg = _SFTE_COLOR_BG_DEFAULT;
             ctx->term.cells[idx].attr = 0;
@@ -2174,11 +2154,11 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
 
         // Draw the actual character.
         int32_t idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_col, ctx->term.cursor_row);
-        _sfte_utf8_stamp_cell(ctx, idx, rune, _SFTE_ATTR_WIDE);
+        _sfte_rune_stamp_cell(ctx, idx, rune, _SFTE_ATTR_WIDE);
 
         // Place a dummy right after it so that it has enough space to render.
         int32_t dummy_idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_col + 1, ctx->term.cursor_row);
-        _sfte_utf8_stamp_cell(ctx, dummy_idx, rune, _SFTE_ATTR_DUMMY);
+        _sfte_rune_stamp_cell(ctx, dummy_idx, rune, _SFTE_ATTR_DUMMY);
 
         ctx->term.cursor_col += 2;
         return;
@@ -2187,10 +2167,56 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
 
     // Write a normal, one-width character.
     int32_t idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_col, ctx->term.cursor_row);
-    _sfte_utf8_stamp_cell(ctx, idx, rune, 0);
+    _sfte_rune_stamp_cell(ctx, idx, rune, 0);
     ctx->term.cursor_col++;
 }
 
+/*
+    Feeds a single byte into the UTF-8 state machine.
+    Returns 1 if a complete rune has been successfully decoded.
+    Returns 0 if more bytes are needed, or if an invalid sequence was encountered (which aborts the
+    current sequence and resets the state machine).
+
+    If `SFTE_TERM_ASCII_CHARSET` is 1, skips UTF8 bytes to ensure they don't break the layout.
+*/
+static uint8_t _sfte_rune_utf8_decode(sfte_ctx *ctx, uint8_t b) {
+    if (ctx->term.utf8_bytes_left > 0) {
+        if ((b & 0xC0) == 0x80) {  // Continuation byte
+#if !SFTE_TERM_ASCII_CHARSET
+            ctx->term.utf8_rune_acc = (ctx->term.utf8_rune_acc << 6) | (b & 0x3F);
+#endif  // !SFTE_TERM_ASCII_CHARSET
+            ctx->term.utf8_bytes_left--;
+            if (!ctx->term.utf8_bytes_left) return 1;
+            return 0;
+        } else
+            ctx->term.utf8_bytes_left = 0;  // Invalid sequence, abort
+    }
+
+#if !SFTE_TERM_ASCII_CHARSET
+    // Update UTF-8 rune accumulator
+    if ((b & 0x80) == 0x00)
+        ctx->term.utf8_rune_acc = b;
+    else if ((b & 0xE0) == 0xC0)
+        ctx->term.utf8_rune_acc = b & 0x1F;
+    else if ((b & 0xF0) == 0xE0)
+        ctx->term.utf8_rune_acc = b & 0x0F;
+    else if ((b & 0xF8) == 0xF0)
+        ctx->term.utf8_rune_acc = b & 0x07;
+#endif  // !SFTE_TERM_ASCII_CHARSET
+
+    // Get UTF-8 byte count
+    if ((b & 0x80) == 0x00) {
+        ctx->term.utf8_bytes_left = 0;
+        return 1;
+    } else if ((b & 0xE0) == 0xC0)
+        ctx->term.utf8_bytes_left = 1;
+    else if ((b & 0xF0) == 0xE0)
+        ctx->term.utf8_bytes_left = 2;
+    else if ((b & 0xF8) == 0xF0)
+        ctx->term.utf8_bytes_left = 3;
+
+    return 0;
+}
 // =================================================================================================
 // >>color
 // =================================================================================================
@@ -5105,8 +5131,19 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
     case VT_GROUND:
         if (b == '\033' || b == '\x1b')
             ctx->term.parser_state = VT_ESCAPE;
-        else if (b >= 0x20)
-            if (_sfte_utf8_decode(ctx, b)) _sfte_utf8_insert_rune(ctx, ctx->term.utf8_rune);
+        else if (b >= 0x20) {
+#if SFTE_TERM_ASCII_CHARSET
+            if (b >= 0x80) {
+                if (_sfte_rune_utf8_decode(ctx, b))
+                    b = '?';
+                else
+                    break;
+            }
+            _sfte_rune_insert(ctx, b);
+#else   // !SFTE_TERM_ASCII_CHARSET
+            if (_sfte_rune_utf8_decode(ctx, b)) _sfte_rune_insert(ctx, ctx->term.utf8_rune_acc);
+#endif  // !SFTE_TERM_ASCII_CHARSET
+        }
         break;
     case VT_ESCAPE:
         if (b == '[') {
@@ -5341,7 +5378,8 @@ static inline void _sfte_font_pack_and_bake(sfte_font_cache *cache, sfte_glyph *
     and if it's not found in main regular it fallbacks to lower-priority fonts,
     eventually finding the symbol.
 */
-static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_ptr, uint32_t rune) {
+static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_ptr,
+                                        sfte_rune rune) {
     sfte_font_cache *cache = *cache_ptr;
     if (rune == 0) rune = ' ';
 
@@ -5725,7 +5763,7 @@ static void _sfte_render_bg_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, i
     It blends the requested foreground color into the existing background using this alpha mask.
 */
 static void _sfte_render_fg_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, int16_t row,
-                                 uint32_t rune, uint32_t fg, sfte_font_cache *target_cache) {
+                                 sfte_rune rune, uint32_t fg, sfte_font_cache *target_cache) {
     if (rune == ' ') return;
 
     sfte_font_cache *actual_cache = target_cache;
@@ -5956,7 +5994,7 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t
             }
 #endif
 
-            uint32_t rune = vcell->rune ? vcell->rune : ' ';
+            sfte_rune rune = vcell->rune ? vcell->rune : ' ';
             uint32_t fg = _sfte_grid_get_fg(vcell);
             uint32_t bg = _sfte_grid_get_bg(vcell);
             uint8_t attr = vcell->attr;
@@ -7647,9 +7685,12 @@ size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes) {
 
         for (int16_t c = row_start; c <= actual_end; ++c) {
             sfte_cell *vcell = _sfte_grid_get_cell(ctx, c, logical_r);
-            uint32_t rune = (vcell->rune && vcell->rune != ' ') ? vcell->rune : ' ';
+            sfte_rune rune = (vcell->rune && vcell->rune != ' ') ? vcell->rune : ' ';
 
-            // UTF-8 encoding
+// UTF-8 encoding
+#if SFTE_TERM_ASCII_CHARSET
+            _SFTE_WRITE_CHAR(rune);
+#else   // !SFTE_TERM_ASCII_CHARSET
             if (rune < 0x80) {
                 _SFTE_WRITE_CHAR(rune);
             } else if (rune < 0x800) {
@@ -7665,6 +7706,7 @@ size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes) {
                 _SFTE_WRITE_CHAR(0x80 | ((rune >> 6) & 0x3F));
                 _SFTE_WRITE_CHAR(0x80 | (rune & 0x3F));
             }
+#endif  // !SFTE_TERM_ASCII_CHARSET
         }
 
         // Inject newlines for multi-line selections, unless the line soft-wrapped
