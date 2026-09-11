@@ -5785,7 +5785,7 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, uint32_t *px_buf, 
     uint32_t base_ul_col = _sfte_grid_get_ul(vcell);
     uint32_t underline_col = SFTE_COLOR_ALPHA_MASK | (base_ul_col & ~SFTE_COLOR_ALPHA_MASK);
 
-    int32_t thick = (int)(ctx->font.cell_height * SFTE_UNDERLINE_THICK_RATIO);
+    int32_t thick = ctx->font.cell_height * SFTE_UNDERLINE_THICK_RATIO;
     if (thick < 1) thick = 1;
 
     uint8_t style = _SFTE_UNDERLINE_STYLE_STRAIGHT;
@@ -5794,8 +5794,9 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, uint32_t *px_buf, 
                         _SFTE_UNDERLINE_STYLE_DASHED);
 #endif  // SFTE_UNDERLINE_EXTENDED
 
-    int32_t offset = (int)(ctx->font.cell_height * SFTE_UNDERLINE_OFFSET_RATIO);
+    int32_t offset = ctx->font.cell_height * SFTE_UNDERLINE_OFFSET_RATIO;
     if (offset < 1) offset = 1;
+
     int32_t base_y = cy + ctx->font.ascent + offset;
     if (base_y + thick > cy + ctx->font.cell_height) base_y = cy + ctx->font.cell_height - thick;
 
@@ -5855,14 +5856,14 @@ static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, uint32_t *px_buf, in
     uint32_t cur_col = SFTE_COLOR_ALPHA_MASK | (SFTE_CURSOR_COLOR & ~SFTE_COLOR_ALPHA_MASK);
 
     if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_UNDERLINE) {
-        int32_t thick = (int)(ctx->font.cell_height * SFTE_CURSOR_THICK_RATIO);
+        int32_t thick = ctx->font.cell_height * SFTE_CURSOR_THICK_RATIO;
         if (thick < 1) thick = 1;
 
         for (int32_t y = cy + ctx->font.cell_height - thick; y < cy + ctx->font.cell_height; ++y)
             for (int32_t x = cx; x < cx + render_w; ++x)
                 if (x < ctx->width && y < ctx->height) px_buf[y * ctx->width + x] = cur_col;
     } else if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BAR) {
-        int32_t thick = (int)(ctx->font.cell_width * SFTE_CURSOR_THICK_RATIO);
+        int32_t thick = ctx->font.cell_width * SFTE_CURSOR_THICK_RATIO;
         if (thick < 1) thick = 1;
 
         for (int32_t y = cy; y < cy + ctx->font.cell_height; ++y)
