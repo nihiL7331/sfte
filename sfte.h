@@ -205,6 +205,14 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #define SFTE_TERM_SCROLL_STEP 3
 #endif  // SFTE_TERM_SCROLL_STEP
 
+/*
+    Narrows the allowed characters range to ASCII, lowering the memory usage.
+    Enabling this allows the terminal to store each rune as a `uint8_t` rather than a `uint32_t`.
+*/
+#ifndef SFTE_TERM_ASCII_CHARSET
+#define SFTE_TERM_ASCII_CHARSET 0
+#endif  // SFTE_TERM_ASCII_CHARSET
+
 // =================================================================================================
 // >>window macros
 // =================================================================================================
@@ -272,6 +280,28 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
         0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C,                      \
         0xEBDBB2 /* bright  */
 #endif           // SFTE_COLOR_ANSI_PALETTE
+
+/*
+    A macro helper used to draw pixels.
+    This can be overriden to support different color formats,
+    e.g.: monochrome, RGB233, RGB565.
+*/
+#ifndef SFTE_COLOR_DRAW_PIXEL
+#define SFTE_COLOR_DRAW_PIXEL(buf, x, y, stride, color)                                            \
+    ((uint32_t *)(buf))[(y) * (stride) + (x)] = (color);
+#endif  // SFTE_COLOR_DRAW_PIXEL
+
+/*
+    A macro helper used to blend pixel colors based on their alpha value.
+    This can be overriden to support different color formats,
+    e.g.: monochrome, RGB233, RGB565.
+    Needed for cursor trail and images support.
+*/
+#ifndef SFTE_COLOR_BLEND_PIXEL
+#define SFTE_COLOR_BLEND_PIXEL(buf, x, y, stride, argb_color, alpha)                               \
+    (((uint32_t *)(buf))[(y) * (stride) + (x)] = _sfte_render_blend_argb(                          \
+         ((uint32_t *)(buf))[(y) * (stride) + (x)], (argb_color), (alpha)))
+#endif  // SFTE_COLOR_BLEND_PIXEL
 
 #define SFTE_COLOR_ALPHA_MASK 0xFF000000
 
@@ -911,11 +941,11 @@ void sfte_get_ideal_size(sfte_ctx *ctx, int16_t cols, int16_t rows, int32_t *out
 void sfte_parse(sfte_ctx *ctx, const uint8_t *data, size_t len);
 
 /*
-    Render the grid to the provided ARGB8888 `px_buf` buffer
+    Render the grid to the provided `px_buf` buffer
     and populate the `out_dmg` damage rectangle.
 
 */
-void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int32_t w, int32_t h, sfte_damage_rect *out_dmg);
+void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_rect *out_dmg);
 
 /*
     Explicitly tell the terminal engine its canvas size has changed.
@@ -1163,25 +1193,31 @@ typedef uint8_t sfte_color;
 #define _SFTE_COLOR_BG_DEFAULT 255
 #endif  // !SFTE_COLOR_TRUECOLOR
 
+#if SFTE_TERM_ASCII_CHARSET
+typedef uint8_t sfte_rune;
+#else   // !SFTE_TERM_ASCII_CHARSET
+typedef uint32_t sfte_rune;
+#endif  // SFTE_TERM_ASCII_CHARSET
+
 typedef enum {
-    _SFTE_ATTR_NONE = 0b00000,
-    _SFTE_ATTR_BOLD = 0b00001,
-    _SFTE_ATTR_ITALIC = 0b00010,
-    _SFTE_ATTR_UNDERLINE = 0b00100,
-    _SFTE_ATTR_REVERSE = 0b01000,
+    _SFTE_ATTR_NONE = 0,
+    _SFTE_ATTR_BOLD = 1 << 0,
+    _SFTE_ATTR_ITALIC = 1 << 1,
+    _SFTE_ATTR_UNDERLINE = 1 << 2,
+    _SFTE_ATTR_REVERSE = 1 << 3,
 #if SFTE_FONT_WIDE_CHARS
-    _SFTE_ATTR_WIDE = 0b010000,
-    _SFTE_ATTR_DUMMY = 0b100000,  // Marks skipped trailing cell after wide rune
-#endif                            // SFTE_FONT_WIDE_CHARS
+    _SFTE_ATTR_WIDE = 1 << 4,
+    _SFTE_ATTR_DUMMY = 1 << 5,  // Marks skipped trailing cell after wide rune
+#endif                          // SFTE_FONT_WIDE_CHARS
 } sfte_attr;
 
 /*
     Represents a single cell on the terminal grid.
 */
 typedef struct {
-    uint32_t rune;
+    sfte_rune rune;
 #if SFTE_FONT_WIDE_CHARS
-    uint32_t combining_runes[SFTE_FONT_MAX_COMBINING];
+    sfte_rune combining_runes[SFTE_FONT_MAX_COMBINING];
 #endif  // SFTE_FONT_WIDE_CHARS
 
 #if SFTE_INPUT_HYPERLINKS
@@ -1210,7 +1246,7 @@ typedef struct {
     Represents a baked texture atlas entry for a single character.
 */
 typedef struct {
-    uint32_t rune;
+    sfte_rune rune;
     uint16_t x0, y0, x1, y1;  // Atlas texture coordinates
     int16_t xoff, yoff;       // Render offsets
     int16_t xadvance;
@@ -1335,7 +1371,9 @@ typedef struct {
     uint32_t saved_fg[2];  // 0=main, 1=alt
     uint32_t saved_bg[2];  // 0=main, 1=alt
     sfte_color cur_fg, cur_bg;
-    uint32_t utf8_rune;  // Accumulator for incoming multi-byte UTF-8 streams
+#if !SFTE_TERM_ASCII_CHARSET
+    uint32_t utf8_rune_acc;  // Accumulator for incoming multi-byte UTF-8 streams
+#endif                       // !SFTE_TERM_ASCII_CHARSET
 #if SFTE_CURSOR_TRAIL
     float tail_rx, tail_ry;
     sfte_damage_rect trail_dmg;
@@ -1655,12 +1693,12 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
 #endif  // (SFTE_CLIPBOARD && SFTE_CLIPBOARD_OSC52) || SFTE_IMG_KITTY
 
 // -------------------------------------------------------------------------------------------------
-// >utf8
+// >rune
 // -------------------------------------------------------------------------------------------------
-static uint8_t _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b);
-static inline void _sfte_utf8_stamp_cell(sfte_ctx *ctx, uint32_t idx, uint32_t rune,
+static inline void _sfte_rune_stamp_cell(sfte_ctx *ctx, uint32_t idx, sfte_rune rune,
                                          uint8_t extra_attr);
-static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune);
+static void _sfte_rune_insert(sfte_ctx *ctx, sfte_rune rune);
+static uint8_t _sfte_rune_utf8_decode(sfte_ctx *ctx, uint8_t b);
 
 // -------------------------------------------------------------------------------------------------
 // >color
@@ -1717,24 +1755,24 @@ static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id);
 // -------------------------------------------------------------------------------------------------
 // >view
 // -------------------------------------------------------------------------------------------------
-static void _sfte_view_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf);
+static void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf);
 
 // -------------------------------------------------------------------------------------------------
 // >input
 // -------------------------------------------------------------------------------------------------
 #if SFTE_INPUT_SELECTION
-static inline uint8_t _sfte_input_is_selected(sfte_ctx *ctx, int16_t c, int16_t r);
+static inline uint8_t _sfte_input_is_selected(sfte_ctx *ctx, int16_t col, int16_t row);
 #endif  // SFTE_INPUT_SELECTION
 #if SFTE_INPUT_MOUSE
-static void _sfte_input_send_mouse_event(sfte_ctx *ctx, uint8_t btn, uint8_t is_release, int16_t c,
-                                         int16_t r, uint8_t is_motion);
+static void _sfte_input_send_mouse_event(sfte_ctx *ctx, uint8_t btn, uint8_t is_release,
+                                         int16_t col, int16_t row, uint8_t is_motion);
 #endif  // SFTE_INPUT_MOUSE
 
 // -------------------------------------------------------------------------------------------------
 // >reflow
 // -------------------------------------------------------------------------------------------------
 #if SFTE_TERM_REFLOW
-static void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell c, uint8_t is_cursor);
+static void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell cell, uint8_t is_cursor);
 static inline int16_t _sfte_reflow_get_len(sfte_cell *row, int16_t cols, int16_t cursor_cx);
 static void _sfte_reflow_process_row(sfte_cell *row, int16_t cols, int16_t cursor_cx,
                                      _sfte_reflow_state *st);
@@ -1768,8 +1806,8 @@ static void _sfte_sixel_deinit(sfte_ctx *ctx);
 // >kitty
 // -------------------------------------------------------------------------------------------------
 #if SFTE_IMG_KITTY
-static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int32_t sw, int32_t sh, int32_t dw,
-                                                  int32_t dh);
+static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int32_t src_wid, int32_t src_hei,
+                                                  int32_t dst_wid, int32_t dst_hei);
 static uint32_t *_sfte_kitty_decode_payload(sfte_ctx *ctx, uint8_t *raw_data, size_t raw_len,
                                             uint8_t is_file, const char *file_path, int32_t *w,
                                             int32_t *h);
@@ -1851,7 +1889,7 @@ static inline void _sfte_font_clear_cache(sfte_font_cache *cache);
 static inline void _sfte_font_update_scales(sfte_ctx *ctx, sfte_font_cache *cache);
 static inline void _sfte_font_pack_and_bake(sfte_font_cache *cache, sfte_glyph *g, int32_t font_idx,
                                             int32_t glyph_idx, int32_t gw, int32_t gh);
-static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_ptr, uint32_t rune);
+static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_ptr, sfte_rune rune);
 static void _sfte_font_reset_cache(sfte_ctx *ctx);
 
 // -------------------------------------------------------------------------------------------------
@@ -1862,27 +1900,27 @@ static inline void _sfte_render_damage_add(sfte_damage_rect *dmg, int32_t x, int
 static inline void _sfte_render_propagate_damage(sfte_ctx *ctx, int16_t vis_col, int16_t vis_row);
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 static inline void _sfte_render_sort_images(sfte_ctx *ctx);
-static inline void _sfte_render_images(sfte_ctx *ctx, uint32_t *px_buf, sfte_damage_rect *out_dmg,
+static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, sfte_damage_rect *out_dmg,
                                        uint8_t is_bg_pass, int32_t base_y_off,
                                        uint8_t pad_was_dirty);
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 #if SFTE_CURSOR_TRAIL
-static inline void _sfte_render_trail(sfte_ctx *ctx, uint32_t *px_buf, sfte_damage_rect *out_dmg);
+static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_rect *out_dmg);
 #endif  // SFTE_CURSOR_TRAIL
 static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, uint8_t src_a);
-static void _sfte_render_bg_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, int16_t row,
+static void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
                                  uint32_t bg);
-static void _sfte_render_fg_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, int16_t row,
-                                 uint32_t rune, uint32_t fg, sfte_font_cache *target_cache);
-static inline void _sfte_render_underline_cell(sfte_ctx *ctx, uint32_t *px_buf, int32_t cx,
-                                               int32_t cy, int32_t render_w, sfte_cell *vcell);
-static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, uint32_t *px_buf, int32_t cx,
-                                             int32_t cy, int render_w);
-static void _sfte_render_decorations_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, int16_t row,
+static void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
+                                 sfte_rune rune, uint32_t fg, sfte_font_cache *target_cache);
+static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
+                                               int32_t render_w, sfte_cell *vcell);
+static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
+                                             int render_w);
+static void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
                                           sfte_cell *vcell, uint8_t is_cursor);
-static inline void _sfte_render_bg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t vis_col,
+static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
                                         int16_t vis_row);
-static inline void _sfte_render_fg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t vis_col,
+static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
                                         int16_t vis_row, sfte_damage_rect *out_dmg);
 
 // -------------------------------------------------------------------------------------------------
@@ -2056,51 +2094,15 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
 }
 #endif  // (SFTE_CLIPBOARD && SFTE_CLIPBOARD_OSC52) || SFTE_IMG_KITTY
 // =================================================================================================
-// >>utf8
+// >>rune
 // =================================================================================================
-
-/*
-    Feeds a single byte into the UTF-8 state machine.
-    Returns 1 if a complete rune has been successfully decoded.
-    Returns 0 if more bytes are needed, or if an invalid sequence was encountered (which aborts the
-   current sequence and resets the state machine).
-*/
-static uint8_t _sfte_utf8_decode(sfte_ctx *ctx, uint8_t b) {
-    if (ctx->term.utf8_bytes_left > 0) {
-        if ((b & 0xC0) == 0x80) {  // Continuation byte
-            ctx->term.utf8_rune = (ctx->term.utf8_rune << 6) | (b & 0x3F);
-            ctx->term.utf8_bytes_left--;
-            if (!ctx->term.utf8_bytes_left) return 1;
-            return 0;
-        } else
-            ctx->term.utf8_bytes_left = 0;  // Invalid sequence, abort
-    }
-
-    // Start of a new rune
-    if ((b & 0x80) == 0x00) {
-        ctx->term.utf8_rune = b;
-        ctx->term.utf8_bytes_left = 0;
-        return 1;
-    } else if ((b & 0xE0) == 0xC0) {
-        ctx->term.utf8_rune = b & 0x1F;
-        ctx->term.utf8_bytes_left = 1;
-    } else if ((b & 0xF0) == 0xE0) {
-        ctx->term.utf8_rune = b & 0x0F;
-        ctx->term.utf8_bytes_left = 2;
-    } else if ((b & 0xF8) == 0xF0) {
-        ctx->term.utf8_rune = b & 0x07;
-        ctx->term.utf8_bytes_left = 3;
-    }
-
-    return 0;
-}
 
 /*
     Stamps the active terminal cursor styling onto a specific grid cell.
     Isolates all feature-toggle macros to keep call sites clean.
     Does NOT advance the cursor.
 */
-static inline void _sfte_utf8_stamp_cell(sfte_ctx *ctx, uint32_t idx, uint32_t rune,
+static inline void _sfte_rune_stamp_cell(sfte_ctx *ctx, uint32_t idx, sfte_rune rune,
                                          uint8_t extra_attr) {
     sfte_cell *c = &ctx->term.cells[idx];
     c->rune = rune;
@@ -2126,7 +2128,7 @@ static inline void _sfte_utf8_stamp_cell(sfte_ctx *ctx, uint32_t idx, uint32_t r
     Double-width characters (these of width 2) if placed on the last column, the column
     is left blank, the line wraps early, and the character is placed on the next line.
 */
-static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
+static void _sfte_rune_insert(sfte_ctx *ctx, sfte_rune rune) {
     int8_t w = _SFTE_CHAR_WIDTH(rune);
     if (w < 0) w = 1;
 
@@ -2160,7 +2162,7 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
         // if in last column, leave it blank and wrap early.
         if (ctx->term.cursor_col == ctx->term.cols - 1) {
             int32_t idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_col, ctx->term.cursor_row);
-            _sfte_utf8_stamp_cell(ctx, idx, ' ', 0);
+            _sfte_rune_stamp_cell(ctx, idx, ' ', 0);
             ctx->term.cells[idx].fg = _SFTE_COLOR_FG_DEFAULT;
             ctx->term.cells[idx].bg = _SFTE_COLOR_BG_DEFAULT;
             ctx->term.cells[idx].attr = 0;
@@ -2174,11 +2176,11 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
 
         // Draw the actual character.
         int32_t idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_col, ctx->term.cursor_row);
-        _sfte_utf8_stamp_cell(ctx, idx, rune, _SFTE_ATTR_WIDE);
+        _sfte_rune_stamp_cell(ctx, idx, rune, _SFTE_ATTR_WIDE);
 
         // Place a dummy right after it so that it has enough space to render.
         int32_t dummy_idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_col + 1, ctx->term.cursor_row);
-        _sfte_utf8_stamp_cell(ctx, dummy_idx, rune, _SFTE_ATTR_DUMMY);
+        _sfte_rune_stamp_cell(ctx, dummy_idx, rune, _SFTE_ATTR_DUMMY);
 
         ctx->term.cursor_col += 2;
         return;
@@ -2187,10 +2189,56 @@ static void _sfte_utf8_insert_rune(sfte_ctx *ctx, uint32_t rune) {
 
     // Write a normal, one-width character.
     int32_t idx = _SFTE_GRID_IDX(ctx, ctx->term.cursor_col, ctx->term.cursor_row);
-    _sfte_utf8_stamp_cell(ctx, idx, rune, 0);
+    _sfte_rune_stamp_cell(ctx, idx, rune, 0);
     ctx->term.cursor_col++;
 }
 
+/*
+    Feeds a single byte into the UTF-8 state machine.
+    Returns 1 if a complete rune has been successfully decoded.
+    Returns 0 if more bytes are needed, or if an invalid sequence was encountered (which aborts the
+    current sequence and resets the state machine).
+
+    If `SFTE_TERM_ASCII_CHARSET` is 1, skips UTF8 bytes to ensure they don't break the layout.
+*/
+static uint8_t _sfte_rune_utf8_decode(sfte_ctx *ctx, uint8_t b) {
+    if (ctx->term.utf8_bytes_left > 0) {
+        if ((b & 0xC0) == 0x80) {  // Continuation byte
+#if !SFTE_TERM_ASCII_CHARSET
+            ctx->term.utf8_rune_acc = (ctx->term.utf8_rune_acc << 6) | (b & 0x3F);
+#endif  // !SFTE_TERM_ASCII_CHARSET
+            ctx->term.utf8_bytes_left--;
+            if (!ctx->term.utf8_bytes_left) return 1;
+            return 0;
+        } else
+            ctx->term.utf8_bytes_left = 0;  // Invalid sequence, abort
+    }
+
+#if !SFTE_TERM_ASCII_CHARSET
+    // Update UTF-8 rune accumulator
+    if ((b & 0x80) == 0x00)
+        ctx->term.utf8_rune_acc = b;
+    else if ((b & 0xE0) == 0xC0)
+        ctx->term.utf8_rune_acc = b & 0x1F;
+    else if ((b & 0xF0) == 0xE0)
+        ctx->term.utf8_rune_acc = b & 0x0F;
+    else if ((b & 0xF8) == 0xF0)
+        ctx->term.utf8_rune_acc = b & 0x07;
+#endif  // !SFTE_TERM_ASCII_CHARSET
+
+    // Get UTF-8 byte count
+    if ((b & 0x80) == 0x00) {
+        ctx->term.utf8_bytes_left = 0;
+        return 1;
+    } else if ((b & 0xE0) == 0xC0)
+        ctx->term.utf8_bytes_left = 1;
+    else if ((b & 0xF0) == 0xE0)
+        ctx->term.utf8_bytes_left = 2;
+    else if ((b & 0xF8) == 0xF0)
+        ctx->term.utf8_bytes_left = 3;
+
+    return 0;
+}
 // =================================================================================================
 // >>color
 // =================================================================================================
@@ -2719,22 +2767,22 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows)
 #if SFTE_TERM_ALT_SCREEN
     sfte_cell *main_old = ctx->term.alt_active ? ctx->term.alt_cells : ctx->term.cells;
     sfte_cell *alt_old = ctx->term.alt_active ? ctx->term.cells : NULL;
-    int16_t target_cx = ctx->term.alt_active ? ctx->term.saved_col[0] : ctx->term.cursor_col;
-    int16_t target_cy = ctx->term.alt_active ? ctx->term.saved_row[0] : ctx->term.cursor_row;
+    int16_t target_col = ctx->term.alt_active ? ctx->term.saved_col[0] : ctx->term.cursor_col;
+    int16_t target_row = ctx->term.alt_active ? ctx->term.saved_row[0] : ctx->term.cursor_row;
 #else
     sfte_cell *main_old = ctx->term.cells;
-    int16_t target_cx = ctx->term.cursor_col;
-    int16_t target_cy = ctx->term.cursor_row;
+    int16_t target_col = ctx->term.cursor_col;
+    int16_t target_row = ctx->term.cursor_row;
 #endif  // !SFTE_TERM_ALT_SCREEN
 
     _sfte_resize_buffers out = {0};
 
 #if SFTE_TERM_REFLOW
-    out = _sfte_reflow_generate_buffers(ctx, main_old, new_cols, new_rows, target_cx, target_cy);
+    out = _sfte_reflow_generate_buffers(ctx, main_old, new_cols, new_rows, target_col, target_row);
 #else  // !SFTE_TERM_REFLOW
     out.main_grid = _sfte_grid_resize_dumb_copy(main_old, old_cols, old_rows, new_cols, new_rows);
-    out.new_cx = _SFTE_CLAMP(target_cx, 0, new_cols - 1);
-    out.new_cy = _SFTE_CLAMP(target_cy, 0, new_rows - 1);
+    out.new_col = _SFTE_CLAMP(target_col, 0, new_cols - 1);
+    out.new_row = _SFTE_CLAMP(target_row, 0, new_rows - 1);
 #if SFTE_TERM_SCROLLBACK_CAP
     out.sb_grid = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
     out.sb_lines = 0;
@@ -2850,25 +2898,27 @@ static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id) {
 /*
     Fills the padding regions around the terminal grid with the background color.
 */
-static void _sfte_view_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf) {
+static void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf) {
     int32_t w = ctx->width;
     int32_t h = ctx->height;
     int32_t grid_w = ctx->term.cols * ctx->font.cell_width;
     int32_t grid_h = ctx->term.rows * ctx->font.cell_height;
-    uint32_t bg = (SFTE_COLOR_BG_OPACITY << 24) | SFTE_COLOR_BG;
+    uint32_t bg = (SFTE_COLOR_BG_OPACITY << 24) | (SFTE_COLOR_BG & ~SFTE_COLOR_ALPHA_MASK);
 
 #if SFTE_WINDOW_PAD_Y
     for (int32_t y = 0; y < SFTE_WINDOW_PAD_Y && y < h; ++y)
-        for (int32_t x = 0; x < w; ++x) px_buf[y * w + x] = bg;
+        for (int32_t x = 0; x < w; ++x) SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, bg);
 
     for (int32_t y = SFTE_WINDOW_PAD_Y + grid_h; y < h; ++y)
-        for (int32_t x = 0; x < w; ++x) px_buf[y * w + x] = bg;
+        for (int32_t x = 0; x < w; ++x) SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, bg);
 #endif  // SFTE_WINDOW_PAD_Y
 
 #if SFTE_WINDOW_PAD_X
     for (int32_t y = SFTE_WINDOW_PAD_Y; y < SFTE_WINDOW_PAD_Y + grid_h && y < h; ++y) {
-        for (int32_t x = 0; x < SFTE_WINDOW_PAD_X && x < w; ++x) px_buf[y * w + x] = bg;
-        for (int32_t x = SFTE_WINDOW_PAD_X + grid_w; x < w; ++x) px_buf[y * w + x] = bg;
+        for (int32_t x = 0; x < SFTE_WINDOW_PAD_X && x < w; ++x)
+            SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, bg);
+        for (int32_t x = SFTE_WINDOW_PAD_X + grid_w; x < w; ++x)
+            SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, bg);
     }
 #endif  // SFTE_WINDOW_PAD_X
 }
@@ -2882,26 +2932,26 @@ static void _sfte_view_clear_padding_rects(sfte_ctx *ctx, uint32_t *px_buf) {
     Determines if a specific cell falls within the active selection bounds.
     Evaluates against logical rows, meaning selections correclty scroll with text history.
 */
-static inline uint8_t _sfte_input_is_selected(sfte_ctx *ctx, int16_t c, int16_t r) {
+static inline uint8_t _sfte_input_is_selected(sfte_ctx *ctx, int16_t col, int16_t row) {
     if (!ctx->term.mouse_sel_active) return 0;
 
-    int16_t sc = ctx->term.mouse_sel_start_col;
-    int16_t sr = ctx->term.mouse_sel_start_row;
-    int16_t ec = ctx->term.mouse_sel_end_col;
-    int16_t er = ctx->term.mouse_sel_end_row;
+    int16_t start_col = ctx->term.mouse_sel_start_col;
+    int16_t start_row = ctx->term.mouse_sel_start_row;
+    int16_t end_col = ctx->term.mouse_sel_end_col;
+    int16_t end_row = ctx->term.mouse_sel_end_row;
 
     // Normalize backward drags
-    if (sr > er || (sr == er && sc > ec)) {
-        int16_t tmp = sr;
-        sr = er, er = tmp;
-        tmp = sc, sc = ec, ec = tmp;
+    if (start_row > end_row || (start_row == end_row && start_col > end_col)) {
+        int16_t tmp = start_row;
+        start_row = end_row, end_row = tmp;
+        tmp = start_col, start_col = end_col, end_col = tmp;
     }
 
-    if (r < sr || r > er) return 0;
-    if (sr == er) return (c >= sc && c <= ec);  // same line
-    if (r == sr) return c >= sc;                // first line
-    if (r == er) return c <= ec;                // last line
-    return 1;                                   // middle lines
+    if (row < start_row || row > end_row) return 0;
+    if (start_row == end_row) return (col >= start_col && col <= end_col);  // same line
+    if (row == start_row) return col >= start_col;                          // first line
+    if (row == end_row) return col <= end_col;                              // last line
+    return 1;                                                               // middle lines
 }
 #endif  // SFTE_INPUT_SELECTION
 
@@ -2927,8 +2977,8 @@ static inline uint8_t _sfte_input_is_selected(sfte_ctx *ctx, int16_t c, int16_t 
     Supports both legacy X10 (max coords 223) and modern SGR 1006 formats.
     Must be fed `screen_r` coordinates, never `logical_r` coordinates.
 */
-static void _sfte_input_send_mouse_event(sfte_ctx *ctx, uint8_t btn, uint8_t is_release, int16_t c,
-                                         int16_t r, uint8_t is_motion) {
+static void _sfte_input_send_mouse_event(sfte_ctx *ctx, uint8_t btn, uint8_t is_release,
+                                         int16_t col, int16_t row, uint8_t is_motion) {
     if (!ctx->term.mouse_mode) return;
 
     uint8_t encoded_btn = btn;
@@ -2950,18 +3000,21 @@ static void _sfte_input_send_mouse_event(sfte_ctx *ctx, uint8_t btn, uint8_t is_
 
     char buf[16];
     size_t len = 0;
-    int16_t tc = c + 1;
-    int16_t tr = r + 1;  // 1-based indexing for terminal escape sequences
+    int16_t term_col = col + 1;
+    int16_t term_row = row + 1;  // 1-based indexing for terminal escape sequences
 
     if (ctx->term.mouse_ext == SFTE_INPUT_MOUSE_EXT_SGR) {
         // SGR: ESC [ < btn ; x ; y M/m
         char end_char = is_release ? 'm' : 'M';
-        len = snprintf(buf, sizeof(buf), "\033[<%d;%d;%d%c", encoded_btn, tc, tr, end_char);
+        len = snprintf(buf, sizeof(buf), "\033[<%d;%d;%d%c", encoded_btn, term_col, term_row,
+                       end_char);
     } else {
         // X10: ESC [ <btn+32> <x+32> <y+32>
-        if (tc > SFTE_INPUT_MOUSE_X10_MAX_COORD || tr > SFTE_INPUT_MOUSE_X10_MAX_COORD) return;
+        if (term_col > SFTE_INPUT_MOUSE_X10_MAX_COORD || term_row > SFTE_INPUT_MOUSE_X10_MAX_COORD)
+            return;
         len = snprintf(buf, sizeof(buf), "\033[M%c%c%c", encoded_btn + SFTE_INPUT_MOUSE_X10_OFFSET,
-                       tc + SFTE_INPUT_MOUSE_X10_OFFSET, tr + SFTE_INPUT_MOUSE_X10_OFFSET);
+                       term_col + SFTE_INPUT_MOUSE_X10_OFFSET,
+                       term_row + SFTE_INPUT_MOUSE_X10_OFFSET);
     }
 
     if (ctx->write_cb) ctx->write_cb(ctx->user_data, buf, len);
@@ -2975,11 +3028,11 @@ static void _sfte_input_send_mouse_event(sfte_ctx *ctx, uint8_t btn, uint8_t is_
 /*
     Pushes a single cell into the temporary linear buffer.
 */
-static void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell c, uint8_t is_cursor) {
+static void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell cell, uint8_t is_cursor) {
 #if SFTE_FONT_WIDE_CHARS
     // If we're pushing a double-width character and we're at last column, wrap early.
-    if ((c.attr & _SFTE_ATTR_WIDE) && st->reflow_col == st->new_cols - 1) {
-        sfte_cell space = c;
+    if ((cell.attr & _SFTE_ATTR_WIDE) && st->reflow_col == st->new_cols - 1) {
+        sfte_cell space = cell;
         space.rune = ' ';
         space.fg = _SFTE_COLOR_FG_DEFAULT;
         space.bg = _SFTE_COLOR_BG_DEFAULT;
@@ -3002,8 +3055,8 @@ static void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell c, uint8_t is_cu
         st->new_row = st->reflow_row;
     }
 
-    c.wrapped = 0;
-    st->temp_rows[st->reflow_row * st->new_cols + st->reflow_col] = c;
+    cell.wrapped = 0;
+    st->temp_rows[st->reflow_row * st->new_cols + st->reflow_col] = cell;
     st->reflow_col++;
 }
 
@@ -3508,26 +3561,26 @@ static void _sfte_sixel_deinit(sfte_ctx *ctx) {
     Kitty allows the terminal to dictate the final render size in rows/columns,
     this is the main purpose for this function.
 */
-static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int32_t sw, int32_t sh, int32_t dw,
-                                                  int32_t dh) {
-    uint32_t *dst = (uint32_t *)SFTE_MALLOC(dw * dh * sizeof(uint32_t));
+static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int32_t src_wid, int32_t src_hei,
+                                                  int32_t dst_wid, int32_t dst_hei) {
+    uint32_t *dst = (uint32_t *)SFTE_MALLOC(dst_wid * dst_hei * sizeof(uint32_t));
     if (!dst) return NULL;
 
-    float x_ratio = ((float)(sw - 1)) / dw;
-    float y_ratio = ((float)(sh - 1)) / dh;
+    float x_ratio = ((float)(src_wid - 1)) / dst_wid;
+    float y_ratio = ((float)(src_hei - 1)) / dst_hei;
 
-    for (int32_t i = 0; i < dh; ++i)
-        for (int32_t j = 0; j < dw; ++j) {
+    for (int32_t i = 0; i < dst_hei; ++i)
+        for (int32_t j = 0; j < dst_wid; ++j) {
             int32_t x = (int32_t)(x_ratio * j);
             int32_t y = (int32_t)(y_ratio * i);
             float x_diff = (x_ratio * j) - x;
             float y_diff = (y_ratio * i) - y;
             // 4 nearest pxs
-            size_t idx = y * sw + x;
+            size_t idx = y * src_wid + x;
             uint32_t p1 = src[idx];
-            uint32_t p2 = (x + 1 < sw) ? src[idx + 1] : p1;
-            uint32_t p3 = (y + 1 < sh) ? src[idx + sw] : p1;
-            uint32_t p4 = (x + 1 < sw && y + 1 < sh) ? src[idx + sw + 1] : p1;
+            uint32_t p2 = (x + 1 < src_wid) ? src[idx + 1] : p1;
+            uint32_t p3 = (y + 1 < src_hei) ? src[idx + src_wid] : p1;
+            uint32_t p4 = (x + 1 < src_wid && y + 1 < src_hei) ? src[idx + src_wid + 1] : p1;
             // weights
             float w1 = (1.0f - x_diff) * (1.0f - y_diff);
             float w2 = x_diff * (1.0f - y_diff);
@@ -3543,7 +3596,7 @@ static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int32_t sw, int
             uint32_t a = (uint32_t)(((p1 >> 24) & 0xFF) * w1 + ((p2 >> 24) & 0xFF) * w2 +
                                     ((p3 >> 24) & 0xFF) * w3 + ((p4 >> 24) & 0xFF) * w4);
             // store
-            dst[i * dw + j] = (a << 24) | (r << 16) | (g << 8) | b;
+            dst[i * dst_wid + j] = (a << 24) | (r << 16) | (g << 8) | b;
         }
 
     return dst;
@@ -5105,8 +5158,19 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
     case VT_GROUND:
         if (b == '\033' || b == '\x1b')
             ctx->term.parser_state = VT_ESCAPE;
-        else if (b >= 0x20)
-            if (_sfte_utf8_decode(ctx, b)) _sfte_utf8_insert_rune(ctx, ctx->term.utf8_rune);
+        else if (b >= 0x20) {
+#if SFTE_TERM_ASCII_CHARSET
+            if (b >= 0x80) {
+                if (_sfte_rune_utf8_decode(ctx, b))
+                    b = '?';
+                else
+                    break;
+            }
+            _sfte_rune_insert(ctx, b);
+#else   // !SFTE_TERM_ASCII_CHARSET
+            if (_sfte_rune_utf8_decode(ctx, b)) _sfte_rune_insert(ctx, ctx->term.utf8_rune_acc);
+#endif  // !SFTE_TERM_ASCII_CHARSET
+        }
         break;
     case VT_ESCAPE:
         if (b == '[') {
@@ -5341,7 +5405,8 @@ static inline void _sfte_font_pack_and_bake(sfte_font_cache *cache, sfte_glyph *
     and if it's not found in main regular it fallbacks to lower-priority fonts,
     eventually finding the symbol.
 */
-static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_ptr, uint32_t rune) {
+static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_ptr,
+                                        sfte_rune rune) {
     sfte_font_cache *cache = *cache_ptr;
     if (rune == 0) rune = ' ';
 
@@ -5534,7 +5599,7 @@ static inline void _sfte_render_sort_images(sfte_ctx *ctx) {
     Compositor pass for images.
     Images can be drawn behind text (is_bg_pass = 1) or in front of text (is_bg_pass = 0).
 */
-static inline void _sfte_render_images(sfte_ctx *ctx, uint32_t *px_buf, sfte_damage_rect *out_dmg,
+static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, sfte_damage_rect *out_dmg,
                                        uint8_t is_bg_pass, int32_t base_y_off,
                                        uint8_t pad_was_dirty) {
     for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
@@ -5589,8 +5654,8 @@ static inline void _sfte_render_images(sfte_ctx *ctx, uint32_t *px_buf, sfte_dam
                 uint32_t img_pxs = img->pixels[iy * img->width + ix];
                 if (!(img_pxs & SFTE_COLOR_ALPHA_MASK)) continue;
 
-                px_buf[out_y * ctx->width + out_x] = _sfte_render_blend_argb(
-                    px_buf[out_y * ctx->width + out_x], img_pxs, (uint8_t)(img_pxs >> 24));
+                SFTE_COLOR_BLEND_PIXEL(px_buf, out_x, out_y, ctx->width, img_pxs,
+                                       (uint8_t)(img_pxs >> 24));
             }
         }
     }
@@ -5602,7 +5667,7 @@ static inline void _sfte_render_images(sfte_ctx *ctx, uint32_t *px_buf, sfte_dam
     Compositor pass for the cursor trail.
     Drawn as the last element in the rendering loop.
 */
-static inline void _sfte_render_trail(sfte_ctx *ctx, uint32_t *px_buf, sfte_damage_rect *out_dmg) {
+static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_rect *out_dmg) {
     if (ctx->term.trail_dmg.w > 0 && ctx->term.trail_dmg.h > 0)
         _sfte_render_damage_add(out_dmg, ctx->term.trail_dmg.x, ctx->term.trail_dmg.y,
                                 ctx->term.trail_dmg.w, ctx->term.trail_dmg.h);
@@ -5665,8 +5730,7 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, uint32_t *px_buf, sfte_dama
 
             if (fabsf(up_x - cx0 - t * ab_x) <= rx && fabsf(up_y - cy0 - t * ab_y) <= ry) {
                 uint8_t alpha = (uint8_t)(128.0f * t);
-                px_buf[y * ctx->width + x] = _sfte_render_blend_argb(
-                    px_buf[y * ctx->width + x], SFTE_CURSOR_TRAIL_COLOR, alpha);
+                SFTE_COLOR_BLEND_PIXEL(px_buf, x, y, ctx->width, SFTE_CURSOR_TRAIL_COLOR, alpha);
             }
         }
     }
@@ -5705,18 +5769,15 @@ static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, u
 /*
     Paints the solid background color for a terminal cell.
 */
-static void _sfte_render_bg_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, int16_t row,
+static void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
                                  uint32_t bg) {
     int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
     int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
     uint32_t final_bg = (SFTE_COLOR_BG_OPACITY << 24) | (bg & ~SFTE_COLOR_ALPHA_MASK);
 
-    for (int32_t y = 0; y < ctx->font.cell_height; ++y) {
-        for (int32_t x = 0; x < ctx->font.cell_width; ++x) {
-            int32_t px_idx = (cy + y) * ctx->width + (cx + x);
-            if (px_idx < ctx->width * ctx->height) px_buf[px_idx] = final_bg;
-        }
-    }
+    for (int32_t y = 0; y < ctx->font.cell_height; ++y)
+        for (int32_t x = 0; x < ctx->font.cell_width; ++x)
+            SFTE_COLOR_DRAW_PIXEL(px_buf, cx + x, cy + y, ctx->width, final_bg);
 }
 
 /*
@@ -5724,8 +5785,8 @@ static void _sfte_render_bg_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, i
     The texture atlas only stores alpha values.
     It blends the requested foreground color into the existing background using this alpha mask.
 */
-static void _sfte_render_fg_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, int16_t row,
-                                 uint32_t rune, uint32_t fg, sfte_font_cache *target_cache) {
+static void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
+                                 sfte_rune rune, uint32_t fg, sfte_font_cache *target_cache) {
     if (rune == ' ') return;
 
     sfte_font_cache *actual_cache = target_cache;
@@ -5752,8 +5813,7 @@ static void _sfte_render_fg_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, i
                                 ->atlas_pxs[(g->y0 + y) * SFTE_FONT_ATLAS_SIZE + (g->x0 + x)] &
                             0xFF;
 
-            int32_t px_idx = screen_y * ctx->width + screen_x;
-            px_buf[px_idx] = _sfte_render_blend_argb(px_buf[px_idx], fg, alpha);
+            SFTE_COLOR_BLEND_PIXEL(px_buf, screen_x, screen_y, ctx->width, fg, alpha);
         }
     }
 }
@@ -5764,8 +5824,8 @@ static void _sfte_render_fg_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, i
     Undercurls require a periodic wave. To avoid slow math calls per-pixel, this implementation
     approximates a triangle wave using integer mod arithmetic.
 */
-static inline void _sfte_render_underline_cell(sfte_ctx *ctx, uint32_t *px_buf, int32_t cx,
-                                               int32_t cy, int32_t render_w, sfte_cell *vcell) {
+static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
+                                               int32_t render_w, sfte_cell *vcell) {
     uint32_t base_ul_col = _sfte_grid_get_ul(vcell);
     uint32_t underline_col = SFTE_COLOR_ALPHA_MASK | (base_ul_col & ~SFTE_COLOR_ALPHA_MASK);
 
@@ -5801,7 +5861,8 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, uint32_t *px_buf, 
 
             for (int32_t dy = 0; dy < thick; ++dy) {
                 int32_t py = base_y + y_off + dy;
-                if (py >= 0 && py < ctx->height) px_buf[py * ctx->width + x] = underline_col;
+                if (py >= 0 && py < ctx->height)
+                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, py, ctx->width, underline_col);
             }
             break;
         }
@@ -5812,8 +5873,10 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, uint32_t *px_buf, 
             for (int32_t dy = 0; dy < half_thick; ++dy) {
                 int32_t py1 = base_y - half_thick + dy;
                 int32_t py2 = base_y + gap + dy;
-                if (py1 >= 0 && py1 < ctx->height) px_buf[py1 * ctx->width + x] = underline_col;
-                if (py2 >= 0 && py2 < ctx->height) px_buf[py2 * ctx->width + x] = underline_col;
+                if (py1 >= 0 && py1 < ctx->height)
+                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, py1, ctx->width, underline_col);
+                if (py2 >= 0 && py2 < ctx->height)
+                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, py2, ctx->width, underline_col);
             }
             break;
         }
@@ -5825,7 +5888,8 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, uint32_t *px_buf, 
         default:
             for (int32_t dy = 0; dy < thick; ++dy) {
                 int32_t py = base_y + dy;
-                if (py >= 0 && py < ctx->height) px_buf[py * ctx->width + x] = underline_col;
+                if (py >= 0 && py < ctx->height)
+                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, py, ctx->width, underline_col);
             }
         }
     }
@@ -5835,8 +5899,8 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, uint32_t *px_buf, 
     Renders non-block cursors (bar/underline).
     Block cursors are rendered naturally by inverting the cells background/foreground colors.
 */
-static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, uint32_t *px_buf, int32_t cx,
-                                             int32_t cy, int32_t render_w) {
+static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
+                                             int32_t render_w) {
     uint32_t cur_col = SFTE_COLOR_ALPHA_MASK | (SFTE_CURSOR_COLOR & ~SFTE_COLOR_ALPHA_MASK);
 
     if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_UNDERLINE) {
@@ -5845,21 +5909,23 @@ static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, uint32_t *px_buf, in
 
         for (int32_t y = cy + ctx->font.cell_height - thick; y < cy + ctx->font.cell_height; ++y)
             for (int32_t x = cx; x < cx + render_w; ++x)
-                if (x < ctx->width && y < ctx->height) px_buf[y * ctx->width + x] = cur_col;
+                if (x < ctx->width && y < ctx->height)
+                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, ctx->width, cur_col);
     } else if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BAR) {
         int32_t thick = ctx->font.cell_width * SFTE_CURSOR_THICK_RATIO;
         if (thick < 1) thick = 1;
 
         for (int32_t y = cy; y < cy + ctx->font.cell_height; ++y)
             for (int32_t x = cx; x < cx + thick; ++x)
-                if (x < ctx->width && y < ctx->height) px_buf[y * ctx->width + x] = cur_col;
+                if (x < ctx->width && y < ctx->height)
+                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, ctx->width, cur_col);
     }
 }
 
 /*
     Dispatcher for terminal text decorations (underlines, cursor).
 */
-static void _sfte_render_decorations_cell(sfte_ctx *ctx, uint32_t *px_buf, int16_t col, int16_t row,
+static void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
                                           sfte_cell *vcell, uint8_t is_cursor) {
     int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
     int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
@@ -5879,7 +5945,7 @@ static void _sfte_render_decorations_cell(sfte_ctx *ctx, uint32_t *px_buf, int16
     Background rendering pass.
     Renders the whole grid, contrary to `_sfte_render_bg_cell`.
 */
-static inline void _sfte_render_bg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t vis_col,
+static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
                                         int16_t vis_row) {
     for (int16_t r = 0; r < ctx->term.rows; ++r)
         for (int16_t c = 0; c < ctx->term.cols; ++c) {
@@ -5933,7 +5999,7 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t
     Foreground rendering pass.
     Renders the whole grid, contrary to `_sfte_render_fg_cell`.
 */
-static inline void _sfte_render_fg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t vis_col,
+static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
                                         int16_t vis_row, sfte_damage_rect *out_dmg) {
     for (int16_t r = 0; r < ctx->term.rows; ++r) {
         for (int16_t c = 0; c < ctx->term.cols; ++c) {
@@ -5956,7 +6022,7 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, uint32_t *px_buf, int16_t
             }
 #endif
 
-            uint32_t rune = vcell->rune ? vcell->rune : ' ';
+            sfte_rune rune = vcell->rune ? vcell->rune : ' ';
             uint32_t fg = _sfte_grid_get_fg(vcell);
             uint32_t bg = _sfte_grid_get_bg(vcell);
             uint8_t attr = vcell->attr;
@@ -7020,7 +7086,7 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
 // >>public api
 // =================================================================================================
 
-void sfte_render(sfte_ctx *ctx, uint32_t *px_buf, int32_t w, int32_t h, sfte_damage_rect *out_dmg) {
+void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_rect *out_dmg) {
     ctx->width = w;
     ctx->height = h;
     uint8_t pad_was_dirty = ctx->padding_dirty;
@@ -7647,9 +7713,12 @@ size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes) {
 
         for (int16_t c = row_start; c <= actual_end; ++c) {
             sfte_cell *vcell = _sfte_grid_get_cell(ctx, c, logical_r);
-            uint32_t rune = (vcell->rune && vcell->rune != ' ') ? vcell->rune : ' ';
+            sfte_rune rune = (vcell->rune && vcell->rune != ' ') ? vcell->rune : ' ';
 
-            // UTF-8 encoding
+// UTF-8 encoding
+#if SFTE_TERM_ASCII_CHARSET
+            _SFTE_WRITE_CHAR(rune);
+#else   // !SFTE_TERM_ASCII_CHARSET
             if (rune < 0x80) {
                 _SFTE_WRITE_CHAR(rune);
             } else if (rune < 0x800) {
@@ -7665,6 +7734,7 @@ size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes) {
                 _SFTE_WRITE_CHAR(0x80 | ((rune >> 6) & 0x3F));
                 _SFTE_WRITE_CHAR(0x80 | (rune & 0x3F));
             }
+#endif  // !SFTE_TERM_ASCII_CHARSET
         }
 
         // Inject newlines for multi-line selections, unless the line soft-wrapped
