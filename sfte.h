@@ -1636,13 +1636,11 @@ typedef struct {
 } _sfte_reflow_state;
 #endif  // SFTE_TERM_REFLOW
 
-#if SFTE_TERM_ANIMATE_SCREEN
 typedef struct {
     int32_t y_off;
     sfte_cell *grid;
     uint8_t hide_cursor;
 } _sfte_pass_info;
-#endif  // SFTE_TERM_ANIMATE_SCREEN
 
 // =================================================================================================
 // >>internal api
@@ -7375,7 +7373,10 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
     ctx->term.alt_active = orig_alt_active;
 
 #if SFTE_CURSOR_TRAIL
-    if (!ctx->term.is_animating) _sfte_render_trail(ctx, px_buf, out_dmg);
+#if SFTE_TERM_SCREEN_ANIMATE
+    if (!ctx->term.is_animating)
+#endif  // SFTE_TERM_SCREEN_ANIMATE
+        _sfte_render_trail(ctx, px_buf, out_dmg);
 #endif  // SFTE_CURSOR_TRAIL
 
     if (ctx->padding_dirty) {
