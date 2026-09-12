@@ -5991,15 +5991,24 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
     }
 
     if (passes_cnt == 2) {
-        passes[0].y_off = out_y + (int32_t)ctx->term.scroll_y_offset;
+        passes[0].y_off = out_y;
+#if SFTE_TERM_SCROLL_SMOOTH
+        passes[0].y_off += (int32_t)ctx->term.scroll_y_offset;
+#endif  // SFTE_TERM_SCROLL_SMOOTH
         passes[0].grid = ctx->term.alt_cells;
         passes[0].hide_cursor = 1;
 
-        passes[1].y_off = in_y + (int32_t)ctx->term.scroll_y_offset;
+        passes[1].y_off = in_y;
+#if SFTE_TERM_SCROLL_SMOOTH
+        passes[1].y_off += (int32_t)ctx->term.scroll_y_offset;
+#endif  // SFTE_TERM_SCROLL_SMOOTH
         passes[1].grid = ctx->term.cells;
         passes[1].hide_cursor = ctx->term.hide_cursor;
-    } else
+    }
+#if SFTE_TERM_SCROLL_SMOOTH
+    else
         passes[0].y_off = (int32_t)ctx->term.scroll_y_offset;
+#endif  // SFTE_TERM_SCROLL_SMOOTH
 
     return passes_cnt;
 }
