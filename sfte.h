@@ -161,6 +161,25 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #endif  // SFTE_TERM_ALT_SCREEN
 
 /*
+    Enables scrolling animation on TUI open/close (alt screen toggle).
+
+    NOTE:
+    This is an experimental feature.
+    It makes the animation toggle on EVERY alt screen switch.
+    It's purely sugar candy, might slightly affect the CPU usage.
+*/
+#ifndef SFTE_TERM_ANIMATE_SCREEN
+#define SFTE_TERM_ANIMATE_SCREEN 0
+#endif  // SFTE_TERM_ANIMATE_SCREEN
+
+/*
+    Duration of the scrolling animation on TUI open/close (alt screen toggle).
+*/
+#ifndef SFTE_TERM_ANIM_DUR_MS
+#define SFTE_TERM_ANIM_DUR_MS 250.0f
+#endif  // SFTE_TERM_ANIM_DUR_MS
+
+/*
     Enables text reflow when resizing the terminal window.
     With SFTE_TERM_REFLOW disabled, any text going off the right edge is deleted immediately.
 */
@@ -287,8 +306,9 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
     e.g.: monochrome, RGB233, RGB565.
 */
 #ifndef SFTE_COLOR_DRAW_PIXEL
-#define SFTE_COLOR_DRAW_PIXEL(buf, x, y, stride, color)                                            \
-    ((uint32_t *)(buf))[(y) * (stride) + (x)] = (color);
+#define SFTE_COLOR_DRAW_PIXEL(buf, x, y, stride, height, color)                                    \
+    if ((x) >= 0 && (x) < (stride) && (y) >= 0 && (y) < (height))                                  \
+        ((uint32_t *)(buf))[(y) * (stride) + (x)] = (color);
 #endif  // SFTE_COLOR_DRAW_PIXEL
 
 /*
@@ -1358,6 +1378,9 @@ typedef struct {
     uint64_t last_move_ms;
     uint64_t last_trail_update_ms;
 #endif  // SFTE_CURSOR_TRAIL
+#if SFTE_TERM_ANIMATE_SCREEN
+    uint64_t anim_start_ms;
+#endif  // SFTE_TERM_ANIMATE_SCREEN
 
     uint32_t saved_fg[2];  // 0=main, 1=alt
     uint32_t saved_bg[2];  // 0=main, 1=alt
@@ -1457,6 +1480,10 @@ typedef struct {
 #if SFTE_UNDERLINE_EXTENDED
     uint8_t cur_ul_style;
 #endif  // SFTE_UNDERLINE_EXTENDED
+#if SFTE_TERM_ANIMATE_SCREEN
+    uint8_t is_animating;
+    uint8_t anim_dir;  // 1=entering alt screen, -1=leaving
+#endif                 // SFTE_TERM_ANIMATE_SCREEN
 } sfte_term;
 
 /*
@@ -1608,6 +1635,14 @@ typedef struct {
     uint8_t is_live;
 } _sfte_reflow_state;
 #endif  // SFTE_TERM_REFLOW
+
+#if SFTE_TERM_ANIMATE_SCREEN
+typedef struct {
+    int32_t y_off;
+    sfte_cell *grid;
+    uint8_t hide_cursor;
+} _sfte_pass_info;
+#endif  // SFTE_TERM_ANIMATE_SCREEN
 
 // =================================================================================================
 // >>internal api
@@ -1902,21 +1937,28 @@ static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, sfte_damage_
 #if SFTE_CURSOR_TRAIL
 static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_rect *out_dmg);
 #endif  // SFTE_CURSOR_TRAIL
+#if SFTE_TERM_ANIMATE_SCREEN
+static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_y, int32_t *in_y);
+#endif  // SFTE_TERM_ANIMATE_SCREEN
+static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
+                                                  _sfte_pass_info *passes,
+                                                  sfte_damage_rect *out_dmg);
 static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, uint8_t src_a);
 static void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
-                                 uint32_t bg);
+                                 int32_t y_off, uint32_t bg);
 static void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
-                                 sfte_rune rune, uint32_t fg, sfte_font_cache *target_cache);
+                                 int32_t y_off, sfte_rune rune, uint32_t fg,
+                                 sfte_font_cache *target_cache);
 static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
                                                int32_t render_w, sfte_cell *vcell);
 static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
                                              int render_w);
 static void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
-                                          sfte_cell *vcell, uint8_t is_cursor);
+                                          int32_t y_off, sfte_cell *vcell, uint8_t is_cursor);
 static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
-                                        int16_t vis_row);
+                                        int16_t vis_row, int32_t y_off);
 static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
-                                        int16_t vis_row, sfte_damage_rect *out_dmg);
+                                        int16_t vis_row, int32_t y_off, sfte_damage_rect *out_dmg);
 
 // -------------------------------------------------------------------------------------------------
 // >wayland
@@ -2902,18 +2944,18 @@ static void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf) {
 
 #if SFTE_WINDOW_PAD_Y
     for (int32_t y = 0; y < SFTE_WINDOW_PAD_Y && y < h; ++y)
-        for (int32_t x = 0; x < w; ++x) SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, bg);
+        for (int32_t x = 0; x < w; ++x) SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, h, bg);
 
     for (int32_t y = SFTE_WINDOW_PAD_Y + grid_h; y < h; ++y)
-        for (int32_t x = 0; x < w; ++x) SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, bg);
+        for (int32_t x = 0; x < w; ++x) SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, h, bg);
 #endif  // SFTE_WINDOW_PAD_Y
 
 #if SFTE_WINDOW_PAD_X
     for (int32_t y = SFTE_WINDOW_PAD_Y; y < SFTE_WINDOW_PAD_Y + grid_h && y < h; ++y) {
         for (int32_t x = 0; x < SFTE_WINDOW_PAD_X && x < w; ++x)
-            SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, bg);
+            SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, h, bg);
         for (int32_t x = SFTE_WINDOW_PAD_X + grid_w; x < w; ++x)
-            SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, bg);
+            SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, h, bg);
     }
 #endif  // SFTE_WINDOW_PAD_X
 }
@@ -4394,6 +4436,11 @@ static inline void _sfte_csi_set_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt, 
 #if SFTE_CURSOR_TRAIL
                 ctx->term.last_move_ms = 0;
 #endif  // SFTE_CURSOR_TRAIL
+#if SFTE_TERM_ANIMATE_SCREEN
+                ctx->term.is_animating = 1;
+                ctx->term.anim_dir = 1;
+                ctx->term.anim_start_ms = SFTE_TIME_MS();
+#endif  // SFTE_TERM_ANIMATE_SCREEN
 
                 if (!ctx->term.alt_cells)
                     ctx->term.alt_cells = (sfte_cell *)SFTE_CALLOC(ctx->term.cols * ctx->term.rows,
@@ -4451,6 +4498,11 @@ static inline void _sfte_csi_reset_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt
                 ctx->term.kitty_kb_stack_idx[1] = 0;
                 ctx->term.kitty_kb_stack[1][0] = 0;
 #endif  // SFTE_INPUT_KITTY
+#if SFTE_TERM_ANIMATE_SCREEN
+                ctx->term.is_animating = 1;
+                ctx->term.anim_dir = -1;
+                ctx->term.anim_start_ms = SFTE_TIME_MS();
+#endif  // SFTE_TERM_ANIMATE_SCREEN
 
                 if (ctx->term.alt_cells) {
                     sfte_cell *tmp = ctx->term.cells;
@@ -5820,6 +5872,80 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
 }
 #endif
 
+#if SFTE_TERM_ANIMATE_SCREEN
+/*
+    Calculates the Y offsets for the outgoing and incoming screens during an alt-screen transition.
+    Returns 1 when finished animating.
+    Returns 0 if static if currently animating.
+*/
+static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_y, int32_t *in_y) {
+    if (!ctx->term.is_animating) return 0;
+
+    uint64_t now = SFTE_TIME_MS();
+    float progress = (now - ctx->term.anim_start_ms) / SFTE_TERM_ANIM_DUR_MS;
+    if (progress >= 1.0f) {
+        ctx->term.is_animating = 0;
+        return 1;
+    }
+
+    float ease = 1.0f - powf(1.0f - progress, 3.0f);
+    int32_t slide = (uint32_t)(ease * ctx->height);
+
+    if (ctx->term.anim_dir == 1) {  // entering alt / sliding up
+        *out_y = -slide;
+        *in_y = ctx->height - slide;
+    } else {  // exiting alt / sliding down
+        *out_y = slide;
+        *in_y = -ctx->height + slide;
+    }
+    return 0;
+}
+#endif  // SFTE_TERM_ANIMATE_SCREEN
+
+/*
+    Prepares render passes.
+    Returns the amount of passes in `passes` array.
+*/
+static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
+                                                  _sfte_pass_info *passes,
+                                                  sfte_damage_rect *out_dmg) {
+    passes[0].y_off = 0;
+    passes[0].grid = ctx->term.cells;
+    passes[0].hide_cursor = ctx->term.hide_cursor;
+
+#if SFTE_TERM_ANIMATE_SCREEN
+    if (!ctx->term.is_animating) return 1;
+
+    int32_t out_y = 0, in_y = 0;
+    uint8_t anim_finished = _sfte_render_get_anim_offsets(ctx, &out_y, &in_y);
+    _sfte_render_damage_add(out_dmg, 0, 0, ctx->width, ctx->height);
+    ctx->padding_dirty = 1;
+
+    uint32_t clear_bg = (SFTE_COLOR_BG_OPACITY << 24) | (SFTE_COLOR_BG & ~SFTE_COLOR_ALPHA_MASK);
+    for (int32_t y = 0; y < ctx->height; ++y)
+        for (int32_t x = 0; x < ctx->width; ++x)
+            SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, ctx->width, ctx->height, clear_bg);
+
+    for (int32_t i = 0; i < ctx->term.rows * ctx->term.cols; ++i) {
+        ctx->term.cells[i].dirty = 1;
+        if (!anim_finished && ctx->term.alt_cells) ctx->term.alt_cells[i].dirty = 1;
+    }
+
+    if (anim_finished) return 1;
+
+    passes[0].y_off = out_y;
+    passes[0].grid = ctx->term.alt_cells;
+    passes[0].hide_cursor = 1;
+
+    passes[1].y_off = in_y;
+    passes[1].grid = ctx->term.cells;
+    passes[1].hide_cursor = ctx->term.hide_cursor;
+
+    return 2;
+#endif  // SFTE_TERM_ANIMATE_SCREEN
+    return 1;
+}
+
 /*
     Fast integer-based alpha blending.
     Used for cursor trails and antialiased font rendering to avoid slow floating-point math.
@@ -5845,14 +5971,15 @@ static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, u
     Paints the solid background color for a terminal cell.
 */
 static void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
-                                 uint32_t bg) {
+                                 int32_t y_off, uint32_t bg) {
     int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
     int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
     uint32_t final_bg = (SFTE_COLOR_BG_OPACITY << 24) | (bg & ~SFTE_COLOR_ALPHA_MASK);
 
     for (int32_t y = 0; y < ctx->font.cell_height; ++y)
         for (int32_t x = 0; x < ctx->font.cell_width; ++x)
-            SFTE_COLOR_DRAW_PIXEL(px_buf, cx + x, cy + y, ctx->width, final_bg);
+            SFTE_COLOR_DRAW_PIXEL(px_buf, cx + x, cy + y + y_off, ctx->width, ctx->height,
+                                  final_bg);
 }
 
 /*
@@ -5861,7 +5988,8 @@ static void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16
     It blends the requested foreground color into the existing background using this alpha mask.
 */
 static void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
-                                 sfte_rune rune, uint32_t fg, sfte_font_cache *target_cache) {
+                                 int32_t y_off, sfte_rune rune, uint32_t fg,
+                                 sfte_font_cache *target_cache) {
     if (rune == ' ') return;
 
     sfte_font_cache *actual_cache = target_cache;
@@ -5875,7 +6003,7 @@ static void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16
     int32_t glyph_height = g->y1 - g->y0;
 
     int32_t draw_x = cx + (int)g->xoff;
-    int32_t draw_y = cy + ctx->font.ascent + (int)g->yoff;
+    int32_t draw_y = cy + ctx->font.ascent + (int)g->yoff + y_off;
 
     for (int32_t y = 0; y < glyph_height; ++y) {
         for (int32_t x = 0; x < glyph_width; ++x) {
@@ -5937,7 +6065,7 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int3
             for (int32_t dy = 0; dy < thick; ++dy) {
                 int32_t py = base_y + y_off + dy;
                 if (py >= 0 && py < ctx->height)
-                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, py, ctx->width, underline_col);
+                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, py, ctx->width, ctx->height, underline_col);
             }
             break;
         }
@@ -5949,9 +6077,9 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int3
                 int32_t py1 = base_y - half_thick + dy;
                 int32_t py2 = base_y + gap + dy;
                 if (py1 >= 0 && py1 < ctx->height)
-                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, py1, ctx->width, underline_col);
+                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, py1, ctx->width, ctx->height, underline_col);
                 if (py2 >= 0 && py2 < ctx->height)
-                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, py2, ctx->width, underline_col);
+                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, py2, ctx->width, ctx->height, underline_col);
             }
             break;
         }
@@ -5964,7 +6092,7 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int3
             for (int32_t dy = 0; dy < thick; ++dy) {
                 int32_t py = base_y + dy;
                 if (py >= 0 && py < ctx->height)
-                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, py, ctx->width, underline_col);
+                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, py, ctx->width, ctx->height, underline_col);
             }
         }
     }
@@ -5990,7 +6118,7 @@ static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_
         for (int32_t y = cy + ctx->font.cell_height - thick; y < cy + ctx->font.cell_height; ++y)
             for (int32_t x = cx; x < cx + render_w; ++x)
                 if (x < ctx->width && y < ctx->height)
-                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, ctx->width, cur_col);
+                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, ctx->width, ctx->height, cur_col);
     } else if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BAR) {
         int32_t thick = ctx->font.cell_width * SFTE_CURSOR_THICK_RATIO;
         if (thick < 1) thick = 1;
@@ -5998,7 +6126,7 @@ static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_
         for (int32_t y = cy; y < cy + ctx->font.cell_height; ++y)
             for (int32_t x = cx; x < cx + thick; ++x)
                 if (x < ctx->width && y < ctx->height)
-                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, ctx->width, cur_col);
+                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, ctx->width, ctx->height, cur_col);
     }
 }
 
@@ -6006,7 +6134,7 @@ static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_
     Dispatcher for terminal text decorations (underlines, cursor).
 */
 static void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
-                                          sfte_cell *vcell, uint8_t is_cursor) {
+                                          int32_t y_off, sfte_cell *vcell, uint8_t is_cursor) {
     int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
     int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
 
@@ -6016,9 +6144,9 @@ static void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t c
 #endif  // SFTE_FONT_WIDE_CHARS
 
     if (vcell->attr & _SFTE_ATTR_UNDERLINE)
-        _sfte_render_underline_cell(ctx, px_buf, cx, cy, render_w, vcell);
+        _sfte_render_underline_cell(ctx, px_buf, cx, cy + y_off, render_w, vcell);
     if (is_cursor && _SFTE_CUR_STYLE(ctx) != SFTE_CURSOR_STYLE_BLOCK)
-        _sfte_render_cursor_shape(ctx, px_buf, cx, cy, render_w);
+        _sfte_render_cursor_shape(ctx, px_buf, cx, cy + y_off, render_w);
 }
 
 /*
@@ -6026,7 +6154,7 @@ static void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t c
     Renders the whole grid, contrary to `_sfte_render_bg_cell`.
 */
 static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
-                                        int16_t vis_row) {
+                                        int16_t vis_row, int32_t y_off) {
     for (int16_t r = 0; r < ctx->term.rows; ++r)
         for (int16_t c = 0; c < ctx->term.cols; ++c) {
             int32_t idx = _SFTE_GRID_IDX(ctx, c, r);
@@ -6070,12 +6198,12 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
 
             if (is_cursor && _SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BLOCK) {
 #if SFTE_CURSOR_DYNAMIC
-                _sfte_render_bg_cell(ctx, px_buf, c, r, ctx->term.cursor_color);
+                _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, ctx->term.cursor_color);
 #else   // !SFTE_CURSOR_DYNAMIC
-                _sfte_render_bg_cell(ctx, px_buf, c, r, SFTE_CURSOR_COLOR);
+                _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, SFTE_CURSOR_COLOR);
 #endif  // !SFTE_CURSOR_DYNAMIC
             } else
-                _sfte_render_bg_cell(ctx, px_buf, c, r, bg);
+                _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, bg);
         }
 }
 
@@ -6084,7 +6212,7 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
     Renders the whole grid, contrary to `_sfte_render_fg_cell`.
 */
 static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
-                                        int16_t vis_row, sfte_damage_rect *out_dmg) {
+                                        int16_t vis_row, int32_t y_off, sfte_damage_rect *out_dmg) {
     for (int16_t r = 0; r < ctx->term.rows; ++r) {
         for (int16_t c = 0; c < ctx->term.cols; ++c) {
             int32_t idx = _SFTE_GRID_IDX(ctx, c, r);
@@ -6140,8 +6268,8 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
                 target_cache = &ctx->font.italic;
 #endif
 
-            _sfte_render_fg_cell(ctx, px_buf, c, r, rune, fg, target_cache);
-            _sfte_render_decorations_cell(ctx, px_buf, c, r, vcell, is_cursor);
+            _sfte_render_fg_cell(ctx, px_buf, c, r, y_off, rune, fg, target_cache);
+            _sfte_render_decorations_cell(ctx, px_buf, c, r, y_off, vcell, is_cursor);
 
             int32_t dmg_cy = r * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
             int32_t dmg_ch = ctx->font.cell_height;
@@ -7044,6 +7172,11 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
         }
 #endif  // SFTE_CURSOR_BLINK
 
+#if SFTE_TERM_ANIMATE_SCREEN
+        // If the screen is transitioning, force 60fps
+        if (ctx->term.is_animating && (timeout == -1 || timeout > 16)) timeout = 16;
+#endif  // SFTE_TERM_ANIMATE_SCREEN
+
 #if SFTE_CURSOR_TRAIL
         // If the cursor is moving, cap the poll timeout to 16ms (60fps) to animate the trail
         if (ctx->term.is_trailing && (timeout == -1 || timeout > 16))
@@ -7133,6 +7266,10 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
         }
 #endif  // SFTE_CURSOR_TRAIL
 
+#if SFTE_TERM_ANIMATE_SCREEN
+        if (ctx->term.is_animating) app->needs_render = 1;
+#endif  // SFTE_TERM_ANIMATE_SCREEN
+
         // Dispatch render pass
         if (app->needs_render) {
             sfte_damage_rect dmg = {0};
@@ -7172,13 +7309,9 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
 void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_rect *out_dmg) {
     ctx->width = w;
     ctx->height = h;
-    uint8_t pad_was_dirty = ctx->padding_dirty;
 
-    if (ctx->padding_dirty) {
-        _sfte_view_clear_padding_rects(ctx, px_buf);
-        ctx->padding_dirty--;
-        _sfte_render_damage_add(out_dmg, 0, 0, w, h);
-    }
+    _sfte_pass_info passes[2];
+    uint8_t num_passes = _sfte_render_prepare_passes(ctx, px_buf, passes, out_dmg);
 
     int16_t new_cols = (w - (2 * SFTE_WINDOW_PAD_X)) / ctx->font.cell_width;
     int16_t new_rows = (h - (2 * SFTE_WINDOW_PAD_Y)) / ctx->font.cell_height;
@@ -7211,23 +7344,45 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
 #endif  // SFTE_TERM_SCROLLBACK_CAP
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 
-    // Rendering order:
-    // BG grid -> BG images -> FG grid -> FG images
-    _sfte_render_bg_grid(ctx, px_buf, vis_col, vis_row);
+    uint8_t orig_alt_active = ctx->term.alt_active;
+
+    for (uint8_t p = 0; p < num_passes; ++p) {
+        ctx->term.cells = passes[p].grid;
+        ctx->term.hide_cursor = passes[p].hide_cursor;
+
+        if (num_passes == 2 && p == 0)
+            ctx->term.alt_active = !orig_alt_active;
+        else
+            ctx->term.alt_active = orig_alt_active;
+
+        // Rendering order:
+        // BG grid -> BG images -> FG grid -> FG images
+        _sfte_render_bg_grid(ctx, px_buf, vis_col, vis_row, passes[p].y_off);
 
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
-    _sfte_render_images(ctx, px_buf, out_dmg, 1, base_y_off, pad_was_dirty);
+        _sfte_render_images(ctx, px_buf, out_dmg, 1, base_y_off + passes[p].y_off,
+                            ctx->padding_dirty);
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 
-    _sfte_render_fg_grid(ctx, px_buf, vis_col, vis_row, out_dmg);
+        _sfte_render_fg_grid(ctx, px_buf, vis_col, vis_row, passes[p].y_off, out_dmg);
 
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
-    _sfte_render_images(ctx, px_buf, out_dmg, 0, base_y_off, pad_was_dirty);
+        _sfte_render_images(ctx, px_buf, out_dmg, 0, base_y_off + passes[p].y_off,
+                            ctx->padding_dirty);
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
+    }
+
+    ctx->term.alt_active = orig_alt_active;
 
 #if SFTE_CURSOR_TRAIL
-    _sfte_render_trail(ctx, px_buf, out_dmg);
+    if (!ctx->term.is_animating) _sfte_render_trail(ctx, px_buf, out_dmg);
 #endif  // SFTE_CURSOR_TRAIL
+
+    if (ctx->padding_dirty) {
+        _sfte_view_clear_padding_rects(ctx, px_buf);
+        ctx->padding_dirty--;
+        if (num_passes == 1) _sfte_render_damage_add(out_dmg, 0, 0, w, h);
+    }
 
     if (out_dmg->w > 0 && out_dmg->h > 0) {
         out_dmg->x = _SFTE_CLAMP(out_dmg->x, 0, w);
