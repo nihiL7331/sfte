@@ -225,6 +225,22 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #endif  // SFTE_TERM_SCROLL_STEP
 
 /*
+    Enables smooth text scrolling.
+    Essentially enables linear interpolation to closest row, replacing instant snapping.
+    Because it requires polling while scrolling, it will affect CPU usage while scrolling.
+*/
+#ifndef SFTE_TERM_SCROLL_SMOOTH
+#define SFTE_TERM_SCROLL_SMOOTH 1
+#endif  // SFTE_TERM_SCROLL_SMOOTH
+
+/*
+    Affects how fast the scroll smooths to its target position.
+*/
+#ifndef SFTE_TERM_SCROLL_DECAY
+#define SFTE_TERM_SCROLL_DECAY 0.05f
+#endif  // SFTE_TERM_SCROLL_DECAY
+
+/*
     Narrows the allowed characters range to ASCII, lowering the memory usage.
     Enabling this allows the terminal to store each rune as a `uint8_t` rather than a `uint32_t`.
 */
@@ -1381,6 +1397,9 @@ typedef struct {
 #if SFTE_TERM_ANIMATE_SCREEN
     uint64_t anim_start_ms;
 #endif  // SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_SCROLL_SMOOTH
+    uint64_t last_scroll_ms;
+#endif  // SFTE_TERM_SCROLL_SMOOTH
 
     uint32_t saved_fg[2];  // 0=main, 1=alt
     uint32_t saved_bg[2];  // 0=main, 1=alt
@@ -1409,6 +1428,10 @@ typedef struct {
     uint32_t next_img_id;
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
     uint32_t cursor_color;
+#if SFTE_TERM_SCROLL_SMOOTH
+    int32_t last_sb_offset;
+    float scroll_y_offset;
+#endif  // SFTE_TERM_SCROLL_SMOOTH
 
     int16_t cols;
     int16_t rows;
@@ -1484,6 +1507,9 @@ typedef struct {
     uint8_t is_animating;
     uint8_t anim_dir;  // 1=entering alt screen, -1=leaving
 #endif                 // SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_SCROLL_SMOOTH
+    uint8_t is_scrolling;
+#endif  // SFTE_TERM_SCROLL_SMOOTH
 } sfte_term;
 
 /*
@@ -1636,13 +1662,11 @@ typedef struct {
 } _sfte_reflow_state;
 #endif  // SFTE_TERM_REFLOW
 
-#if SFTE_TERM_ANIMATE_SCREEN
 typedef struct {
     int32_t y_off;
     sfte_cell *grid;
     uint8_t hide_cursor;
 } _sfte_pass_info;
-#endif  // SFTE_TERM_ANIMATE_SCREEN
 
 // =================================================================================================
 // >>internal api
@@ -5875,8 +5899,9 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
 #if SFTE_TERM_ANIMATE_SCREEN
 /*
     Calculates the Y offsets for the outgoing and incoming screens during an alt-screen transition.
-    Returns 1 when finished animating.
-    Returns 0 if static if currently animating.
+    Returns 2 when finished animating.
+    Returns 1 when currently animating.
+    Returns 0 if static.
 */
 static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_y, int32_t *in_y) {
     if (!ctx->term.is_animating) return 0;
@@ -5885,7 +5910,7 @@ static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_
     float progress = (now - ctx->term.anim_start_ms) / SFTE_TERM_ANIM_DUR_MS;
     if (progress >= 1.0f) {
         ctx->term.is_animating = 0;
-        return 1;
+        return 2;
     }
 
     float ease = 1.0f - powf(1.0f - progress, 3.0f);
@@ -5898,7 +5923,7 @@ static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_
         *out_y = slide;
         *in_y = -ctx->height + slide;
     }
-    return 0;
+    return 1;
 }
 #endif  // SFTE_TERM_ANIMATE_SCREEN
 
@@ -5913,37 +5938,79 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
     passes[0].grid = ctx->term.cells;
     passes[0].hide_cursor = ctx->term.hide_cursor;
 
-#if SFTE_TERM_ANIMATE_SCREEN
-    if (!ctx->term.is_animating) return 1;
-
+    uint8_t needs_wipe = 0;
+    uint8_t passes_cnt = 1;
     int32_t out_y = 0, in_y = 0;
-    uint8_t anim_finished = _sfte_render_get_anim_offsets(ctx, &out_y, &in_y);
-    _sfte_render_damage_add(out_dmg, 0, 0, ctx->width, ctx->height);
-    ctx->padding_dirty = 1;
 
-    uint32_t clear_bg = (SFTE_COLOR_BG_OPACITY << 24) | (SFTE_COLOR_BG & ~SFTE_COLOR_ALPHA_MASK);
-    for (int32_t y = 0; y < ctx->height; ++y)
-        for (int32_t x = 0; x < ctx->width; ++x)
-            SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, ctx->width, ctx->height, clear_bg);
+#if SFTE_TERM_ANIMATE_SCREEN
+    uint8_t anim_state = _sfte_render_get_anim_offsets(ctx, &out_y, &in_y);
+    if (anim_state == 1 || anim_state == 2) needs_wipe = 1;
+    if (anim_state == 1) passes_cnt = 2;
+#endif  // SFTE_TERM_ANIMATE_SCREEN
 
-    for (int32_t i = 0; i < ctx->term.rows * ctx->term.cols; ++i) {
-        ctx->term.cells[i].dirty = 1;
-        if (!anim_finished && ctx->term.alt_cells) ctx->term.alt_cells[i].dirty = 1;
+#if SFTE_TERM_SCROLL_SMOOTH
+    int32_t sb_diff = ctx->term.sb_offset - ctx->term.last_sb_offset;
+    if (sb_diff != 0) {
+        ctx->term.scroll_y_offset -= sb_diff * ctx->font.cell_height;
+        ctx->term.last_sb_offset = ctx->term.sb_offset;
+        ctx->term.is_scrolling = 1;
+        ctx->term.last_scroll_ms = SFTE_TIME_MS();
     }
 
-    if (anim_finished) return 1;
+    if (ctx->term.is_scrolling) {
+        uint64_t now = SFTE_TIME_MS();
+        float dt = (float)(now - ctx->term.last_scroll_ms);
+        ctx->term.last_scroll_ms = now;
 
-    passes[0].y_off = out_y;
-    passes[0].grid = ctx->term.alt_cells;
-    passes[0].hide_cursor = 1;
+        float decay = dt * SFTE_TERM_SCROLL_DECAY;
+        if (decay > 1.0f) decay = 1.0f;
 
-    passes[1].y_off = in_y;
-    passes[1].grid = ctx->term.cells;
-    passes[1].hide_cursor = ctx->term.hide_cursor;
+        ctx->term.scroll_y_offset -= ctx->term.scroll_y_offset * decay;
 
-    return 2;
-#endif  // SFTE_TERM_ANIMATE_SCREEN
-    return 1;
+        if (fabsf(ctx->term.scroll_y_offset) < 0.5f) {
+            ctx->term.scroll_y_offset = 0.0f;
+            ctx->term.is_scrolling = 0;
+        }
+        needs_wipe = 1;
+    }
+#endif  // SFTE_TERM_SCROLL_SMOOTH
+
+    if (needs_wipe) {
+        _sfte_render_damage_add(out_dmg, 0, 0, ctx->width, ctx->height);
+        ctx->padding_dirty = 1;
+        uint32_t clear_bg = (SFTE_COLOR_BG_OPACITY << 24) |
+                            (SFTE_COLOR_BG & ~SFTE_COLOR_ALPHA_MASK);
+        for (int32_t y = 0; y < ctx->height; ++y)
+            for (int32_t x = 0; x < ctx->width; ++x)
+                SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, ctx->width, ctx->height, clear_bg);
+
+        for (int32_t i = 0; i < ctx->term.rows * ctx->term.cols; ++i) {
+            ctx->term.cells[i].dirty = 1;
+            if (passes_cnt == 2 && ctx->term.alt_cells) ctx->term.alt_cells[i].dirty = 1;
+        }
+    }
+
+    if (passes_cnt == 2) {
+        passes[0].y_off = out_y;
+#if SFTE_TERM_SCROLL_SMOOTH
+        passes[0].y_off += (int32_t)ctx->term.scroll_y_offset;
+#endif  // SFTE_TERM_SCROLL_SMOOTH
+        passes[0].grid = ctx->term.alt_cells;
+        passes[0].hide_cursor = 1;
+
+        passes[1].y_off = in_y;
+#if SFTE_TERM_SCROLL_SMOOTH
+        passes[1].y_off += (int32_t)ctx->term.scroll_y_offset;
+#endif  // SFTE_TERM_SCROLL_SMOOTH
+        passes[1].grid = ctx->term.cells;
+        passes[1].hide_cursor = ctx->term.hide_cursor;
+    }
+#if SFTE_TERM_SCROLL_SMOOTH
+    else
+        passes[0].y_off = (int32_t)ctx->term.scroll_y_offset;
+#endif  // SFTE_TERM_SCROLL_SMOOTH
+
+    return passes_cnt;
 }
 
 /*
@@ -7177,6 +7244,11 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
         if (ctx->term.is_animating && (timeout == -1 || timeout > 16)) timeout = 16;
 #endif  // SFTE_TERM_ANIMATE_SCREEN
 
+#if SFTE_TERM_SCROLL_SMOOTH
+        // If currently scrolling, force 60fps
+        if (ctx->term.is_scrolling && (timeout == -1 || timeout > 16)) timeout = 16;
+#endif  // SFTE_TERM_SCROLL_SMOOTH
+
 #if SFTE_CURSOR_TRAIL
         // If the cursor is moving, cap the poll timeout to 16ms (60fps) to animate the trail
         if (ctx->term.is_trailing && (timeout == -1 || timeout > 16))
@@ -7269,6 +7341,10 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
 #if SFTE_TERM_ANIMATE_SCREEN
         if (ctx->term.is_animating) app->needs_render = 1;
 #endif  // SFTE_TERM_ANIMATE_SCREEN
+
+#if SFTE_TERM_SCROLL_SMOOTH
+        if (ctx->term.is_scrolling) app->needs_render = 1;
+#endif  // SFTE_TERM_SCROLL_SMOOTH
 
         // Dispatch render pass
         if (app->needs_render) {
@@ -7375,7 +7451,10 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
     ctx->term.alt_active = orig_alt_active;
 
 #if SFTE_CURSOR_TRAIL
-    if (!ctx->term.is_animating) _sfte_render_trail(ctx, px_buf, out_dmg);
+#if SFTE_TERM_SCREEN_ANIMATE
+    if (!ctx->term.is_animating)
+#endif  // SFTE_TERM_SCREEN_ANIMATE
+        _sfte_render_trail(ctx, px_buf, out_dmg);
 #endif  // SFTE_CURSOR_TRAIL
 
     if (ctx->padding_dirty) {
