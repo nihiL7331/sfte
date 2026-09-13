@@ -161,6 +161,14 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #endif  // SFTE_TERM_ALT_SCREEN
 
 /*
+    Defines frame rate during rendering (in frames per second).
+    Used for screen animations, smooth scrolling, cursor trail.
+*/
+#ifndef SFTE_TERM_REFRESH_RATE
+#define SFTE_TERM_REFRESH_RATE 60
+#endif  // SFTE_TERM_REFRESH_RATE
+
+/*
     Enables scrolling animation on TUI open/close (alt screen toggle).
 
     NOTE:
@@ -957,6 +965,13 @@ pid_t sfte_posix_pty_spawn(sfte_ctx *ctx, int32_t *out_fd, uint16_t px_w, uint16
 */
 void sfte_posix_pty_resize(sfte_ctx *ctx, int32_t pty_fd, uint16_t px_w, uint16_t px_h);
 #endif  // SFTE_NO_POSIX
+
+/*
+    Returns the maximum time (in milliseconds) the host event loop
+    should sleep before the terminal requires a redraw.
+    Returns -1 if the terminal is fully static and can sleep indefinitely.
+*/
+int32_t sfte_get_timeout_ms(sfte_ctx *ctx);
 
 // =================================================================================================
 // >>rendering & parsing
@@ -7287,43 +7302,17 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
         struct pollfd fds[] = {{.fd = wl_fd, .events = POLLIN},
                                {.fd = app->pty_fd, .events = POLLIN},
                                {.fd = app->repeat_timer_fd, .events = POLLIN}};
-        int timeout = -1 /* wait indefinetely by default */;
 
-#if SFTE_CURSOR_BLINK
-        uint64_t now = SFTE_TIME_MS();
-        if (ctx->term.blink_enabled) {
-            int time_to_next = (int)(ctx->term.next_blink_ms - now);
-            if (time_to_next < 0) time_to_next = 0;
-
-            if (timeout == -1 || time_to_next < timeout) timeout = time_to_next;
-        }
-#endif  // SFTE_CURSOR_BLINK
-
-#if SFTE_TERM_ANIMATE_SCREEN
-        // If the screen is transitioning, force 60fps
-        if (ctx->term.is_animating && (timeout == -1 || timeout > 16)) timeout = 16;
-#endif  // SFTE_TERM_ANIMATE_SCREEN
-
-#if SFTE_TERM_SCROLL_SMOOTH
-        // If currently scrolling, force 60fps
-        if (ctx->term.is_scrolling && (timeout == -1 || timeout > 16)) timeout = 16;
-#endif  // SFTE_TERM_SCROLL_SMOOTH
-
-#if SFTE_CURSOR_TRAIL
-        // If the cursor is moving, cap the poll timeout to 16ms (60fps) to animate the trail
-        if (ctx->term.is_trailing && (timeout == -1 || timeout > 16))
-            timeout = 16;
-        else
-#endif                                           // SFTE_CURSOR_TRAIL
-            if (app->needs_render) timeout = 0;  // Don't sleep if we already know we need to draw
+        int32_t timeout = sfte_get_timeout_ms(app->ctx);
+        if (app->needs_render) timeout = 0;  // Don't sleep if we already know we need to draw
 
         if (poll(fds, _SFTE_ARRAY_LEN(fds), timeout) == -1) break;
 
 #if SFTE_CURSOR_BLINK
         if (ctx->term.blink_enabled) {
-            now = SFTE_TIME_MS();
+            uint64_t now = SFTE_TIME_MS();
             if (now >= ctx->term.next_blink_ms) {
-                ctx->term.blink_visible ^= 1;
+                ctx->term.blink_visible = !ctx->term.blink_visible;
                 ctx->term.next_blink_ms = now + SFTE_CURSOR_BLINK_RATE_MS;
                 int16_t vis_col = ctx->term.cursor_col >= ctx->term.cols ? ctx->term.cols - 1
                                                                          : ctx->term.cursor_col;
@@ -7370,10 +7359,7 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
             float target_rx = vis_col * ctx->font.cell_width;
             float target_ry = ctx->term.cursor_row * ctx->font.cell_height;
 
-#if !SFTE_CURSOR_BLINK
-            uint64_t
-#endif  // !SFTE_CURSOR_BLINK
-                now = SFTE_TIME_MS();
+            uint64_t now = SFTE_TIME_MS();
             if (ctx->term.last_trail_update_ms == 0) ctx->term.last_trail_update_ms = now;
             float dt_ms = (float)(now - ctx->term.last_trail_update_ms);
             ctx->term.last_trail_update_ms = now;
@@ -7675,6 +7661,36 @@ void sfte_posix_pty_resize(sfte_ctx *ctx, int32_t pty_fd, uint16_t px_w, uint16_
     ioctl(pty_fd, TIOCSWINSZ, &ws);
 }
 #endif  // !SFTE_NO_POSIX
+
+int32_t sfte_get_timeout_ms(sfte_ctx *ctx) {
+    if (!ctx) return -1;
+
+    int32_t frame_ms = 1000 / SFTE_TERM_REFRESH_RATE;
+    if (frame_ms < 1) frame_ms = 1;
+
+#if SFTE_TERM_ANIMATE_SCREEN
+    if (ctx->term.is_animating) return frame_ms;
+#endif  // SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_SCROLL_SMOOTH
+    if (ctx->term.is_scrolling) return frame_ms;
+#endif  // SFTE_TERM_SCROLL_SMOOTH
+#if SFTE_CURSOR_TRAIL
+    if (ctx->term.is_trailing) return frame_ms;
+#endif  // SFTE_CURSOR_TRAIL
+
+    int32_t timeout = -1;
+
+#if SFTE_CURSOR_BLINK
+    if (ctx->term.blink_enabled && !ctx->term.hide_cursor) {
+        uint64_t now = SFTE_TIME_MS();
+        int32_t time_to_next = (int32_t)(ctx->term.next_blink_ms - now);
+        if (time_to_next < 0) time_to_next = 0;
+        timeout = time_to_next;
+    }
+#endif  // SFTE_CURSOR_BLINK
+
+    return timeout;
+}
 
 // =================================================================================================
 // >>rendering & parsing
