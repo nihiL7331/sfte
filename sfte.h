@@ -998,6 +998,31 @@ void sfte_zoom(sfte_ctx *ctx, float delta);
 // >>input & interaction
 // =================================================================================================
 
+/*
+    Feed raw UTF-8 text into the terminal.
+    Used for both keyboard typing and streaming clipboard chunks.
+*/
+void sfte_input_text(sfte_ctx *ctx, const char *text, size_t len);
+
+/*
+    Signals the start of a clipboard paste operation.
+    Generates \033[200~ (bracketed paste) if enabled by the shell.
+*/
+void sfte_input_paste_begin(sfte_ctx *ctx);
+
+/*
+    Signals the end of a clipboard paste operation.
+    Generates \033[201~ (bracketed paste) if enabled by the shell.
+*/
+void sfte_input_paste_end(sfte_ctx *ctx);
+
+/*
+    Feed a physical control key into the terminal.
+    Automatically generates VT100/ANSI escape codes (arrows, F-keys).
+    Routes through `sfte_write_cb` internally.
+*/
+void sfte_input_key(sfte_ctx *ctx, sfte_key key, uint32_t mod_mask);
+
 #if SFTE_INPUT_MOUSE
 /*
     Feed raw OS mouse events to the terminal engine for hover events and drag selections.
@@ -1017,18 +1042,6 @@ void sfte_mouse_click(sfte_ctx *ctx, sfte_mouse_button btn, uint8_t pressed, int
 */
 void sfte_mouse_scroll(sfte_ctx *ctx, int8_t dir, int32_t px_x, int32_t px_y);
 #endif  // SFTE_INPUT_MOUSE
-
-#if SFTE_INPUT_KITTY
-/*
-    Generates the kitty keyboard (CSI u) or standard CSI escape sequence for a given key.
-    Returns bytes written to `out_buf`, or `0` if inactive/unhandled.
-    `key` is a backend-agnostic `sfte_key` enum. may be SFTE_KEY_KONE if key is purely text.
-    `codepoint` is the raw UTF-32 character value of the key (if applicable).
-    `mod_mask` is a bitmask of the active modifiers using SFTE_MOD_* definitions.
-*/
-size_t sfte_kitty_kb_encode(sfte_ctx *ctx, sfte_key key, uint32_t codepoint, uint32_t mod_mask,
-                            char *out_buf, size_t max_bytes);
-#endif  // SFTE_INPUT_KITTY
 
 #if SFTE_INPUT_HYPERLINKS
 /*
@@ -1861,6 +1874,10 @@ static void _sfte_sixel_deinit(sfte_ctx *ctx);
 // -------------------------------------------------------------------------------------------------
 // >kitty
 // -------------------------------------------------------------------------------------------------
+#if SFTE_INPUT_KITTY
+size_t _sfte_kitty_kb_encode(sfte_ctx *ctx, sfte_key key, uint32_t codepoint, uint32_t mod_mask,
+                             char *out_buf, size_t max_bytes);
+#endif  // SFTE_INPUT_KITTY
 #if SFTE_IMG_KITTY
 static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int32_t src_wid, int32_t src_hei,
                                                   int32_t dst_wid, int32_t dst_hei);
@@ -3616,6 +3633,94 @@ static void _sfte_sixel_deinit(sfte_ctx *ctx) {
 // =================================================================================================
 // >>kitty
 // =================================================================================================
+#if SFTE_INPUT_KITTY
+/*
+    Generates the kitty keyboard (CSI u) or standard CSI escape sequence for a given key.
+    Returns bytes written to `out_buf`, or `0` if inactive/unhandled.
+    `key` is a backend-agnostic `sfte_key` enum. may be SFTE_KEY_KONE if key is purely text.
+    `codepoint` is the raw UTF-32 character value of the key (if applicable).
+    `mod_mask` is a bitmask of the active modifiers using SFTE_MOD_* definitions.
+*/
+size_t _sfte_kitty_kb_encode(sfte_ctx *ctx, sfte_key key, uint32_t codepoint, uint32_t mod_mask,
+                             char *out_buf, size_t max_bytes) {
+    uint8_t s_idx = ctx->term.alt_active ? 1 : 0;
+    uint16_t flags = ctx->term.kitty_kb_stack[s_idx][ctx->term.kitty_kb_stack_idx[s_idx]];
+    if (flags == 0) return 0;
+
+    uint8_t disambiguate = (flags & 1) != 0;
+    uint8_t report_all = (flags & 8) != 0;
+
+    uint32_t csi_mod = 1;
+    if (mod_mask & SFTE_MOD_SHIFT) csi_mod += 1;
+    if (mod_mask & SFTE_MOD_ALT) csi_mod += 2;
+    if (mod_mask & SFTE_MOD_CTRL) csi_mod += 4;
+    if (mod_mask & SFTE_MOD_SUPER) csi_mod += 8;
+
+    // arrows, home, end, f1-f4 -> CSI 1 ; mods [char]
+    char func_char = 0;
+    switch (key) {
+    case SFTE_KEY_UP: func_char = 'A'; break;
+    case SFTE_KEY_DOWN: func_char = 'B'; break;
+    case SFTE_KEY_RIGHT: func_char = 'C'; break;
+    case SFTE_KEY_LEFT: func_char = 'D'; break;
+    case SFTE_KEY_HOME: func_char = 'H'; break;
+    case SFTE_KEY_END: func_char = 'F'; break;
+    case SFTE_KEY_F1: func_char = 'P'; break;
+    case SFTE_KEY_F2: func_char = 'Q'; break;
+    case SFTE_KEY_F3: func_char = 'R'; break;
+    case SFTE_KEY_F4: func_char = 'S'; break;
+    default: break;
+    }
+
+    if (func_char) {
+        if (csi_mod > 1 || disambiguate)
+            return snprintf(out_buf, max_bytes, "\033[1;%u%c", csi_mod, func_char);
+        return 0;
+    }
+
+    // insert, delete, pgup, pgdn, f5-f12 -> CSI num ; mods ~
+    uint8_t tilde_num = 0;
+    switch (key) {
+    case SFTE_KEY_INSERT: tilde_num = 2; break;
+    case SFTE_KEY_DELETE: tilde_num = 3; break;
+    case SFTE_KEY_PAGE_UP: tilde_num = 5; break;
+    case SFTE_KEY_PAGE_DOWN: tilde_num = 6; break;
+    case SFTE_KEY_F5: tilde_num = 15; break;
+    case SFTE_KEY_F6: tilde_num = 17; break;
+    case SFTE_KEY_F7: tilde_num = 18; break;
+    case SFTE_KEY_F8: tilde_num = 19; break;
+    case SFTE_KEY_F9: tilde_num = 20; break;
+    case SFTE_KEY_F10: tilde_num = 21; break;
+    case SFTE_KEY_F11: tilde_num = 23; break;
+    case SFTE_KEY_F12: tilde_num = 24; break;
+    default: break;
+    }
+
+    if (tilde_num) {
+        if (csi_mod > 1 || disambiguate)
+            return snprintf(out_buf, max_bytes, "\033[%d;%u~", tilde_num, csi_mod);
+        return 0;
+    }
+
+    // text keys and control keys -> CSI codepoint ; mods u
+    uint32_t target_cp = codepoint ? codepoint : (uint32_t)key;
+    // we can safely use SFTE_KEY_* as ASCII values
+    if (target_cp > 0) {
+        uint8_t is_control = (target_cp == SFTE_KEY_TAB || target_cp == SFTE_KEY_ENTER ||
+                              target_cp == SFTE_KEY_ESCAPE || target_cp == SFTE_KEY_BACKSPACE);
+
+        // Emit kitty sequence if:
+        // - modifiers are pressed, or
+        // - it's a special control key, or
+        // - its requested all keys to be escaped.
+        if (csi_mod > 1 || is_control || report_all)
+            return snprintf(out_buf, max_bytes, "\033[%u;%uu", target_cp, csi_mod);
+    }
+
+    return 0;
+}
+#endif  // SFTE_INPUT_KITTY
+
 #if SFTE_IMG_KITTY
 
 #define _SFTE_KITTY_FMT_RGB 24
@@ -6755,7 +6860,7 @@ static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
 
     if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !app->xkb_state) return;
 
-    // clear selection on key press
+    // Clear selection on key press
     if (app->ctx->term.mouse_sel_active) {
         app->ctx->term.mouse_sel_active = 0;
         _sfte_grid_dirty_range(app->ctx, 0, app->ctx->term.cols * app->ctx->term.rows);
@@ -6803,74 +6908,23 @@ static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
         return;
     }
 
-    char buf[128];
-    size_t size = 0;
-
     // ignore standalone mod keys
     if (sym >= XKB_KEY_Shift_L && sym <= XKB_KEY_Hyper_R) return;
 
-#if SFTE_INPUT_KITTY
     sfte_key key_id = _sfte_xkb_to_sfte_key(sym);
-    uint32_t codepoint = xkb_keysym_to_utf32(sym);
 
-    size = sfte_kitty_kb_encode(app->ctx, key_id, codepoint, active_mods, buf, sizeof(buf));
-#endif  // SFTE_INPUT_KITTY
+    if (key_id != SFTE_KEY_NONE)
+        sfte_input_key(app->ctx, key_id, active_mods);
+    else {
+        uint32_t cp = xkb_keysym_to_utf32(sym);
 
-    // if unhandled by kitty
-    if (size == 0) {
-#define MAP_KEY(str)                                                                               \
-    do {                                                                                           \
-        size = sizeof(str) - 1;                                                                    \
-        memcpy(buf, str, size);                                                                    \
-    } while (0)
-
-        switch (sym) {
-        case XKB_KEY_Up: MAP_KEY("\033[A"); break;
-        case XKB_KEY_Down: MAP_KEY("\033[B"); break;
-        case XKB_KEY_Right: MAP_KEY("\033[C"); break;
-        case XKB_KEY_Left: MAP_KEY("\033[D"); break;
-        case XKB_KEY_BackSpace: MAP_KEY("\x7f"); break;
-        case XKB_KEY_Delete: MAP_KEY("\033[3~"); break;
-        case XKB_KEY_Home: MAP_KEY("\033[H"); break;
-        case XKB_KEY_End: MAP_KEY("\033[F"); break;
-        default:
-            if (ctrl) {
-                if (sym >= XKB_KEY_a && sym <= XKB_KEY_z) {
-                    buf[0] = sym - XKB_KEY_a + 1;
-                    size = 1;
-                } else if (sym >= XKB_KEY_A && sym <= XKB_KEY_Z) {
-                    buf[0] = sym - XKB_KEY_A + 1;
-                    size = 1;
-                } else if (sym == XKB_KEY_space) {
-                    buf[0] = '\0';
-                    size = 1;
-                }
-            }
-
-            // if nothing intercepted the key, default to generating
-            // standard terminal control chars or psasing through the raw utf8 string
-            if (size == 0) size = xkb_state_key_get_utf8(app->xkb_state, keycode, buf, sizeof(buf));
+        if (cp > 0 && (active_mods & (SFTE_MOD_CTRL | SFTE_MOD_ALT | SFTE_MOD_SUPER)))
+            sfte_input_key(app->ctx, (sfte_key)cp, active_mods);
+        else {
+            char buf[64];
+            int8_t size = (int8_t)xkb_state_key_get_utf8(app->xkb_state, keycode, buf, sizeof(buf));
+            if (size > 0) sfte_input_text(app->ctx, buf, size);
         }
-
-        // if alt is held, prepend esc byte
-        if (alt && size > 0 && size < (int)(sizeof(buf) - 1)) {
-            memmove(buf + 1, buf, size++);
-            buf[0] = '\033';
-        }
-#undef MAP_KEY
-    }
-
-    if (size > 0) {
-#if SFTE_TERM_SCROLLBACK_CAP
-        sfte_term *term = &app->ctx->term;
-        if (term->sb_offset > 0) {
-            term->sb_offset = 0;
-            _sfte_grid_dirty_range(app->ctx, 0, term->cols * term->rows);
-            app->needs_render = 1;
-        }
-#endif  // SFTE_TERM_SCROLLBACK_CAP
-
-        write(app->pty_fd, buf, size);
     }
 }
 
@@ -7198,13 +7252,14 @@ static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg) {
 
         wl_display_roundtrip(app->display);
 
-        if (app->ctx->term.bracketed_paste) write(app->pty_fd, "\033[200~", 6);
+        sfte_input_paste_begin(app->ctx);
 
         char buf[SFTE_CLIPBOARD_BUF_SIZE];
         ssize_t n;
-        while ((n = read(fds[0], buf, sizeof(buf))) > 0) write(app->pty_fd, buf, n);
 
-        if (app->ctx->term.bracketed_paste) write(app->pty_fd, "\033[201~", 6);
+        while ((n = read(fds[0], buf, sizeof(buf))) > 0) sfte_input_text(app->ctx, buf, n);
+
+        sfte_input_paste_end(app->ctx);
 
         close(fds[0]);
     }
@@ -7384,172 +7439,8 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
 // #################################################################################################
 
 // =================================================================================================
-// >>public api
+// >>core initialization & lifecycle
 // =================================================================================================
-
-void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_rect *out_dmg) {
-    ctx->width = w;
-    ctx->height = h;
-
-    _sfte_pass_info passes[2];
-    uint8_t num_passes = _sfte_render_prepare_passes(ctx, px_buf, passes, out_dmg);
-
-    int16_t new_cols = (w - (2 * SFTE_WINDOW_PAD_X)) / ctx->font.cell_width;
-    int16_t new_rows = (h - (2 * SFTE_WINDOW_PAD_Y)) / ctx->font.cell_height;
-    if (new_cols != ctx->term.cols || new_rows != ctx->term.rows)
-        _sfte_grid_resize(ctx, new_cols, new_rows);
-
-    int16_t vis_col = _SFTE_CLAMP(ctx->term.cursor_col, 0, ctx->term.cols - 1);
-    int32_t vis_row = ctx->term.cursor_row;
-#if SFTE_TERM_SCROLLBACK_CAP
-    vis_row += ctx->term.sb_offset;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
-#if SFTE_FONT_WIDE_CHARS
-    uint8_t cursor_is_visible = (vis_row >= 0 && vis_row < ctx->term.rows);
-    if (cursor_is_visible && vis_col > 0 &&
-        (_sfte_grid_get_cell(ctx, vis_col, vis_row)->attr & _SFTE_ATTR_DUMMY))
-        vis_col--;
-#endif  // SFTE_FONT_WIDE_CHARS
-
-    _sfte_render_propagate_damage(ctx, vis_col, vis_row);
-
-#if SFTE_CURSOR_TRAIL
-    _sfte_grid_dirty_trail(ctx);
-#endif  // SFTE_CURSOR_TRAIL
-
-#if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
-    _sfte_render_sort_images(ctx);
-    int32_t base_y_off = 0;
-#if SFTE_TERM_SCROLLBACK_CAP
-    base_y_off = ctx->term.sb_offset * ctx->font.cell_height;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
-#endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
-
-    uint8_t orig_alt_active = ctx->term.alt_active;
-
-    for (uint8_t p = 0; p < num_passes; ++p) {
-        ctx->term.cells = passes[p].grid;
-        ctx->term.hide_cursor = passes[p].hide_cursor;
-
-        if (num_passes == 2 && p == 0)
-            ctx->term.alt_active = !orig_alt_active;
-        else
-            ctx->term.alt_active = orig_alt_active;
-
-        // Rendering order:
-        // BG grid -> BG images -> FG grid -> FG images
-        _sfte_render_bg_grid(ctx, px_buf, vis_col, vis_row, passes[p].y_off);
-
-#if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
-        _sfte_render_images(ctx, px_buf, out_dmg, 1, base_y_off + passes[p].y_off,
-                            ctx->padding_dirty);
-#endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
-
-        _sfte_render_fg_grid(ctx, px_buf, vis_col, vis_row, passes[p].y_off, out_dmg);
-
-#if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
-        _sfte_render_images(ctx, px_buf, out_dmg, 0, base_y_off + passes[p].y_off,
-                            ctx->padding_dirty);
-#endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
-    }
-
-    ctx->term.alt_active = orig_alt_active;
-
-#if SFTE_CURSOR_TRAIL
-#if SFTE_TERM_SCREEN_ANIMATE
-    if (!ctx->term.is_animating)
-#endif  // SFTE_TERM_SCREEN_ANIMATE
-        _sfte_render_trail(ctx, px_buf, out_dmg);
-#endif  // SFTE_CURSOR_TRAIL
-
-    if (ctx->padding_dirty) {
-        _sfte_view_clear_padding_rects(ctx, px_buf);
-        ctx->padding_dirty--;
-        if (num_passes == 1) _sfte_render_damage_add(out_dmg, 0, 0, w, h);
-    }
-
-    if (out_dmg->w > 0 && out_dmg->h > 0) {
-        out_dmg->x = _SFTE_CLAMP(out_dmg->x, 0, w);
-        out_dmg->y = _SFTE_CLAMP(out_dmg->y, 0, h);
-        out_dmg->w = _SFTE_CLAMP(out_dmg->w, 0, w);
-        out_dmg->h = _SFTE_CLAMP(out_dmg->h, 0, h);
-        for (int32_t i = 0; i < ctx->term.rows * ctx->term.cols; ++i) ctx->term.cells[i].dirty = 0;
-    } else
-        out_dmg->w = 0, out_dmg->h = 0;
-}
-
-void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
-    if (w <= 0 || h <= 0) return;
-
-    ctx->width = w;
-    ctx->height = h;
-    ctx->padding_dirty = 1;
-
-    int16_t new_cols = (w - (2 * SFTE_WINDOW_PAD_X)) / ctx->font.cell_width;
-    if (new_cols < 1) new_cols = 1;
-    int16_t new_rows = (h - (2 * SFTE_WINDOW_PAD_Y)) / ctx->font.cell_height;
-    if (new_rows < 1) new_rows = 1;
-
-    if (new_cols != ctx->term.cols || new_rows != ctx->term.rows) {
-        _sfte_grid_resize(ctx, new_cols, new_rows);
-
-#if SFTE_CURSOR_TRAIL
-        ctx->term.tail_rx = ctx->term.cursor_col * ctx->font.cell_width;
-        ctx->term.tail_ry = ctx->term.cursor_row * ctx->font.cell_height;
-        ctx->term.is_trailing = 0;
-        ctx->term.trail_dmg.w = 0;
-#endif  // SFTE_CURSOR_TRAIL
-    }
-}
-
-void sfte_get_ideal_size(sfte_ctx *ctx, int16_t cols, int16_t rows, int32_t *out_w,
-                         int32_t *out_h) {
-    if (out_w) *out_w = cols * ctx->font.cell_width + (2 * SFTE_WINDOW_PAD_X);
-    if (out_h) *out_h = rows * ctx->font.cell_height + (2 * SFTE_WINDOW_PAD_Y);
-}
-
-void sfte_parse(sfte_ctx *ctx, const uint8_t *data, size_t len) {
-    if (len == 0 || !data) return;
-
-#if SFTE_TERM_SCROLLBACK_CAP
-    // snap view to bottom if new output arrives
-    if (ctx->term.sb_offset > 0) {
-        ctx->term.sb_offset = 0;
-        _sfte_grid_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
-    }
-#endif  // SFTE_TERM_SCROLLBACK_CAP
-
-#if SFTE_CURSOR_BLINK
-    // reset blink timer when typing/outputting
-    ctx->term.blink_visible = 1;
-    ctx->term.next_blink_ms = SFTE_TIME_MS() + SFTE_CURSOR_BLINK_RATE_MS;
-#endif  // SFTE_CURSOR_BLINK
-
-    // parse incoming stream
-    for (size_t i = 0; i < len; ++i) _sfte_parser_feed_byte(ctx, data[i]);
-
-#if SFTE_CURSOR_TRAIL
-    int16_t vis_col = ctx->term.cursor_col >= ctx->term.cols ? ctx->term.cols - 1
-                                                             : ctx->term.cursor_col;
-    float target_rx = vis_col * ctx->font.cell_width;
-    float target_ry = ctx->term.cursor_row * ctx->font.cell_height;
-
-    if (vis_col != ctx->term.last_grid_col || ctx->term.cursor_row != ctx->term.last_grid_row) {
-        uint64_t now = SFTE_TIME_MS();
-
-        if (ctx->term.last_move_ms != 0 && (now - ctx->term.last_move_ms >= SFTE_CURSOR_TRAIL))
-            ctx->term.is_trailing = 1;
-        else if (!ctx->term.is_trailing) {
-            ctx->term.tail_rx = target_rx;
-            ctx->term.tail_ry = target_ry;
-        }
-
-        ctx->term.last_grid_col = vis_col;
-        ctx->term.last_grid_row = ctx->term.cursor_row;
-        ctx->term.last_move_ms = now;
-    }
-#endif  // SFTE_CURSOR_TRAIL
-}
 
 sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
     sfte_ctx *ctx = (sfte_ctx *)SFTE_CALLOC(1, sizeof(sfte_ctx));
@@ -7785,6 +7676,174 @@ void sfte_posix_pty_resize(sfte_ctx *ctx, int32_t pty_fd, uint16_t px_w, uint16_
 }
 #endif  // !SFTE_NO_POSIX
 
+// =================================================================================================
+// >>rendering & parsing
+// =================================================================================================
+
+void sfte_get_ideal_size(sfte_ctx *ctx, int16_t cols, int16_t rows, int32_t *out_w,
+                         int32_t *out_h) {
+    if (out_w) *out_w = cols * ctx->font.cell_width + (2 * SFTE_WINDOW_PAD_X);
+    if (out_h) *out_h = rows * ctx->font.cell_height + (2 * SFTE_WINDOW_PAD_Y);
+}
+
+void sfte_parse(sfte_ctx *ctx, const uint8_t *data, size_t len) {
+    if (len == 0 || !data) return;
+
+#if SFTE_TERM_SCROLLBACK_CAP
+    // snap view to bottom if new output arrives
+    if (ctx->term.sb_offset > 0) {
+        ctx->term.sb_offset = 0;
+        _sfte_grid_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
+    }
+#endif  // SFTE_TERM_SCROLLBACK_CAP
+
+#if SFTE_CURSOR_BLINK
+    // reset blink timer when typing/outputting
+    ctx->term.blink_visible = 1;
+    ctx->term.next_blink_ms = SFTE_TIME_MS() + SFTE_CURSOR_BLINK_RATE_MS;
+#endif  // SFTE_CURSOR_BLINK
+
+    // parse incoming stream
+    for (size_t i = 0; i < len; ++i) _sfte_parser_feed_byte(ctx, data[i]);
+
+#if SFTE_CURSOR_TRAIL
+    int16_t vis_col = ctx->term.cursor_col >= ctx->term.cols ? ctx->term.cols - 1
+                                                             : ctx->term.cursor_col;
+    float target_rx = vis_col * ctx->font.cell_width;
+    float target_ry = ctx->term.cursor_row * ctx->font.cell_height;
+
+    if (vis_col != ctx->term.last_grid_col || ctx->term.cursor_row != ctx->term.last_grid_row) {
+        uint64_t now = SFTE_TIME_MS();
+
+        if (ctx->term.last_move_ms != 0 && (now - ctx->term.last_move_ms >= SFTE_CURSOR_TRAIL))
+            ctx->term.is_trailing = 1;
+        else if (!ctx->term.is_trailing) {
+            ctx->term.tail_rx = target_rx;
+            ctx->term.tail_ry = target_ry;
+        }
+
+        ctx->term.last_grid_col = vis_col;
+        ctx->term.last_grid_row = ctx->term.cursor_row;
+        ctx->term.last_move_ms = now;
+    }
+#endif  // SFTE_CURSOR_TRAIL
+}
+
+void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_rect *out_dmg) {
+    ctx->width = w;
+    ctx->height = h;
+
+    _sfte_pass_info passes[2];
+    uint8_t num_passes = _sfte_render_prepare_passes(ctx, px_buf, passes, out_dmg);
+
+    int16_t new_cols = (w - (2 * SFTE_WINDOW_PAD_X)) / ctx->font.cell_width;
+    int16_t new_rows = (h - (2 * SFTE_WINDOW_PAD_Y)) / ctx->font.cell_height;
+    if (new_cols != ctx->term.cols || new_rows != ctx->term.rows)
+        _sfte_grid_resize(ctx, new_cols, new_rows);
+
+    int16_t vis_col = _SFTE_CLAMP(ctx->term.cursor_col, 0, ctx->term.cols - 1);
+    int32_t vis_row = ctx->term.cursor_row;
+#if SFTE_TERM_SCROLLBACK_CAP
+    vis_row += ctx->term.sb_offset;
+#endif  // SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_FONT_WIDE_CHARS
+    uint8_t cursor_is_visible = (vis_row >= 0 && vis_row < ctx->term.rows);
+    if (cursor_is_visible && vis_col > 0 &&
+        (_sfte_grid_get_cell(ctx, vis_col, vis_row)->attr & _SFTE_ATTR_DUMMY))
+        vis_col--;
+#endif  // SFTE_FONT_WIDE_CHARS
+
+    _sfte_render_propagate_damage(ctx, vis_col, vis_row);
+
+#if SFTE_CURSOR_TRAIL
+    _sfte_grid_dirty_trail(ctx);
+#endif  // SFTE_CURSOR_TRAIL
+
+#if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
+    _sfte_render_sort_images(ctx);
+    int32_t base_y_off = 0;
+#if SFTE_TERM_SCROLLBACK_CAP
+    base_y_off = ctx->term.sb_offset * ctx->font.cell_height;
+#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
+
+    uint8_t orig_alt_active = ctx->term.alt_active;
+
+    for (uint8_t p = 0; p < num_passes; ++p) {
+        ctx->term.cells = passes[p].grid;
+        ctx->term.hide_cursor = passes[p].hide_cursor;
+
+        if (num_passes == 2 && p == 0)
+            ctx->term.alt_active = !orig_alt_active;
+        else
+            ctx->term.alt_active = orig_alt_active;
+
+        // Rendering order:
+        // BG grid -> BG images -> FG grid -> FG images
+        _sfte_render_bg_grid(ctx, px_buf, vis_col, vis_row, passes[p].y_off);
+
+#if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
+        _sfte_render_images(ctx, px_buf, out_dmg, 1, base_y_off + passes[p].y_off,
+                            ctx->padding_dirty);
+#endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
+
+        _sfte_render_fg_grid(ctx, px_buf, vis_col, vis_row, passes[p].y_off, out_dmg);
+
+#if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
+        _sfte_render_images(ctx, px_buf, out_dmg, 0, base_y_off + passes[p].y_off,
+                            ctx->padding_dirty);
+#endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
+    }
+
+    ctx->term.alt_active = orig_alt_active;
+
+#if SFTE_CURSOR_TRAIL
+#if SFTE_TERM_SCREEN_ANIMATE
+    if (!ctx->term.is_animating)
+#endif  // SFTE_TERM_SCREEN_ANIMATE
+        _sfte_render_trail(ctx, px_buf, out_dmg);
+#endif  // SFTE_CURSOR_TRAIL
+
+    if (ctx->padding_dirty) {
+        _sfte_view_clear_padding_rects(ctx, px_buf);
+        ctx->padding_dirty--;
+        if (num_passes == 1) _sfte_render_damage_add(out_dmg, 0, 0, w, h);
+    }
+
+    if (out_dmg->w > 0 && out_dmg->h > 0) {
+        out_dmg->x = _SFTE_CLAMP(out_dmg->x, 0, w);
+        out_dmg->y = _SFTE_CLAMP(out_dmg->y, 0, h);
+        out_dmg->w = _SFTE_CLAMP(out_dmg->w, 0, w);
+        out_dmg->h = _SFTE_CLAMP(out_dmg->h, 0, h);
+        for (int32_t i = 0; i < ctx->term.rows * ctx->term.cols; ++i) ctx->term.cells[i].dirty = 0;
+    } else
+        out_dmg->w = 0, out_dmg->h = 0;
+}
+
+void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
+    if (w <= 0 || h <= 0) return;
+
+    ctx->width = w;
+    ctx->height = h;
+    ctx->padding_dirty = 1;
+
+    int16_t new_cols = (w - (2 * SFTE_WINDOW_PAD_X)) / ctx->font.cell_width;
+    if (new_cols < 1) new_cols = 1;
+    int16_t new_rows = (h - (2 * SFTE_WINDOW_PAD_Y)) / ctx->font.cell_height;
+    if (new_rows < 1) new_rows = 1;
+
+    if (new_cols != ctx->term.cols || new_rows != ctx->term.rows) {
+        _sfte_grid_resize(ctx, new_cols, new_rows);
+
+#if SFTE_CURSOR_TRAIL
+        ctx->term.tail_rx = ctx->term.cursor_col * ctx->font.cell_width;
+        ctx->term.tail_ry = ctx->term.cursor_row * ctx->font.cell_height;
+        ctx->term.is_trailing = 0;
+        ctx->term.trail_dmg.w = 0;
+#endif  // SFTE_CURSOR_TRAIL
+    }
+}
+
 #if SFTE_FONT_ZOOM
 void sfte_zoom(sfte_ctx *ctx, float delta) {
     if (delta == 0) return;
@@ -7796,6 +7855,246 @@ void sfte_zoom(sfte_ctx *ctx, float delta) {
     sfte_resize(ctx, ctx->width, ctx->height);
 }
 #endif  // SFTE_FONT_ZOOM
+
+// =================================================================================================
+// >>input & interaction
+// =================================================================================================
+
+void sfte_input_text(sfte_ctx *ctx, const char *text, size_t len) {
+    if (!ctx || !text || !len) return;
+
+#if SFTE_TERM_SCROLLBACK_CAP
+    if (ctx->term.sb_offset > 0) {
+        ctx->term.sb_offset = 0;
+        _sfte_grid_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
+    }
+#endif  // SFTE_TERM_SCROLLBACK_CAP
+    if (ctx->write_cb) ctx->write_cb(ctx->user_data, text, len);
+}
+
+void sfte_input_paste_begin(sfte_ctx *ctx) {
+    if (!ctx || !ctx->write_cb || !ctx->term.bracketed_paste) return;
+    ctx->write_cb(ctx->user_data, "\033[200~", 6);
+}
+
+void sfte_input_paste_end(sfte_ctx *ctx) {
+    if (!ctx || !ctx->write_cb || !ctx->term.bracketed_paste) return;
+    ctx->write_cb(ctx->user_data, "\033[201~", 6);
+}
+
+void sfte_input_key(sfte_ctx *ctx, sfte_key key, uint32_t mod_mask) {
+    if (!ctx) return;
+
+    char buf[128];
+    size_t size = 0;
+
+#if SFTE_INPUT_KITTY
+    uint32_t codepoint = 0;
+    size = _sfte_kitty_kb_encode(ctx, key, codepoint, mod_mask, buf, sizeof(buf));
+    if (size > 0) {
+        sfte_input_text(ctx, buf, size);
+        return;
+    }
+#endif  // SFTE_INPUT_KITTY
+
+    uint8_t csi_mod = 1;
+    if (mod_mask & SFTE_MOD_SHIFT) csi_mod += 1;
+    if (mod_mask & SFTE_MOD_ALT) csi_mod += 2;
+    if (mod_mask & SFTE_MOD_CTRL) csi_mod += 4;
+    // SFTE_MOD_SUPER not handled on purpose
+
+    switch (key) {
+    case SFTE_KEY_UP:
+        if (csi_mod > 1)
+            size = (size_t)snprintf(buf, sizeof(buf), "\033[1;%dA", csi_mod);
+        else {
+            memcpy(buf, "\033[A", 3);
+            size = 3;
+        }
+        break;
+    case SFTE_KEY_DOWN:
+        if (csi_mod > 1)
+            size = (size_t)snprintf(buf, sizeof(buf), "\033[1;%dB", csi_mod);
+        else {
+            memcpy(buf, "\033[B", 3);
+            size = 3;
+        }
+        break;
+    case SFTE_KEY_RIGHT:
+        if (csi_mod > 1)
+            size = (size_t)snprintf(buf, sizeof(buf), "\033[1;%dC", csi_mod);
+        else {
+            memcpy(buf, "\033[C", 3);
+            size = 3;
+        }
+        break;
+    case SFTE_KEY_LEFT:
+        if (csi_mod > 1)
+            size = (size_t)snprintf(buf, sizeof(buf), "\033[1;%dD", csi_mod);
+        else {
+            memcpy(buf, "\033[D", 3);
+            size = 3;
+        }
+        break;
+    case SFTE_KEY_HOME:
+        memcpy(buf, "\033[H", 3);
+        size = 3;
+        break;
+    case SFTE_KEY_END:
+        memcpy(buf, "\033[F", 3);
+        size = 3;
+        break;
+    case SFTE_KEY_BACKSPACE:
+        buf[0] = (mod_mask & SFTE_MOD_ALT) ? '\033' : '\x7f';
+        buf[1] = (mod_mask & SFTE_MOD_ALT) ? '\x7f' : '\0';
+        size = (mod_mask & SFTE_MOD_ALT) ? 2 : 1;
+        break;
+    case SFTE_KEY_ENTER:
+        buf[0] = '\r';
+        size = 1;
+        break;
+    case SFTE_KEY_TAB:
+        buf[0] = '\t';
+        size = 1;
+        break;
+    case SFTE_KEY_ESCAPE:
+        buf[0] = '\033';
+        size = 1;
+        break;
+    case SFTE_KEY_PAGE_UP:
+        memcpy(buf, "\033[5~", 4);
+        size = 4;
+        break;
+    case SFTE_KEY_PAGE_DOWN:
+        memcpy(buf, "\033[6~", 4);
+        size = 4;
+        break;
+    case SFTE_KEY_F1:
+        if (csi_mod > 1)
+            size = (size_t)snprintf(buf, sizeof(buf), "\033[1;%dP", csi_mod);
+        else {
+            memcpy(buf, "\033OP", 3);
+            size = 3;
+        }
+        break;
+    case SFTE_KEY_F2:
+        if (csi_mod > 1)
+            size = (size_t)snprintf(buf, sizeof(buf), "\033[1;%dQ", csi_mod);
+        else {
+            memcpy(buf, "\033OQ", 3);
+            size = 3;
+        }
+        break;
+    case SFTE_KEY_F3:
+        if (csi_mod > 1)
+            size = (size_t)snprintf(buf, sizeof(buf), "\033[1;%dR", csi_mod);
+        else {
+            memcpy(buf, "\033OR", 3);
+            size = 3;
+        }
+        break;
+    case SFTE_KEY_F4:
+        if (csi_mod > 1)
+            size = (size_t)snprintf(buf, sizeof(buf), "\033[1;%dS", csi_mod);
+        else {
+            memcpy(buf, "\033OS", 3);
+            size = 3;
+        }
+        break;
+    case SFTE_KEY_F5:
+        if (csi_mod > 1)
+            size = (size_t)snprintf(buf, sizeof(buf), "\033[15;%d~", csi_mod);
+        else {
+            memcpy(buf, "\033[15~", 5);
+            size = 5;
+        }
+        break;
+    case SFTE_KEY_F6:
+        if (csi_mod > 1)
+            size = (size_t)snprintf(buf, sizeof(buf), "\033[17;%d~", csi_mod);
+        else {
+            memcpy(buf, "\033[17~", 5);
+            size = 5;
+        }
+        break;
+    case SFTE_KEY_F7:
+        if (csi_mod > 1)
+            size = (size_t)snprintf(buf, sizeof(buf), "\033[18;%d~", csi_mod);
+        else {
+            memcpy(buf, "\033[18~", 5);
+            size = 5;
+        }
+        break;
+    case SFTE_KEY_F8:
+        if (csi_mod > 1)
+            size = (size_t)snprintf(buf, sizeof(buf), "\033[19;%d~", csi_mod);
+        else {
+            memcpy(buf, "\033[19~", 5);
+            size = 5;
+        }
+        break;
+    case SFTE_KEY_F9:
+        if (csi_mod > 1)
+            size = (size_t)snprintf(buf, sizeof(buf), "\033[20;%d~", csi_mod);
+        else {
+            memcpy(buf, "\033[20~", 5);
+            size = 5;
+        }
+        break;
+    case SFTE_KEY_F10:
+        if (csi_mod > 1)
+            size = (size_t)snprintf(buf, sizeof(buf), "\033[21;%d~", csi_mod);
+        else {
+            memcpy(buf, "\033[21~", 5);
+            size = 5;
+        }
+        break;
+    case SFTE_KEY_F11:
+        if (csi_mod > 1)
+            size = (size_t)snprintf(buf, sizeof(buf), "\033[23;%d~", csi_mod);
+        else {
+            memcpy(buf, "\033[23~", 5);
+            size = 5;
+        }
+        break;
+    case SFTE_KEY_F12:
+        if (csi_mod > 1)
+            size = (size_t)snprintf(buf, sizeof(buf), "\033[24;%d~", csi_mod);
+        else {
+            memcpy(buf, "\033[24~", 5);
+            size = 5;
+        }
+        break;
+    default: break;
+    }
+
+    if (size == 0 && key >= 32 && key < 127) {
+        if (mod_mask & SFTE_MOD_CTRL) {
+            if (key >= 'a' && key <= 'z') {
+                buf[0] = key - 'a' + 1;
+                size = 1;
+            } else if (key >= 'A' && key <= 'Z') {
+                buf[0] = key - 'A' + 1;
+                size = 1;
+            } else if (key == ' ') {
+                buf[0] = '\0';
+                size = 1;
+            }
+        } else if ((mod_mask & SFTE_MOD_ALT) && !(mod_mask & SFTE_MOD_SHIFT)) {
+            buf[0] = (char)key;
+            size = 1;
+        }
+    }
+
+    // alt sends escape
+    if (size > 0 && (mod_mask & SFTE_MOD_ALT) && buf[0] != '\033') {
+        memmove(buf + 1, buf, size);
+        buf[0] = '\033';
+        size++;
+    }
+
+    sfte_input_text(ctx, buf, size);
+}
 
 #if SFTE_INPUT_MOUSE
 void sfte_mouse_move(sfte_ctx *ctx, int32_t px_x, int32_t px_y) {
@@ -7896,74 +8195,6 @@ void sfte_mouse_scroll(sfte_ctx *ctx, int8_t dir, int32_t px_x, int32_t px_y) {
 }
 #endif  // SFTE_INPUT_MOUSE
 
-#if SFTE_INPUT_KITTY
-size_t sfte_kitty_kb_encode(sfte_ctx *ctx, sfte_key key, uint32_t codepoint, uint32_t mod_mask,
-                            char *out_buf, size_t max_bytes) {
-    uint8_t s_idx = ctx->term.alt_active ? 1 : 0;
-    uint16_t flags = ctx->term.kitty_kb_stack[s_idx][ctx->term.kitty_kb_stack_idx[s_idx]];
-    if (flags == 0) return 0;
-
-    uint32_t csi_mod = 1;
-    if (mod_mask & SFTE_MOD_SHIFT) csi_mod += 1;
-    if (mod_mask & SFTE_MOD_ALT) csi_mod += 2;
-    if (mod_mask & SFTE_MOD_CTRL) csi_mod += 4;
-    if (mod_mask & SFTE_MOD_SUPER) csi_mod += 8;
-
-    // arrows, home, end, f1-f4 -> CSI 1 ; mods [char]
-    char func_char = 0;
-    switch (key) {
-    case SFTE_KEY_UP: func_char = 'A'; break;
-    case SFTE_KEY_DOWN: func_char = 'B'; break;
-    case SFTE_KEY_RIGHT: func_char = 'C'; break;
-    case SFTE_KEY_LEFT: func_char = 'D'; break;
-    case SFTE_KEY_HOME: func_char = 'H'; break;
-    case SFTE_KEY_END: func_char = 'F'; break;
-    case SFTE_KEY_F1: func_char = 'P'; break;
-    case SFTE_KEY_F2: func_char = 'Q'; break;
-    case SFTE_KEY_F3: func_char = 'R'; break;
-    case SFTE_KEY_F4: func_char = 'S'; break;
-    default: break;
-    }
-
-    if (func_char) {
-        if (csi_mod > 1) return snprintf(out_buf, max_bytes, "\033[1;%u%c", csi_mod, func_char);
-        return snprintf(out_buf, max_bytes, "\033[%c", func_char);
-    }
-
-    // insert, delete, pgup, pgdn, f5-f12 -> CSI num ; mods ~
-    uint8_t tilde_num = 0;
-    switch (key) {
-    case SFTE_KEY_INSERT: tilde_num = 2; break;
-    case SFTE_KEY_DELETE: tilde_num = 3; break;
-    case SFTE_KEY_PAGE_UP: tilde_num = 5; break;
-    case SFTE_KEY_PAGE_DOWN: tilde_num = 6; break;
-    case SFTE_KEY_F5: tilde_num = 15; break;
-    case SFTE_KEY_F6: tilde_num = 17; break;
-    case SFTE_KEY_F7: tilde_num = 18; break;
-    case SFTE_KEY_F8: tilde_num = 19; break;
-    case SFTE_KEY_F9: tilde_num = 20; break;
-    case SFTE_KEY_F10: tilde_num = 21; break;
-    case SFTE_KEY_F11: tilde_num = 22; break;
-    case SFTE_KEY_F12: tilde_num = 23; break;
-    default: break;
-    }
-
-    if (tilde_num) {
-        if (csi_mod > 1) return snprintf(out_buf, max_bytes, "\033[%d;%u~", tilde_num, csi_mod);
-        return snprintf(out_buf, max_bytes, "\033[%d~", tilde_num);
-    }
-
-    // text keys and control keys -> CSI codepoint ; mods u
-    uint32_t target_cp = codepoint ? codepoint : (uint32_t)key;
-    // we can safely use SFTE_KEY_* as ASCII values
-    if (target_cp > 0 && (csi_mod > 1 || target_cp == SFTE_KEY_TAB || target_cp == SFTE_KEY_ENTER ||
-                          target_cp == SFTE_KEY_ESCAPE || target_cp == SFTE_KEY_BACKSPACE))
-        return snprintf(out_buf, max_bytes, "\033[%u;%uu", target_cp, csi_mod);
-
-    return 0;
-}
-#endif  // SFTE_INPUT_KITTY
-
 #if SFTE_INPUT_HYPERLINKS
 const char *sfte_get_link_at(sfte_ctx *ctx, int16_t col, int16_t row) {
     if (col < 0 || col >= ctx->term.cols || row < 0 || row >= ctx->term.rows) return NULL;
@@ -7974,23 +8205,6 @@ const char *sfte_get_link_at(sfte_ctx *ctx, int16_t col, int16_t row) {
     return ctx->term.link_pool[c->link_idx];
 }
 #endif  // SFTE_INPUT_HYPERLINKS
-
-#if SFTE_TERM_SCROLLBACK_CAP
-void sfte_view_scroll(sfte_ctx *ctx, int32_t delta) {
-#if SFTE_TERM_ALT_SCREEN
-    if (ctx->term.alt_active) return;
-#endif  // SFTE_TERM_ALT_SCREEN
-    int32_t new_off = ctx->term.sb_offset + delta;
-    if (new_off < 0) new_off = 0;
-    int32_t max_scroll = ctx->term.sb_len < ctx->term.sb_cap ? ctx->term.sb_len : ctx->term.sb_cap;
-    if (new_off > max_scroll) new_off = max_scroll;
-
-    if (new_off != ctx->term.sb_offset) {
-        ctx->term.sb_offset = new_off;
-        _sfte_grid_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
-    }
-}
-#endif  // SFTE_TERM_SCROLLBACK_CAP
 
 #if SFTE_INPUT_SELECTION
 size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes) {
@@ -8075,6 +8289,22 @@ size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes) {
 }
 #endif  // SFTE_INPUT_SELECTION
 
+#if SFTE_TERM_SCROLLBACK_CAP
+void sfte_view_scroll(sfte_ctx *ctx, int32_t delta) {
+#if SFTE_TERM_ALT_SCREEN
+    if (ctx->term.alt_active) return;
+#endif  // SFTE_TERM_ALT_SCREEN
+    int32_t new_off = ctx->term.sb_offset + delta;
+    if (new_off < 0) new_off = 0;
+    int32_t max_scroll = ctx->term.sb_len < ctx->term.sb_cap ? ctx->term.sb_len : ctx->term.sb_cap;
+    if (new_off > max_scroll) new_off = max_scroll;
+
+    if (new_off != ctx->term.sb_offset) {
+        ctx->term.sb_offset = new_off;
+        _sfte_grid_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
+    }
+}
+#endif  // SFTE_TERM_SCROLLBACK_CAP
 // =================================================================================================
 // >>wayland backend
 // =================================================================================================
