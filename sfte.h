@@ -919,6 +919,11 @@ typedef void (*sfte_osc52_clipboard_cb)(void *user_data, char target, const char
 typedef void (*sfte_open_link_cb)(void *user_data, const char *uri);
 #endif  // SFTE_INPUT_HYPERLINKS
 
+/*
+    Fired when the terminal receives the BEL (\a) character.
+*/
+typedef void (*sfte_bell_cb)(void *user_data);
+
 // =================================================================================================
 // >>core initialization & lifecycle
 // =================================================================================================
@@ -1572,7 +1577,7 @@ struct sfte_ctx {
 #endif  // SFTE_IMG_KITTY
 
     sfte_write_cb write_cb;
-    void (*bell_cb)(void *user_data);
+    sfte_bell_cb bell_cb;
 #if SFTE_CLIPBOARD && SFTE_CLIPBOARD_OSC52
     sfte_osc52_clipboard_cb osc52_clipboard_cb;
 #endif  // SFTE_CLIPBOARD_OSC52
