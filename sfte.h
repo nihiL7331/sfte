@@ -7570,9 +7570,13 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
 
             if (dmg.w > 0 && dmg.h > 0) {
 #if SFTE_TERM_DOUBLE_BUFFER
-                for (int32_t y = dmg.y; y < dmg.y + dmg.h; ++y)
-                    memcpy(&app->shm_data[y * app->width + dmg.x],
-                           &app->back_buffer[y * app->width + dmg.x], dmg.w * sizeof(uint32_t));
+                if (dmg.w == app->width)
+                    memcpy(&app->shm_data[dmg.y * app->width],
+                           &app->back_buffer[dmg.y * app->width], dmg.w * dmg.h * sizeof(uint32_t));
+                else
+                    for (int32_t y = dmg.y; y < dmg.y + dmg.h; ++y)
+                        memcpy(&app->shm_data[y * app->width + dmg.x],
+                               &app->back_buffer[y * app->width + dmg.x], dmg.w * sizeof(uint32_t));
 #endif  // SFTE_TERM_DOUBLE_BUFFER
 
                 wl_surface_damage_buffer(app->surface, dmg.x, dmg.y, dmg.w, dmg.h);
