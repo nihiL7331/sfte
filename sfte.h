@@ -949,6 +949,11 @@ typedef void (*sfte_open_link_cb)(void *user_data, const char *uri);
 */
 typedef void (*sfte_bell_cb)(void *user_data);
 
+/*
+    Fired when the terminal receives an OSC 0 or OSC 2 title change sequence.
+*/
+typedef void (*sfte_title_cb)(void *user_data, const char *title);
+
 // =================================================================================================
 // >>core initialization & lifecycle
 // =================================================================================================
@@ -1652,6 +1657,7 @@ struct sfte_ctx {
 #if SFTE_INPUT_HYPERLINKS
     sfte_open_link_cb open_link_cb;
 #endif  // SFTE_INPUT_HYPERLINKS
+    sfte_title_cb title_cb;
     void *user_data;
 
     int32_t width;
@@ -5423,7 +5429,12 @@ static inline void _sfte_parser_osc_dispatch(sfte_ctx *ctx, uint8_t terminator) 
         }
     }
 #endif  // SFTE_INPUT_HYPERLINKS
-    else
+    else if (strncmp(ctx->term.osc_payload, "0;", 2) == 0 ||
+             strncmp(ctx->term.osc_payload, "1;", 2) == 0 ||
+             strncmp(ctx->term.osc_payload, "2;", 2) == 0) {
+        char *title = ctx->term.osc_payload + 2;
+        if (ctx->title_cb) ctx->title_cb(ctx->user_data, title);
+    } else
         _SFTE_WARN(ctx, UNHANDLED_OSC, ctx->term.osc_payload);
 }
 
@@ -6560,6 +6571,14 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
 static void _sfte_wayland_write_cb(void *user_data, const char *data, size_t len) {
     sfte_wayland_app *app = (sfte_wayland_app *)user_data;
     if (app->pty_fd > 0) write(app->pty_fd, data, len);
+}
+
+/*
+    Callback triggered by the emulator core to change the window title.
+*/
+static void _sfte_wayland_title_cb(void *user_data, const char *title) {
+    sfte_wayland_app *app = (sfte_wayland_app *)user_data;
+    if (app->xdg_toplevel && title) xdg_toplevel_set_title(app->xdg_toplevel, title);
 }
 
 static void _sfte_wayland_pty_spawn(sfte_wayland_app *app) {
@@ -8486,6 +8505,7 @@ sfte_wayland_app *sfte_wayland_init(void) {
 #if SFTE_INPUT_HYPERLINKS
     app->ctx->open_link_cb = _sfte_wayland_open_link_cb;
 #endif  // SFTE_INPUT_HYPERLINKS
+    app->ctx->title_cb = _sfte_wayland_title_cb;
 
     _sfte_wayland_pty_spawn(app);
     _sfte_wayland_load(app);
