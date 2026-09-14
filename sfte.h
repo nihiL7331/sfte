@@ -7040,12 +7040,17 @@ static void _sfte_wayland_open_link_cb(void *user_data, const char *uri) {
     (void)user_data;
     if (!uri) return;
 
-    if (fork() == 0) {
-        freopen("/dev/null", "w", stdout);
-        freopen("/dev/null", "w", stderr);
-        execlp("xdg-open", "xdg-open", uri, NULL);
-        exit(1);
-    }
+    pid_t pid = fork();
+    if (pid == 0) {
+        if (fork() == 0) {
+            freopen("/dev/null", "w", stdout);
+            freopen("/dev/null", "w", stderr);
+            execlp("xdg-open", "xdg-open", uri, NULL);
+            exit(1);
+        }
+        exit(0);
+    } else if (pid > 0)
+        waitpid(pid, NULL, 0);
 }
 #endif  // SFTE_INPUT_HYPERLINKS
 
