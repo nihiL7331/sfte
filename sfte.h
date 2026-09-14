@@ -169,6 +169,14 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #endif  // SFTE_TERM_TAB_WIDTH
 
 /*
+    Enables procedural rendering for box drawing characters (U+2500 - U+257F).
+    Guarantees seamless, gapless lines for TUIs.
+*/
+#ifndef SFTE_TERM_CUSTOM_BOXES
+#define SFTE_TERM_CUSTOM_BOXES 1
+#endif  // SFTE_TERM_CUSTOM_BOXES
+
+/*
     Enables standard terminal alternate screen buffer (used by TUIs extensively).
     Can be disabled to halve the memory usage for logical grid,
     but CAN and WILL break TUIs rendering.
@@ -2072,6 +2080,10 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int3
                                                int32_t render_w, sfte_cell *vcell);
 static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
                                              int render_w);
+#if SFTE_TERM_CUSTOM_BOXES
+static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
+                                            uint32_t col, uint32_t rune);
+#endif  // SFTE_TERM_CUSTOM_BOXES
 static void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
                                           int32_t y_off, sfte_cell *vcell, uint8_t is_cursor);
 static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
@@ -6277,12 +6289,18 @@ static void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16
                                  sfte_font_cache *target_cache) {
     if (rune == ' ') return;
 
+    int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
+    int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
+
+#if SFTE_TERM_CUSTOM_BOXES
+    if (rune >= 0x2500 && rune <= 0x259F) {
+        if (_sfte_render_box_char(ctx, px_buf, cx, cy, fg, rune)) return;
+    }
+#endif  // SFTE_TERM_CUSTOM_BOXES
+
     sfte_font_cache *actual_cache = target_cache;
     sfte_glyph *g = _sfte_font_get_glyph(ctx, &actual_cache, rune);
     if (!g) return;
-
-    int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
-    int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
 
     int32_t glyph_width = g->x1 - g->x0;
     int32_t glyph_height = g->y1 - g->y0;
@@ -6429,6 +6447,123 @@ static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_
                     SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, ctx->width, ctx->height, cur_col);
     }
 }
+
+#if SFTE_TERM_CUSTOM_BOXES
+/*
+    Renders box characters (0x2500-0x259F) to ensure there's no gaps between characters.
+    Returns 0 for unhandled cases, ensuring that they're drawn using font data.
+ */
+static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
+                                            uint32_t col, uint32_t rune) {
+    int16_t cw = ctx->font.cell_width;
+    int16_t ch = ctx->font.cell_height;
+
+#define _SFTE_RECT(rx, ry, rw, rh)                                                                 \
+    for (int16_t y = (ry); y < (ry) + (rh); ++y)                                                   \
+        for (int16_t x = (rx); x < (rx) + (rw); ++x)                                               \
+    SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, ctx->width, ctx->height, col)
+
+    // Block elements
+    if (rune >= 0x2580 && rune <= 0x259F) {
+#define _BLOCK_B(f)                                                                                \
+    _SFTE_RECT(cx, cy + ch - ((((f) * ch) / 8 > 0) ? (((f) * ch) / 8) : 1), cw,                    \
+               (((f) * ch) / 8 > 0) ? (((f) * ch) / 8) : 1)
+#define _BLOCK_L(f) _SFTE_RECT(cx, cy, (((f) * cw) / 8 > 0) ? (((f) * cw) / 8) : 1, ch)
+#define _BLOCK_T(f) _SFTE_RECT(cx, cy, cw, (((f) * ch) / 8 > 0) ? (((f) * ch) / 8) : 1)
+#define _BLOCK_R(f)                                                                                \
+    _SFTE_RECT(cx + cw - ((((f) * cw) / 8 > 0) ? (((f) * cw) / 8) : 1), cy,                        \
+               (((f) * cw) / 8 > 0) ? (((f) * cw) / 8) : 1, ch)
+#define _QUAD(tl, tr, bl, br)                                                                      \
+    do {                                                                                           \
+        if (tl) _SFTE_RECT(cx, cy, cw / 2, ch / 2);                                                \
+        if (tr) _SFTE_RECT(cx + cw / 2, cy, cw / 2, ch / 2);                                       \
+        if (bl) _SFTE_RECT(cx, cy + ch / 2, cw / 2, ch / 2);                                       \
+        if (br) _SFTE_RECT(cx + cw / 2, cy + ch / 2, cw / 2, ch / 2);                              \
+    } while (0)
+
+        switch (rune) {
+        case 0x2580: _BLOCK_T(4); break;        // ▀
+        case 0x2581: _BLOCK_B(1); break;        // ▁
+        case 0x2582: _BLOCK_B(2); break;        // ▂
+        case 0x2583: _BLOCK_B(3); break;        // ▃
+        case 0x2584: _BLOCK_B(4); break;        // ▄
+        case 0x2585: _BLOCK_B(5); break;        // ▅
+        case 0x2586: _BLOCK_B(6); break;        // ▆
+        case 0x2587: _BLOCK_B(7); break;        // ▇
+        case 0x2588: _BLOCK_B(8); break;        // █
+        case 0x2589: _BLOCK_L(7); break;        // ▉
+        case 0x258A: _BLOCK_L(6); break;        // ▊
+        case 0x258B: _BLOCK_L(5); break;        // ▋
+        case 0x258C: _BLOCK_L(4); break;        // ▌
+        case 0x258D: _BLOCK_L(3); break;        // ▍
+        case 0x258E: _BLOCK_L(2); break;        // ▎
+        case 0x258F: _BLOCK_L(1); break;        // ▏
+        case 0x2590: _BLOCK_R(4); break;        // ▐
+        case 0x2594: _BLOCK_T(1); break;        // ▔
+        case 0x2595: _BLOCK_R(1); break;        // ▕
+        case 0x2596: _QUAD(0, 0, 1, 0); break;  // ▖
+        case 0x2597: _QUAD(0, 0, 0, 1); break;  // ▗
+        case 0x2598: _QUAD(1, 0, 0, 0); break;  // ▘
+        case 0x2599: _QUAD(1, 0, 1, 1); break;  // ▙
+        case 0x259A: _QUAD(1, 0, 0, 1); break;  // ▚
+        case 0x259B: _QUAD(1, 1, 1, 0); break;  // ▛
+        case 0x259C: _QUAD(1, 1, 0, 1); break;  // ▜
+        case 0x259D: _QUAD(0, 1, 0, 0); break;  // ▝
+        case 0x259E: _QUAD(0, 1, 1, 0); break;  // ▞
+        case 0x259F: _QUAD(0, 1, 1, 1); break;  // ▟
+        default: return 0;
+        }
+        return 1;
+    }
+
+    uint8_t up = 0, down = 0, left = 0, right = 0;
+    uint8_t heavy = 0;
+
+#define _SET_LINE(u, d, l, r, h) up = u, down = d, left = l, right = r, heavy = h
+
+    switch (rune) {
+    case 0x2500: _SET_LINE(0, 0, 1, 1, 0); break;  // ─
+    case 0x2501: _SET_LINE(0, 0, 1, 1, 1); break;  // ━
+    case 0x2502: _SET_LINE(1, 1, 0, 0, 0); break;  // │
+    case 0x2503: _SET_LINE(1, 1, 0, 0, 1); break;  // ┃
+    case 0x250C: _SET_LINE(0, 1, 0, 1, 0); break;  // ┌
+    case 0x250F: _SET_LINE(0, 1, 0, 1, 1); break;  // ┏
+    case 0x2510: _SET_LINE(0, 1, 1, 0, 0); break;  // ┐
+    case 0x2513: _SET_LINE(0, 1, 1, 0, 1); break;  // ┓
+    case 0x2514: _SET_LINE(1, 0, 0, 1, 0); break;  // └
+    case 0x2517: _SET_LINE(1, 0, 0, 1, 1); break;  // ┗
+    case 0x2518: _SET_LINE(1, 0, 1, 0, 0); break;  // ┘
+    case 0x251B: _SET_LINE(1, 0, 1, 0, 1); break;  // ┛
+    case 0x251C: _SET_LINE(1, 1, 0, 1, 0); break;  // ├
+    case 0x2523: _SET_LINE(1, 1, 0, 1, 1); break;  // ┣
+    case 0x2524: _SET_LINE(1, 1, 1, 0, 0); break;  // ┤
+    case 0x252B: _SET_LINE(1, 1, 1, 0, 1); break;  // ┫
+    case 0x252C: _SET_LINE(0, 1, 1, 1, 0); break;  // ┬
+    case 0x2533: _SET_LINE(0, 1, 1, 1, 1); break;  // ┳
+    case 0x2534: _SET_LINE(1, 0, 1, 1, 0); break;  // ┴
+    case 0x253B: _SET_LINE(1, 0, 1, 1, 1); break;  // ┻
+    case 0x253C: _SET_LINE(1, 1, 1, 1, 0); break;  // ┼
+    case 0x254B: _SET_LINE(1, 1, 1, 1, 1); break;  // ╋
+    default: return 0;
+    }
+
+    int16_t base_lw = (cw / 8 > 0) ? cw / 8 : 1;
+    int16_t lw = heavy ? (base_lw * 3) : base_lw;
+    int16_t hw = lw / 2;
+    int16_t mx = cx + cw / 2;
+    int16_t my = cy + ch / 2;
+
+    if (up) _SFTE_RECT(mx - hw, cy, lw, my - cy + hw);
+    if (down) _SFTE_RECT(mx - hw, my - hw, lw, cy + ch - my + hw);
+    if (left) _SFTE_RECT(cx, my - hw, mx - cx + hw, lw);
+    if (right) _SFTE_RECT(mx - hw, my - hw, cx + cw - mx + hw, lw);
+
+#undef _SET_LINE
+#undef _SFTE_RECT
+
+    return 1;
+}
+#endif  // SFTE_TERM_CUSTOM_BOXES
 
 /*
     Dispatcher for terminal text decorations (underlines, cursor).
