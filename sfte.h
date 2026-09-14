@@ -134,6 +134,13 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #endif  // SFTE_TERM_ENV
 
 /*
+    Enables focus tracking (DECSET 1004) and hollow cursor rendering.
+*/
+#ifndef SFTE_TERM_FOCUS
+#define SFTE_TERM_FOCUS 1
+#endif  // SFTE_TERM_FOCUS
+
+/*
     Initial terminal grid column size.
 */
 #ifndef SFTE_TERM_INIT_COLS
@@ -1106,8 +1113,16 @@ void sfte_view_scroll(sfte_ctx *ctx, int32_t delta);
 void sfte_xkb_process_key(sfte_ctx *ctx, struct xkb_state *state, uint32_t keycode);
 #endif  // SFTE_XKB_COMMON
 
+#if SFTE_TERM_FOCUS
+/*
+    Set window focus to `focused`.
+    Toggles the state, dirties the cursor cell and sends I/O escape sequences to PTY.
+*/
+void sfte_set_focus(sfte_ctx *ctx, uint8_t focused);
+#endif  // SFTE_TERM_FOCUS
+
 // =================================================================================================
-// >>public api wayland backend
+// >>wayland backend
 // =================================================================================================
 
 #if SFTE_WAYLAND
@@ -1564,6 +1579,10 @@ typedef struct {
 #if SFTE_TERM_SCROLL_SMOOTH
     uint8_t is_scrolling;
 #endif  // SFTE_TERM_SCROLL_SMOOTH
+#if SFTE_TERM_FOCUS
+    uint8_t is_focused;
+    uint8_t report_focus;
+#endif  // SFTE_TERM_FOCUS
 } sfte_term;
 
 /*
@@ -4575,7 +4594,12 @@ static inline void _sfte_csi_set_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt, 
         if (p[i] == 25) {
             ctx->term.hide_cursor = 0;
             ctx->term.cells[_SFTE_GRID_IDX(ctx, col, ctx->term.cursor_row)].dirty = 1;
-        } else if (p[i] == 2004)
+        }
+#if SFTE_TERM_FOCUS
+        else if (p[i] == 1004)
+            ctx->term.report_focus = 1;
+#endif  // SFTE_TERM_FOCUS
+        else if (p[i] == 2004)
             ctx->term.bracketed_paste = 1;
         else if (p[i] == 7)
             ctx->term.auto_wrap = 1;
@@ -4651,7 +4675,11 @@ static inline void _sfte_csi_reset_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt
         if (p[i] == 25) {
             ctx->term.hide_cursor = 1;
             ctx->term.cells[_SFTE_GRID_IDX(ctx, col, ctx->term.cursor_row)].dirty = 1;
-        } else if (p[i] == 2004)
+#if SFTE_TERM_FOCUS
+        } else if (p[i] == 1004)
+            ctx->term.report_focus = 0;
+#endif  // SFTE_TERM_FOCUS
+        else if (p[i] == 2004)
             ctx->term.bracketed_paste = 0;
         else if (p[i] == 7)
             ctx->term.auto_wrap = 0;
@@ -5458,7 +5486,7 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
             }
             _sfte_rune_insert(ctx, b);
 #else   // !SFTE_TERM_ASCII_CHARSET
-            if (_sfte_rune_utf8_decode(ctx, b)) _sfte_rune_insert(ctx, ctx->term.utf8_rune_acc);
+                if (_sfte_rune_utf8_decode(ctx, b)) _sfte_rune_insert(ctx, ctx->term.utf8_rune_acc);
 #endif  // !SFTE_TERM_ASCII_CHARSET
         }
         break;
@@ -6319,9 +6347,24 @@ static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_
 #if SFTE_CURSOR_DYNAMIC
     uint32_t active_cur_color = ctx->term.cursor_color;
 #else   // !SFTE_CURSOR_DYNAMIC
-    uint32_t active_cur_color = SFTE_CURSOR_COLOR;
+        uint32_t active_cur_color = SFTE_CURSOR_COLOR;
 #endif  // !SFTE_CURSOR_DYNAMIC
     uint32_t cur_col = SFTE_COLOR_ALPHA_MASK | (active_cur_color & ~SFTE_COLOR_ALPHA_MASK);
+
+#if SFTE_TERM_FOCUS
+    if (!ctx->term.is_focused) {
+        for (int32_t y = cy; y < cy + ctx->font.cell_height; ++y) {
+            SFTE_COLOR_DRAW_PIXEL(px_buf, cx, y, ctx->width, ctx->height, cur_col);
+            SFTE_COLOR_DRAW_PIXEL(px_buf, cx + render_w - 1, y, ctx->width, ctx->height, cur_col);
+        }
+        for (int32_t x = cx; x < cx + render_w; ++x) {
+            SFTE_COLOR_DRAW_PIXEL(px_buf, x, cy, ctx->width, ctx->height, cur_col);
+            SFTE_COLOR_DRAW_PIXEL(px_buf, x, cy + ctx->font.cell_height - 1, ctx->width,
+                                  ctx->height, cur_col);
+        }
+        return;
+    }
+#endif  // SFTE_TERM_FOCUS
 
     if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_UNDERLINE) {
         int32_t thick = ctx->font.cell_height * SFTE_CURSOR_THICK_RATIO;
@@ -6357,8 +6400,13 @@ static void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t c
 
     if (vcell->attr & _SFTE_ATTR_UNDERLINE)
         _sfte_render_underline_cell(ctx, px_buf, cx, cy + y_off, render_w, vcell);
-    if (is_cursor && _SFTE_CUR_STYLE(ctx) != SFTE_CURSOR_STYLE_BLOCK)
-        _sfte_render_cursor_shape(ctx, px_buf, cx, cy + y_off, render_w);
+
+    uint8_t draw_shape = is_cursor && (_SFTE_CUR_STYLE(ctx) != SFTE_CURSOR_STYLE_BLOCK
+#if SFTE_TERM_FOCUS
+                                       || !ctx->term.is_focused
+#endif  // SFTE_TERM_FOCUS
+                                      );
+    if (draw_shape) _sfte_render_cursor_shape(ctx, px_buf, cx, cy + y_off, render_w);
 }
 
 /*
@@ -6408,11 +6456,16 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
             if (!ctx->term.blink_visible) is_cursor = 0;
 #endif  // SFTE_CURSOR_BLINK
 
-            if (is_cursor && _SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BLOCK) {
+            uint8_t is_solid_block = is_cursor && _SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BLOCK;
+#if SFTE_TERM_FOCUS
+            is_solid_block &= ctx->term.is_focused;
+#endif  // SFTE_TERM_FOCUS
+
+            if (is_solid_block) {
 #if SFTE_CURSOR_DYNAMIC
                 _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, ctx->term.cursor_color);
 #else   // !SFTE_CURSOR_DYNAMIC
-                _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, SFTE_CURSOR_COLOR);
+                    _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, SFTE_CURSOR_COLOR);
 #endif  // !SFTE_CURSOR_DYNAMIC
             } else
                 _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, bg);
@@ -7060,8 +7113,22 @@ static void _sfte_wayland_xdg_toplevel_configure(void *data, struct xdg_toplevel
                                                  int32_t width, int32_t height,
                                                  struct wl_array *states) {
     (void)xdg_toplevel, (void)states;
-    if (width <= 0 || height <= 0) return;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
+#if SFTE_TERM_FOCUS
+    uint32_t *state;
+    uint8_t focused = 0;
+    wl_array_for_each(state, states) {
+        if (*state == XDG_TOPLEVEL_STATE_ACTIVATED) {
+            focused = 1;
+            break;
+        }
+    }
+
+    sfte_set_focus(app->ctx, focused);
+    app->needs_render = 1;
+#endif  // SFTE_TERM_FOCUS
+
+    if (width <= 0 || height <= 0) return;
 
     app->pending_width = width;
     app->pending_height = height;
@@ -7413,6 +7480,9 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
     ctx->term.link_pool_len = 1;  // idx 0 is reserved for no link
     ctx->term.cur_link_idx = 0;
 #endif  // SFTE_INPUT_HYPERLINKS
+#if SFTE_TERM_FOCUS
+    ctx->term.is_focused = 1;
+#endif  // SFTE_TERM_FOCUS
 
     ctx->term.cells = (sfte_cell *)SFTE_MALLOC(ctx->term.cols * ctx->term.rows * sizeof(sfte_cell));
     SFTE_ASSERT(ctx->term.cells, "failed to allocate term grid");
@@ -7588,7 +7658,12 @@ int32_t sfte_get_timeout_ms(sfte_ctx *ctx) {
     int32_t timeout = -1;
 
 #if SFTE_CURSOR_BLINK
-    if (ctx->term.blink_enabled && !ctx->term.hide_cursor) {
+    uint8_t can_blink = ctx->term.blink_enabled && !ctx->term.hide_cursor;
+#if SFTE_TERM_FOCUS
+    can_blink &= ctx->term.is_focused;
+#endif  // SFTE_TERM_FOCUS
+
+    if (can_blink) {
         uint64_t now = SFTE_TIME_MS();
         int32_t time_to_next = (int32_t)(ctx->term.next_blink_ms - now);
         if (time_to_next < 0) time_to_next = 0;
@@ -7612,7 +7687,12 @@ uint8_t sfte_tick(sfte_ctx *ctx) {
 #endif  // SFTE_TERM_SCROLL_SMOOTH
 
 #if SFTE_CURSOR_BLINK
-    if (ctx->term.blink_enabled && !ctx->term.hide_cursor) {
+    uint8_t can_blink = ctx->term.blink_enabled && !ctx->term.hide_cursor;
+#if SFTE_TERM_FOCUS
+    can_blink &= ctx->term.is_focused;
+#endif  // SFTE_TERM_FOCUS
+
+    if (can_blink) {
         uint64_t now = SFTE_TIME_MS();
         if (now >= ctx->term.next_blink_ms) {
             ctx->term.blink_visible = !ctx->term.blink_visible;
@@ -8365,6 +8445,32 @@ void sfte_xkb_process_key(sfte_ctx *ctx, struct xkb_state *state, uint32_t keyco
     }
 }
 #endif  // SFTE_XKB_COMMON
+
+#if SFTE_TERM_FOCUS
+void sfte_set_focus(sfte_ctx *ctx, uint8_t focused) {
+    if (!ctx || ctx->term.is_focused == focused) return;
+
+    ctx->term.is_focused = focused;
+
+#if SFTE_CURSOR_BLINK
+    // Force the cursor to be visible when changing focus states
+    ctx->term.blink_visible = 1;
+    ctx->term.next_blink_ms = SFTE_TIME_MS() + SFTE_CURSOR_BLINK_RATE_MS;
+#endif  // SFTE_CURSOR_BLINK
+
+    int16_t vis_col = ctx->term.cursor_col >= ctx->term.cols ? ctx->term.cols - 1
+                                                             : ctx->term.cursor_col;
+    ctx->term.cells[_SFTE_GRID_IDX(ctx, vis_col, ctx->term.cursor_row)].dirty = 1;
+
+    if (ctx->term.report_focus && ctx->write_cb) {
+        if (focused)
+            ctx->write_cb(ctx->user_data, "\033[I", 3);
+        else
+            ctx->write_cb(ctx->user_data, "\033[O", 3);
+    }
+}
+#endif  // SFTE_TERM_FOCUS
+
 // =================================================================================================
 // >>wayland backend
 // =================================================================================================
