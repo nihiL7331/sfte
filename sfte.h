@@ -983,6 +983,12 @@ void sfte_posix_pty_resize(sfte_ctx *ctx, int32_t pty_fd, uint16_t px_w, uint16_
 */
 int32_t sfte_get_timeout_ms(sfte_ctx *ctx);
 
+/*
+    Updates time-based internal state (animations, cursor trail, blinking).
+    Returns 1 if the terminal visual state changed and requires a redraw.
+*/
+uint8_t sfte_tick(sfte_ctx *ctx);
+
 // =================================================================================================
 // >>rendering & parsing
 // =================================================================================================
@@ -7264,22 +7270,7 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
 
         if (poll(fds, _SFTE_ARRAY_LEN(fds), timeout) == -1) break;
 
-#if SFTE_CURSOR_BLINK
-        if (ctx->term.blink_enabled) {
-            uint64_t now = SFTE_TIME_MS();
-            if (now >= ctx->term.next_blink_ms) {
-                ctx->term.blink_visible = !ctx->term.blink_visible;
-                ctx->term.next_blink_ms = now + SFTE_CURSOR_BLINK_RATE_MS;
-                int16_t vis_col = ctx->term.cursor_col >= ctx->term.cols ? ctx->term.cols - 1
-                                                                         : ctx->term.cursor_col;
-                ctx->term.cells[_SFTE_GRID_IDX(ctx, vis_col, ctx->term.cursor_row)].dirty = 1;
-                app->needs_render = 1;
-            }
-        }
-#endif  // SFTE_CURSOR_BLINK
-
-        // TODO:
-        // move it to a helper for custom backends
+        if (sfte_tick(app->ctx)) app->needs_render = 1;
 
         // Handle incoming Wayland events (keys, resizes)
         if (fds[0].revents & (POLLIN | POLLERR | POLLHUP))
@@ -7307,46 +7298,6 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
             _sfte_wayland_keyboard_key(app, app->keyboard, 0, 0, app->repeating_key,
                                        WL_KEYBOARD_KEY_STATE_PRESSED);
         }
-
-#if SFTE_CURSOR_TRAIL
-        if (ctx->term.is_trailing) {
-            int16_t vis_col = ctx->term.cursor_col >= ctx->term.cols ? ctx->term.cols - 1
-                                                                     : ctx->term.cursor_col;
-            float target_rx = vis_col * ctx->font.cell_width;
-            float target_ry = ctx->term.cursor_row * ctx->font.cell_height;
-
-            uint64_t now = SFTE_TIME_MS();
-            if (ctx->term.last_trail_update_ms == 0) ctx->term.last_trail_update_ms = now;
-            float dt_ms = (float)(now - ctx->term.last_trail_update_ms);
-            ctx->term.last_trail_update_ms = now;
-
-            float tx = target_rx - ctx->term.tail_rx;
-            float ty = target_ry - ctx->term.tail_ry;
-
-            // Snap to target if we're close enough to stop animating
-            if (tx * tx + ty * ty <= 0.5f) {
-                ctx->term.is_trailing = 0;
-                ctx->term.tail_rx = target_rx;
-                ctx->term.tail_ry = target_ry;
-                ctx->term.last_trail_update_ms = 0;
-            } else {
-                float decay = dt_ms * SFTE_CURSOR_TRAIL_DECAY;
-                if (decay > 1.0f) decay = 1.0f;
-
-                ctx->term.tail_rx += tx * decay;
-                ctx->term.tail_ry += ty * decay;
-            }
-            app->needs_render = 1;
-        }
-#endif  // SFTE_CURSOR_TRAIL
-
-#if SFTE_TERM_ANIMATE_SCREEN
-        if (ctx->term.is_animating) app->needs_render = 1;
-#endif  // SFTE_TERM_ANIMATE_SCREEN
-
-#if SFTE_TERM_SCROLL_SMOOTH
-        if (ctx->term.is_scrolling) app->needs_render = 1;
-#endif  // SFTE_TERM_SCROLL_SMOOTH
 
         // Dispatch render pass
         if (app->needs_render) {
@@ -7646,6 +7597,67 @@ int32_t sfte_get_timeout_ms(sfte_ctx *ctx) {
 #endif  // SFTE_CURSOR_BLINK
 
     return timeout;
+}
+
+uint8_t sfte_tick(sfte_ctx *ctx) {
+    if (!ctx) return 0;
+    uint8_t needs_render = 0;
+
+#if SFTE_TERM_ANIMATE_SCREEN
+    if (ctx->term.is_animating) needs_render = 1;
+#endif  // SFTE_TERM_ANIMATE_SCREEN
+
+#if SFTE_TERM_SCROLL_SMOOTH
+    if (ctx->term.is_scrolling) needs_render = 1;
+#endif  // SFTE_TERM_SCROLL_SMOOTH
+
+#if SFTE_CURSOR_BLINK
+    if (ctx->term.blink_enabled && !ctx->term.hide_cursor) {
+        uint64_t now = SFTE_TIME_MS();
+        if (now >= ctx->term.next_blink_ms) {
+            ctx->term.blink_visible = !ctx->term.blink_visible;
+            ctx->term.next_blink_ms = now + SFTE_CURSOR_BLINK_RATE_MS;
+
+            int16_t vis_col = ctx->term.cursor_col >= ctx->term.cols ? ctx->term.cols - 1
+                                                                     : ctx->term.cursor_col;
+            ctx->term.cells[_SFTE_GRID_IDX(ctx, vis_col, ctx->term.cursor_row)].dirty = 1;
+            needs_render = 1;
+        }
+    }
+#endif  // SFTE_CURSOR_BLINK
+
+#if SFTE_CURSOR_TRAIL
+    if (ctx->term.is_trailing) {
+        int16_t vis_col = ctx->term.cursor_col >= ctx->term.cols ? ctx->term.cols - 1
+                                                                 : ctx->term.cursor_col;
+        float target_rx = vis_col * ctx->font.cell_width;
+        float target_ry = ctx->term.cursor_row * ctx->font.cell_height;
+
+        uint64_t now = SFTE_TIME_MS();
+        if (ctx->term.last_trail_update_ms == 0) ctx->term.last_trail_update_ms = now;
+        float dt_ms = (float)(now - ctx->term.last_trail_update_ms);
+        ctx->term.last_trail_update_ms = now;
+
+        float tx = target_rx - ctx->term.tail_rx;
+        float ty = target_ry - ctx->term.tail_ry;
+
+        // Snap to target if we're close enough to stop animating
+        if (tx * tx + ty * ty <= 0.5f) {
+            ctx->term.is_trailing = 0;
+            ctx->term.tail_rx = target_rx;
+            ctx->term.tail_ry = target_ry;
+            ctx->term.last_trail_update_ms = 0;
+        } else {
+            float decay = dt_ms * SFTE_CURSOR_TRAIL_DECAY;
+            if (decay > 1.0f) decay = 1.0f;
+            ctx->term.tail_rx += tx * decay;
+            ctx->term.tail_ry += ty * decay;
+        }
+        needs_render = 1;
+    }
+#endif  // SFTE_CURSOR_TRAIL
+
+    return needs_render;
 }
 
 // =================================================================================================
