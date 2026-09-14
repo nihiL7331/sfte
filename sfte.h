@@ -417,6 +417,14 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #endif  // SFTE_FONT_MAX_COUNT
 
 /*
+    Font oversample scale.
+    If <= 1, no oversampling occurs.
+*/
+#ifndef SFTE_FONT_OVERSAMPLE
+#define SFTE_FONT_OVERSAMPLE 2
+#endif  // SFTE_FONT_OVERSAMPLE
+
+/*
     Tweaks scaling per-font to match baseline heights.
     Useful for nerd symbol fonts, where often symbols are too big.
     With primary font in slot 0 and nerd font in slot 1, something like this can be used:
@@ -5646,7 +5654,32 @@ static inline int _sfte_stb_bounds(sfte_font_backend_info *info, uint32_t rune, 
 
 static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, float scale,
                                   uint8_t *atlas_ptr, int gw, int gh, int atlas_stride) {
-    stbtt_MakeGlyphBitmap(info, atlas_ptr, gw, gh, atlas_stride, scale, scale, glyph_idx);
+#if SFTE_FONT_OVERSAMPLE <= 1
+    stbtt_MakeGlyphBitmap(info, atlas_ptr, gw, gh, scale, scale, glyph_idx);
+#else   // SFTE_FONT_OVERSAMPLE > 1
+    int bw = gw * SFTE_FONT_OVERSAMPLE;
+    int bh = gh * SFTE_FONT_OVERSAMPLE;
+
+    uint8_t stack_buf[128 * 128];
+    uint8_t *temp_buf = stack_buf;
+    if (bw * bh > (int)sizeof(stack_buf)) temp_buf = (uint8_t *)SFTE_MALLOC(bw * bh);
+
+    stbtt_MakeGlyphBitmap(info, temp_buf, bw, bh, bw, scale * SFTE_FONT_OVERSAMPLE,
+                          scale * SFTE_FONT_OVERSAMPLE, glyph_idx);
+
+    for (int y = 0; y < gh; ++y)
+        for (int x = 0; x < gw; ++x) {
+            int32_t sum = 0;
+            for (int oy = 0; oy < SFTE_FONT_OVERSAMPLE; ++oy)
+                for (int ox = 0; ox < SFTE_FONT_OVERSAMPLE; ++ox)
+                    sum += temp_buf[(y * SFTE_FONT_OVERSAMPLE + oy) * bw +
+                                    (x * SFTE_FONT_OVERSAMPLE + ox)];
+            atlas_ptr[y * atlas_stride + x] = (uint8_t)(sum / (SFTE_FONT_OVERSAMPLE *
+                                                               SFTE_FONT_OVERSAMPLE));
+        }
+
+    if (temp_buf != stack_buf) SFTE_FREE(temp_buf);
+#endif  // SFTE_FONT_OVERSAMPLE
 }
 #endif  // !SFTE_FONT_CUSTOM_BACKEND
 
