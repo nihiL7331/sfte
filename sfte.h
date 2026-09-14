@@ -59,6 +59,16 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #define SFTE_WAYLAND 0
 #endif  // SFTE_CUSTOM_BACKEND
 
+#if SFTE_WAYLAND
+#define SFTE_XKB_COMMON
+#endif  // SFTE_WAYLAND
+
+#ifdef SFTE_XKB_COMMON
+#include <xkbcommon/xkbcommon-keysyms.h>
+#include <xkbcommon/xkbcommon-names.h>
+#include <xkbcommon/xkbcommon.h>
+#endif  // SFTE_XKB_COMMON
+
 // #################################################################################################
 // >>>CONFIGURATION
 // #################################################################################################
@@ -1082,6 +1092,14 @@ size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes);
 void sfte_view_scroll(sfte_ctx *ctx, int32_t delta);
 #endif  // SFTE_TERM_SCROLLBACK_CAP
 
+#ifdef SFTE_XKB_COMMON
+/*
+    Input entrypoint for XKB (Linux) implementations.
+    Handles modifiers, control keys, kitty keyboard support (if enabled).
+*/
+void sfte_xkb_process_key(sfte_ctx *ctx, struct xkb_state *state, uint32_t keycode);
+#endif  // SFTE_XKB_COMMON
+
 // =================================================================================================
 // >>public api wayland backend
 // =================================================================================================
@@ -1136,9 +1154,6 @@ int sfte_wayland_run(sfte_wayland_app *app);
 #include <sys/timerfd.h>
 #include <sys/wait.h>
 #include <unistd.h>  // exec/fork/env
-#include <xkbcommon/xkbcommon-keysyms.h>
-#include <xkbcommon/xkbcommon-names.h>
-#include <xkbcommon/xkbcommon.h>
 
 #if SFTE_CURSOR_BLINK
 #include <time.h>
@@ -2025,7 +2040,6 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
 // >wayland
 // -------------------------------------------------------------------------------------------------
 #if SFTE_WAYLAND
-static sfte_key _sfte_xkb_to_sfte_key(xkb_keysym_t sym);
 static void _sfte_wayland_write_cb(void *user_data, const char *data, size_t len);
 static void _sfte_wayland_pty_spawn(sfte_wayland_app *app);
 static void _sfte_wayland_pty_update(sfte_wayland_app *app);
@@ -6481,45 +6495,6 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
 // >>wayland
 // =================================================================================================
 #if SFTE_WAYLAND
-
-/*
-    Maps Linux XKB keysyms to the emulators internal key enum.
-*/
-static sfte_key _sfte_xkb_to_sfte_key(xkb_keysym_t sym) {
-    switch (sym) {
-    case XKB_KEY_Tab:
-    case XKB_KEY_ISO_Left_Tab: return SFTE_KEY_TAB;
-    case XKB_KEY_Return:
-    case XKB_KEY_Linefeed:
-    case XKB_KEY_KP_Enter: return SFTE_KEY_ENTER;
-    case XKB_KEY_BackSpace: return SFTE_KEY_BACKSPACE;
-    case XKB_KEY_Escape: return SFTE_KEY_ESCAPE;
-    case XKB_KEY_Up: return SFTE_KEY_UP;
-    case XKB_KEY_Down: return SFTE_KEY_DOWN;
-    case XKB_KEY_Left: return SFTE_KEY_LEFT;
-    case XKB_KEY_Right: return SFTE_KEY_RIGHT;
-    case XKB_KEY_Home: return SFTE_KEY_HOME;
-    case XKB_KEY_End: return SFTE_KEY_END;
-    case XKB_KEY_Page_Up: return SFTE_KEY_PAGE_UP;
-    case XKB_KEY_Page_Down: return SFTE_KEY_PAGE_DOWN;
-    case XKB_KEY_Insert: return SFTE_KEY_INSERT;
-    case XKB_KEY_Delete: return SFTE_KEY_DELETE;
-    case XKB_KEY_F1: return SFTE_KEY_F1;
-    case XKB_KEY_F2: return SFTE_KEY_F2;
-    case XKB_KEY_F3: return SFTE_KEY_F3;
-    case XKB_KEY_F4: return SFTE_KEY_F4;
-    case XKB_KEY_F5: return SFTE_KEY_F5;
-    case XKB_KEY_F6: return SFTE_KEY_F6;
-    case XKB_KEY_F7: return SFTE_KEY_F7;
-    case XKB_KEY_F8: return SFTE_KEY_F8;
-    case XKB_KEY_F9: return SFTE_KEY_F9;
-    case XKB_KEY_F10: return SFTE_KEY_F10;
-    case XKB_KEY_F11: return SFTE_KEY_F11;
-    case XKB_KEY_F12: return SFTE_KEY_F12;
-    default: return SFTE_KEY_NONE;
-    }
-}
-
 /*
     Callback triggered by the emulator core to send bytes back to the shell (PTY).
 */
@@ -6860,7 +6835,7 @@ static void _sfte_wayland_keyboard_leave(void *data, struct wl_keyboard *keyboar
 
 static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard, uint32_t serial,
                                        uint32_t time, uint32_t key, uint32_t state) {
-    (void)data, (void)keyboard, (void)serial, (void)time;
+    (void)data, (void)keyboard, (void)time;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
 #if SFTE_CLIPBOARD
     app->serial = serial;
@@ -6908,39 +6883,20 @@ static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
     uint8_t super = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_LOGO,
                                                  XKB_STATE_MODS_EFFECTIVE);
 
-    uint32_t active_mods = SFTE_MOD_NONE;
+    uint8_t active_mods = SFTE_MOD_NONE;
     if (ctrl) active_mods |= SFTE_MOD_CTRL;
     if (alt) active_mods |= SFTE_MOD_ALT;
     if (shift) active_mods |= SFTE_MOD_SHIFT;
     if (super) active_mods |= SFTE_MOD_SUPER;
 
-    for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_shortcuts); ++i) {
-        if ((xkb_keysym_t)_sfte_shortcuts[i].keysym != sym ||
-            _sfte_shortcuts[i].mod_mask != active_mods)
-            continue;
-
-        _sfte_shortcuts[i].func(app->ctx, &_sfte_shortcuts[i].arg);
-        return;
-    }
-
-    // ignore standalone mod keys
-    if (sym >= XKB_KEY_Shift_L && sym <= XKB_KEY_Hyper_R) return;
-
-    sfte_key key_id = _sfte_xkb_to_sfte_key(sym);
-
-    if (key_id != SFTE_KEY_NONE)
-        sfte_input_key(app->ctx, key_id, active_mods);
-    else {
-        uint32_t cp = xkb_keysym_to_utf32(sym);
-
-        if (cp > 0 && (active_mods & (SFTE_MOD_CTRL | SFTE_MOD_ALT | SFTE_MOD_SUPER)))
-            sfte_input_key(app->ctx, (sfte_key)cp, active_mods);
-        else {
-            char buf[64];
-            int8_t size = (int8_t)xkb_state_key_get_utf8(app->xkb_state, keycode, buf, sizeof(buf));
-            if (size > 0) sfte_input_text(app->ctx, buf, size);
+    for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_shortcuts); ++i)
+        if ((xkb_keysym_t)_sfte_shortcuts[i].keysym == sym &&
+            _sfte_shortcuts[i].mod_mask == active_mods) {
+            _sfte_shortcuts[i].func(app->ctx, &_sfte_shortcuts[i].arg);
+            return;
         }
-    }
+
+    sfte_xkb_process_key(app->ctx, app->xkb_state, keycode);
 }
 
 static void _sfte_wayland_keyboard_modifiers(void *data, struct wl_keyboard *keyboard,
@@ -8321,6 +8277,82 @@ void sfte_view_scroll(sfte_ctx *ctx, int32_t delta) {
     }
 }
 #endif  // SFTE_TERM_SCROLLBACK_CAP
+
+#ifdef SFTE_XKB_COMMON
+void sfte_xkb_process_key(sfte_ctx *ctx, struct xkb_state *state, uint32_t keycode) {
+    if (!ctx || !state) return;
+
+    xkb_keysym_t sym = xkb_state_key_get_one_sym(state, keycode);
+
+    // Ignore standalone modifier keys
+    if (sym >= XKB_KEY_Shift_L && sym <= XKB_KEY_Hyper_R) return;
+
+    uint8_t ctrl = xkb_state_mod_name_is_active(state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE);
+    uint8_t alt = xkb_state_mod_name_is_active(state, XKB_MOD_NAME_ALT, XKB_STATE_MODS_EFFECTIVE);
+    uint8_t shift = xkb_state_mod_name_is_active(state, XKB_MOD_NAME_SHIFT,
+                                                 XKB_STATE_MODS_EFFECTIVE);
+    uint8_t super = xkb_state_mod_name_is_active(state, XKB_MOD_NAME_LOGO,
+                                                 XKB_STATE_MODS_EFFECTIVE);
+
+    uint8_t active_mods = SFTE_MOD_NONE;
+    if (ctrl) active_mods |= SFTE_MOD_CTRL;
+    if (alt) active_mods |= SFTE_MOD_ALT;
+    if (shift) active_mods |= SFTE_MOD_SHIFT;
+    if (super) active_mods |= SFTE_MOD_SUPER;
+
+    sfte_key key_id = SFTE_KEY_NONE;
+
+    switch (sym) {
+    case XKB_KEY_Tab:
+    case XKB_KEY_ISO_Left_Tab: key_id = SFTE_KEY_TAB; break;
+    case XKB_KEY_Return:
+    case XKB_KEY_Linefeed:
+    case XKB_KEY_KP_Enter: key_id = SFTE_KEY_ENTER; break;
+    case XKB_KEY_BackSpace: key_id = SFTE_KEY_BACKSPACE; break;
+    case XKB_KEY_Escape: key_id = SFTE_KEY_ESCAPE; break;
+    case XKB_KEY_Up: key_id = SFTE_KEY_UP; break;
+    case XKB_KEY_Down: key_id = SFTE_KEY_DOWN; break;
+    case XKB_KEY_Left: key_id = SFTE_KEY_LEFT; break;
+    case XKB_KEY_Right: key_id = SFTE_KEY_RIGHT; break;
+    case XKB_KEY_Home: key_id = SFTE_KEY_HOME; break;
+    case XKB_KEY_End: key_id = SFTE_KEY_END; break;
+    case XKB_KEY_Page_Up: key_id = SFTE_KEY_PAGE_UP; break;
+    case XKB_KEY_Page_Down: key_id = SFTE_KEY_PAGE_DOWN; break;
+    case XKB_KEY_Insert: key_id = SFTE_KEY_INSERT; break;
+    case XKB_KEY_Delete: key_id = SFTE_KEY_DELETE; break;
+    case XKB_KEY_F1: key_id = SFTE_KEY_F1; break;
+    case XKB_KEY_F2: key_id = SFTE_KEY_F2; break;
+    case XKB_KEY_F3: key_id = SFTE_KEY_F3; break;
+    case XKB_KEY_F4: key_id = SFTE_KEY_F4; break;
+    case XKB_KEY_F5: key_id = SFTE_KEY_F5; break;
+    case XKB_KEY_F6: key_id = SFTE_KEY_F6; break;
+    case XKB_KEY_F7: key_id = SFTE_KEY_F7; break;
+    case XKB_KEY_F8: key_id = SFTE_KEY_F8; break;
+    case XKB_KEY_F9: key_id = SFTE_KEY_F9; break;
+    case XKB_KEY_F10: key_id = SFTE_KEY_F10; break;
+    case XKB_KEY_F11: key_id = SFTE_KEY_F11; break;
+    case XKB_KEY_F12: key_id = SFTE_KEY_F12; break;
+    default: key_id = SFTE_KEY_NONE; break;
+    }
+
+    if (key_id != SFTE_KEY_NONE)
+        // Mapped control key
+        sfte_input_key(ctx, key_id, active_mods);
+    else {
+        uint32_t cp = xkb_keysym_to_utf32(sym);
+
+        if (cp > 0 && (active_mods & (SFTE_MOD_CTRL | SFTE_MOD_ALT | SFTE_MOD_SUPER)))
+            // Modified text
+            sfte_input_key(ctx, (sfte_key)cp, active_mods);
+        else {
+            // Pure typing
+            char buf[64];
+            int8_t size = (int8_t)xkb_state_key_get_utf8(state, keycode, buf, sizeof(buf));
+            if (size > 0) sfte_input_text(ctx, buf, size);
+        }
+    }
+}
+#endif  // SFTE_XKB_COMMON
 // =================================================================================================
 // >>wayland backend
 // =================================================================================================
