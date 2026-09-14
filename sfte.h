@@ -2082,7 +2082,7 @@ static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_
                                              int render_w);
 #if SFTE_TERM_CUSTOM_BOXES
 static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
-                                            uint32_t col, uint32_t rune);
+                                            uint32_t col, uint32_t rune, int32_t y_off);
 #endif  // SFTE_TERM_CUSTOM_BOXES
 static void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
                                           int32_t y_off, sfte_cell *vcell, uint8_t is_cursor);
@@ -6294,7 +6294,7 @@ static void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16
 
 #if SFTE_TERM_CUSTOM_BOXES
     if (rune >= 0x2500 && rune <= 0x259F) {
-        if (_sfte_render_box_char(ctx, px_buf, cx, cy, fg, rune)) return;
+        if (_sfte_render_box_char(ctx, px_buf, cx, cy, fg, rune, y_off)) return;
     }
 #endif  // SFTE_TERM_CUSTOM_BOXES
 
@@ -6454,14 +6454,14 @@ static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_
     Returns 0 for unhandled cases, ensuring that they're drawn using font data.
  */
 static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
-                                            uint32_t col, uint32_t rune) {
+                                            uint32_t col, uint32_t rune, int32_t y_off) {
     int16_t cw = ctx->font.cell_width;
     int16_t ch = ctx->font.cell_height;
 
 #define _SFTE_RECT(rx, ry, rw, rh)                                                                 \
     for (int16_t y = (ry); y < (ry) + (rh); ++y)                                                   \
         for (int16_t x = (rx); x < (rx) + (rw); ++x)                                               \
-    SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, ctx->width, ctx->height, col)
+    SFTE_COLOR_DRAW_PIXEL(px_buf, x, y + y_off, ctx->width, ctx->height, col)
 
     // Block elements
     if (rune >= 0x2580 && rune <= 0x259F) {
@@ -7509,8 +7509,6 @@ static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg) {
     shell output events (PTY data), and timer expirations (on cursor blink, key repeat, trail).
 */
 static void _sfte_wayland_loop(sfte_wayland_app *app) {
-    sfte_ctx *ctx = app->ctx;
-
     signal(SIGPIPE, SIG_IGN);
     setlocale(LC_ALL, "");
 
