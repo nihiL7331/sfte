@@ -2081,6 +2081,8 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int3
 static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
                                              int render_w);
 #if SFTE_TERM_CUSTOM_BOXES
+static inline void _sfte_render_line(sfte_ctx *ctx, void *px_buf, int32_t x0, int32_t y0,
+                                     int32_t x1, int32_t y1, int32_t thickness, uint32_t col);
 static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
                                             uint32_t col, uint32_t rune, int32_t y_off);
 #endif  // SFTE_TERM_CUSTOM_BOXES
@@ -6450,6 +6452,62 @@ static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_
 
 #if SFTE_TERM_CUSTOM_BOXES
 /*
+    A stripped down Xialoin Wu line algorithm optimized for integer endpoints.
+    Draws anti-aliased 1px lines for terminal cell diagonals.
+*/
+static inline void _sfte_render_line(sfte_ctx *ctx, void *px_buf, int32_t x0, int32_t y0,
+                                     int32_t x1, int32_t y1, int32_t thickness, uint32_t col) {
+    if (thickness < 1) thickness = 1;
+    uint8_t steep = abs(y1 - y0) > abs(x1 - x0);
+    if (steep) {
+        int32_t tmp = x0;
+        x0 = y0;
+        y0 = tmp;
+        tmp = x1;
+        x1 = y1;
+        y1 = tmp;
+    }
+    if (x0 > x1) {
+        int32_t tmp = x0;
+        x0 = x1;
+        x1 = tmp;
+        tmp = y0;
+        y0 = y1;
+        y1 = tmp;
+    }
+
+    float dx = (float)(x1 - x0);
+    float dy = (float)(y1 - y0);
+    float grad = (dx == 0.0f) ? 1.0f : (dy / dx);
+    float intery = y0;
+
+#define _SFTE_SAFE_BLEND(_x, _y, _a)                                                               \
+    if ((_x) >= 0 && (_x) < ctx->width && (_y) >= 0 && (_y) < ctx->height)                         \
+        SFTE_COLOR_BLEND_PIXEL(px_buf, _x, _y, ctx->width, col, _a);
+
+    for (int32_t x = x0; x <= x1; ++x) {
+        float intery_frac = intery - floorf(intery);
+        uint8_t a1 = (uint8_t)((1.0f - intery_frac) * 255.0f);
+        uint8_t a2 = (uint8_t)(intery_frac * 255.0f);
+        int32_t y = (int32_t)intery;
+
+        int32_t bound_min = y - (thickness / 2);
+        int32_t bound_max = bound_min + thickness;
+
+        if (steep) {
+            _SFTE_SAFE_BLEND(bound_min, x, a1);
+            for (int32_t w = 1; w < thickness; ++w) _SFTE_SAFE_BLEND(bound_min + w, x, 255);
+            _SFTE_SAFE_BLEND(bound_max, x, a2);
+        } else {
+            _SFTE_SAFE_BLEND(x, bound_min, a1);
+            for (int32_t w = 1; w < thickness; ++w) _SFTE_SAFE_BLEND(x, bound_min + w, 255);
+            _SFTE_SAFE_BLEND(x, bound_max, a2);
+        }
+        intery += grad;
+    }
+}
+
+/*
     Renders box characters (0x2500-0x259F) to ensure there's no gaps between characters.
     Returns 0 for unhandled cases, ensuring that they're drawn using font data.
  */
@@ -6544,6 +6602,17 @@ static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t
     case 0x253B: _SET_LINE(1, 0, 1, 1, 1); break;  // ┻
     case 0x253C: _SET_LINE(1, 1, 1, 1, 0); break;  // ┼
     case 0x254B: _SET_LINE(1, 1, 1, 1, 1); break;  // ╋
+    case 0x2571:                                   // ╱
+    case 0x2572:                                   // ╲
+    case 0x2573:                                   // ╳
+    {
+        int16_t b_lw = (cw / 8 > 0) ? cw / 8 : 1;
+        if (rune == 0x2571 || rune == 0x2573)
+            _sfte_render_line(ctx, px_buf, cx, cy + ch - 1, cx + cw - 1, cy, b_lw, col);
+        if (rune == 0x2572 || rune == 0x2573)
+            _sfte_render_line(ctx, px_buf, cx, cy, cx + cw - 1, cy + ch - 1, b_lw, col);
+        return 1;
+    }
     default: return 0;
     }
 
