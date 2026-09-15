@@ -6638,9 +6638,11 @@ static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t
     {
         int16_t b_lw = (cw / 8 > 0) ? cw / 8 : 1;
         if (rune == 0x2571 || rune == 0x2573)
-            _sfte_render_line(ctx, px_buf, cx, cy + ch - 1, cx + cw - 1, cy, b_lw, col);
+            _sfte_render_line(ctx, px_buf, cx, cy + ch - 1 + y_off, cx + cw - 1, cy + y_off, b_lw,
+                              col);
         if (rune == 0x2572 || rune == 0x2573)
-            _sfte_render_line(ctx, px_buf, cx, cy, cx + cw - 1, cy + ch - 1, b_lw, col);
+            _sfte_render_line(ctx, px_buf, cx, cy + y_off, cx + cw - 1, cy + ch - 1 + y_off, b_lw,
+                              col);
         return 1;
     }
     default: return 0;
