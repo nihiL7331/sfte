@@ -19346,6 +19346,15 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #if SFTE_IMG_KITTY
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
+#define STBI_NO_BMP
+#define STBI_NO_PSD
+#define STBI_NO_TGA
+#define STBI_NO_GIF  // NOTE: remove this with gif support added
+#define STBI_NO_HDR
+#define STBI_NO_PIC
+#define STBI_NO_PNM
+#define STBI_NO_FAILURE_STRINGS
+#define STBI_NO_THREAD_LOCALS
 /*=== stb_image.h =========================================================*/
 /* stb_image - v2.30 - public domain image loader - http://nothings.org/stb
                                   no warranty implied; use at your own risk
