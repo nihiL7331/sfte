@@ -974,6 +974,18 @@ typedef void (*sfte_bell_cb)(void *user_data);
 */
 typedef void (*sfte_title_cb)(void *user_data, const char *title);
 
+/*
+    Fired when the terminal receives an OSC 9;4 progress bar sequence.
+    `state` can either be:
+        0 for remove,
+        1 for normal,
+        2 for error,
+        3 for indeterminate,
+        4 for warning.
+    `progress` is a value from 0 to 100.
+*/
+typedef void (*sfte_progress_cb)(void *user_data, uint8_t state, uint8_t progress);
+
 // =================================================================================================
 // >>core initialization & lifecycle
 // =================================================================================================
@@ -1678,6 +1690,7 @@ struct sfte_ctx {
     sfte_open_link_cb open_link_cb;
 #endif  // SFTE_INPUT_HYPERLINKS
     sfte_title_cb title_cb;
+    sfte_progress_cb progress_cb;
     void *user_data;
 
     int32_t width;
@@ -5460,6 +5473,15 @@ static inline void _sfte_parser_osc_dispatch(sfte_ctx *ctx, uint8_t terminator) 
              strncmp(ctx->term.osc_payload, "2;", 2) == 0) {
         char *title = ctx->term.osc_payload + 2;
         if (ctx->title_cb) ctx->title_cb(ctx->user_data, title);
+    } else if (strncmp(ctx->term.osc_payload, "9;4;", 4) == 0) {
+        char *p = ctx->term.osc_payload + 4;
+        uint8_t state = *p - '0';
+        while (*p && *p != ';') p++;
+        uint8_t progress = 0;
+        if (*p == ';') progress = atoi(p + 1);
+        if (progress < 0) progress = 0;
+        if (progress > 100) progress = 100;
+        if (ctx->progress_cb) ctx->progress_cb(ctx->user_data, state, progress);
     } else
         _SFTE_WARN(ctx, UNHANDLED_OSC, ctx->term.osc_payload);
 }
