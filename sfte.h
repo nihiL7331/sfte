@@ -6295,9 +6295,8 @@ static void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16
     int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
 
 #if SFTE_TERM_CUSTOM_BOXES
-    if (rune >= 0x2500 && rune <= 0x259F) {
+    if ((rune >= 0x2500 && rune <= 0x259F) || (rune >= 0x2800 && rune <= 0x28FF))
         if (_sfte_render_box_char(ctx, px_buf, cx, cy, fg, rune, y_off)) return;
-    }
 #endif  // SFTE_TERM_CUSTOM_BOXES
 
     sfte_font_cache *actual_cache = target_cache;
@@ -6571,6 +6570,37 @@ static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t
         case 0x259F: _QUAD(0, 1, 1, 1); break;  // ▟
         default: return 0;
         }
+        return 1;
+    }
+
+    // Braille patterns
+    if (rune >= 0x2800 && rune <= 0x28FF) {
+        uint8_t dots = rune - 0x2800;
+        if (dots == 0) return 1;
+
+        // 2 columns, 4 rows
+        int16_t sw = cw / 2;
+        int16_t sh = ch / 4;
+
+        int16_t dot_w = (cw / 4 > 0) ? cw / 4 : 1;
+        int16_t dot_h = (ch / 8 > 0) ? ch / 8 : 1;
+
+        int16_t ox = (sw - dot_w) / 2;
+        int16_t oy = (sh - dot_h) / 2;
+
+#define _DRAW_DOT(bit, col, row)                                                                   \
+    if (dots & (bit)) _SFTE_RECT(cx + ((col) * sw) + ox, cy + ((row) * sh) + oy, dot_w, dot_h);
+
+        _DRAW_DOT(0x01, 0, 0);  // ⠁
+        _DRAW_DOT(0x02, 0, 1);  // ⠂
+        _DRAW_DOT(0x04, 0, 2);  // ⠄
+        _DRAW_DOT(0x08, 1, 0);  // ⠈
+        _DRAW_DOT(0x10, 1, 1);  // ⠐
+        _DRAW_DOT(0x20, 1, 2);  // ⠠
+        _DRAW_DOT(0x40, 0, 3);  // ⡀
+        _DRAW_DOT(0x80, 1, 3);  // ⢀
+
+#undef _DRAW_DOT
         return 1;
     }
 
