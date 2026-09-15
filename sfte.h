@@ -169,6 +169,14 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #endif  // SFTE_TERM_TAB_WIDTH
 
 /*
+    Enables procedural rendering for box drawing characters (U+2500 - U+257F).
+    Guarantees seamless, gapless lines for TUIs.
+*/
+#ifndef SFTE_TERM_CUSTOM_BOXES
+#define SFTE_TERM_CUSTOM_BOXES 1
+#endif  // SFTE_TERM_CUSTOM_BOXES
+
+/*
     Enables standard terminal alternate screen buffer (used by TUIs extensively).
     Can be disabled to halve the memory usage for logical grid,
     but CAN and WILL break TUIs rendering.
@@ -419,6 +427,10 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 /*
     Font oversample scale.
     If <= 1, no oversampling occurs.
+
+    NOTE:
+    To avoid jagged baseline issues, blurring of horizontal stems
+    oversampling only applies horizontally, not vertically.
 */
 #ifndef SFTE_FONT_OVERSAMPLE
 #define SFTE_FONT_OVERSAMPLE 2
@@ -2068,6 +2080,12 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int3
                                                int32_t render_w, sfte_cell *vcell);
 static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
                                              int render_w);
+#if SFTE_TERM_CUSTOM_BOXES
+static inline void _sfte_render_line(sfte_ctx *ctx, void *px_buf, int32_t x0, int32_t y0,
+                                     int32_t x1, int32_t y1, int32_t thickness, uint32_t col);
+static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
+                                            uint32_t col, uint32_t rune, int32_t y_off);
+#endif  // SFTE_TERM_CUSTOM_BOXES
 static void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
                                           int32_t y_off, sfte_cell *vcell, uint8_t is_cursor);
 static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
@@ -5655,27 +5673,24 @@ static inline int _sfte_stb_bounds(sfte_font_backend_info *info, uint32_t rune, 
 static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, float scale,
                                   uint8_t *atlas_ptr, int gw, int gh, int atlas_stride) {
 #if SFTE_FONT_OVERSAMPLE <= 1
-    stbtt_MakeGlyphBitmap(info, atlas_ptr, gw, gh, scale, scale, glyph_idx);
+    stbtt_MakeGlyphBitmap(info, atlas_ptr, gw, gh, atlas_stride, scale, scale, glyph_idx);
 #else   // SFTE_FONT_OVERSAMPLE > 1
     int bw = gw * SFTE_FONT_OVERSAMPLE;
-    int bh = gh * SFTE_FONT_OVERSAMPLE;
+    int bh = gh;
 
     uint8_t stack_buf[128 * 128];
     uint8_t *temp_buf = stack_buf;
     if (bw * bh > (int)sizeof(stack_buf)) temp_buf = (uint8_t *)SFTE_MALLOC(bw * bh);
 
-    stbtt_MakeGlyphBitmap(info, temp_buf, bw, bh, bw, scale * SFTE_FONT_OVERSAMPLE,
-                          scale * SFTE_FONT_OVERSAMPLE, glyph_idx);
+    stbtt_MakeGlyphBitmap(info, temp_buf, bw, bh, bw, scale * SFTE_FONT_OVERSAMPLE, scale,
+                          glyph_idx);
 
     for (int y = 0; y < gh; ++y)
         for (int x = 0; x < gw; ++x) {
             int32_t sum = 0;
-            for (int oy = 0; oy < SFTE_FONT_OVERSAMPLE; ++oy)
-                for (int ox = 0; ox < SFTE_FONT_OVERSAMPLE; ++ox)
-                    sum += temp_buf[(y * SFTE_FONT_OVERSAMPLE + oy) * bw +
-                                    (x * SFTE_FONT_OVERSAMPLE + ox)];
-            atlas_ptr[y * atlas_stride + x] = (uint8_t)(sum / (SFTE_FONT_OVERSAMPLE *
-                                                               SFTE_FONT_OVERSAMPLE));
+            for (int ox = 0; ox < SFTE_FONT_OVERSAMPLE; ++ox)
+                sum += temp_buf[y * bw + (x * SFTE_FONT_OVERSAMPLE + ox)];
+            atlas_ptr[y * atlas_stride + x] = (uint8_t)(sum / SFTE_FONT_OVERSAMPLE);
         }
 
     if (temp_buf != stack_buf) SFTE_FREE(temp_buf);
@@ -6276,12 +6291,17 @@ static void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16
                                  sfte_font_cache *target_cache) {
     if (rune == ' ') return;
 
+    int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
+    int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
+
+#if SFTE_TERM_CUSTOM_BOXES
+    if ((rune >= 0x2500 && rune <= 0x259F) || (rune >= 0x2800 && rune <= 0x28FF))
+        if (_sfte_render_box_char(ctx, px_buf, cx, cy, fg, rune, y_off)) return;
+#endif  // SFTE_TERM_CUSTOM_BOXES
+
     sfte_font_cache *actual_cache = target_cache;
     sfte_glyph *g = _sfte_font_get_glyph(ctx, &actual_cache, rune);
     if (!g) return;
-
-    int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
-    int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
 
     int32_t glyph_width = g->x1 - g->x0;
     int32_t glyph_height = g->y1 - g->y0;
@@ -6428,6 +6448,223 @@ static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_
                     SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, ctx->width, ctx->height, cur_col);
     }
 }
+
+#if SFTE_TERM_CUSTOM_BOXES
+/*
+    A stripped down Xialoin Wu line algorithm optimized for integer endpoints.
+    Draws anti-aliased 1px lines for terminal cell diagonals.
+*/
+static inline void _sfte_render_line(sfte_ctx *ctx, void *px_buf, int32_t x0, int32_t y0,
+                                     int32_t x1, int32_t y1, int32_t thickness, uint32_t col) {
+    if (thickness < 1) thickness = 1;
+    uint8_t steep = abs(y1 - y0) > abs(x1 - x0);
+    if (steep) {
+        int32_t tmp = x0;
+        x0 = y0;
+        y0 = tmp;
+        tmp = x1;
+        x1 = y1;
+        y1 = tmp;
+    }
+    if (x0 > x1) {
+        int32_t tmp = x0;
+        x0 = x1;
+        x1 = tmp;
+        tmp = y0;
+        y0 = y1;
+        y1 = tmp;
+    }
+
+    float dx = (float)(x1 - x0);
+    float dy = (float)(y1 - y0);
+    float grad = (dx == 0.0f) ? 1.0f : (dy / dx);
+    float intery = y0;
+
+#define _SFTE_SAFE_BLEND(_x, _y, _a)                                                               \
+    if ((_x) >= 0 && (_x) < ctx->width && (_y) >= 0 && (_y) < ctx->height)                         \
+        SFTE_COLOR_BLEND_PIXEL(px_buf, _x, _y, ctx->width, col, _a);
+
+    for (int32_t x = x0; x <= x1; ++x) {
+        float intery_frac = intery - floorf(intery);
+        uint8_t a1 = (uint8_t)((1.0f - intery_frac) * 255.0f);
+        uint8_t a2 = (uint8_t)(intery_frac * 255.0f);
+        int32_t y = (int32_t)intery;
+
+        int32_t bound_min = y - (thickness / 2);
+        int32_t bound_max = bound_min + thickness;
+
+        if (steep) {
+            _SFTE_SAFE_BLEND(bound_min, x, a1);
+            for (int32_t w = 1; w < thickness; ++w) _SFTE_SAFE_BLEND(bound_min + w, x, 255);
+            _SFTE_SAFE_BLEND(bound_max, x, a2);
+        } else {
+            _SFTE_SAFE_BLEND(x, bound_min, a1);
+            for (int32_t w = 1; w < thickness; ++w) _SFTE_SAFE_BLEND(x, bound_min + w, 255);
+            _SFTE_SAFE_BLEND(x, bound_max, a2);
+        }
+        intery += grad;
+    }
+}
+
+/*
+    Renders box characters (0x2500-0x259F) to ensure there's no gaps between characters.
+    Returns 0 for unhandled cases, ensuring that they're drawn using font data.
+ */
+static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
+                                            uint32_t col, uint32_t rune, int32_t y_off) {
+    int16_t cw = ctx->font.cell_width;
+    int16_t ch = ctx->font.cell_height;
+
+#define _SFTE_RECT(rx, ry, rw, rh)                                                                 \
+    for (int16_t y = (ry); y < (ry) + (rh); ++y)                                                   \
+        for (int16_t x = (rx); x < (rx) + (rw); ++x)                                               \
+    SFTE_COLOR_DRAW_PIXEL(px_buf, x, y + y_off, ctx->width, ctx->height, col)
+
+    // Block elements
+    if (rune >= 0x2580 && rune <= 0x259F) {
+#define _BLOCK_B(f)                                                                                \
+    _SFTE_RECT(cx, cy + ch - ((((f) * ch) / 8 > 0) ? (((f) * ch) / 8) : 1), cw,                    \
+               (((f) * ch) / 8 > 0) ? (((f) * ch) / 8) : 1)
+#define _BLOCK_L(f) _SFTE_RECT(cx, cy, (((f) * cw) / 8 > 0) ? (((f) * cw) / 8) : 1, ch)
+#define _BLOCK_T(f) _SFTE_RECT(cx, cy, cw, (((f) * ch) / 8 > 0) ? (((f) * ch) / 8) : 1)
+#define _BLOCK_R(f)                                                                                \
+    _SFTE_RECT(cx + cw - ((((f) * cw) / 8 > 0) ? (((f) * cw) / 8) : 1), cy,                        \
+               (((f) * cw) / 8 > 0) ? (((f) * cw) / 8) : 1, ch)
+#define _QUAD(tl, tr, bl, br)                                                                      \
+    do {                                                                                           \
+        if (tl) _SFTE_RECT(cx, cy, cw / 2, ch / 2);                                                \
+        if (tr) _SFTE_RECT(cx + cw / 2, cy, cw / 2, ch / 2);                                       \
+        if (bl) _SFTE_RECT(cx, cy + ch / 2, cw / 2, ch / 2);                                       \
+        if (br) _SFTE_RECT(cx + cw / 2, cy + ch / 2, cw / 2, ch / 2);                              \
+    } while (0)
+
+        switch (rune) {
+        case 0x2580: _BLOCK_T(4); break;        // ▀
+        case 0x2581: _BLOCK_B(1); break;        // ▁
+        case 0x2582: _BLOCK_B(2); break;        // ▂
+        case 0x2583: _BLOCK_B(3); break;        // ▃
+        case 0x2584: _BLOCK_B(4); break;        // ▄
+        case 0x2585: _BLOCK_B(5); break;        // ▅
+        case 0x2586: _BLOCK_B(6); break;        // ▆
+        case 0x2587: _BLOCK_B(7); break;        // ▇
+        case 0x2588: _BLOCK_B(8); break;        // █
+        case 0x2589: _BLOCK_L(7); break;        // ▉
+        case 0x258A: _BLOCK_L(6); break;        // ▊
+        case 0x258B: _BLOCK_L(5); break;        // ▋
+        case 0x258C: _BLOCK_L(4); break;        // ▌
+        case 0x258D: _BLOCK_L(3); break;        // ▍
+        case 0x258E: _BLOCK_L(2); break;        // ▎
+        case 0x258F: _BLOCK_L(1); break;        // ▏
+        case 0x2590: _BLOCK_R(4); break;        // ▐
+        case 0x2594: _BLOCK_T(1); break;        // ▔
+        case 0x2595: _BLOCK_R(1); break;        // ▕
+        case 0x2596: _QUAD(0, 0, 1, 0); break;  // ▖
+        case 0x2597: _QUAD(0, 0, 0, 1); break;  // ▗
+        case 0x2598: _QUAD(1, 0, 0, 0); break;  // ▘
+        case 0x2599: _QUAD(1, 0, 1, 1); break;  // ▙
+        case 0x259A: _QUAD(1, 0, 0, 1); break;  // ▚
+        case 0x259B: _QUAD(1, 1, 1, 0); break;  // ▛
+        case 0x259C: _QUAD(1, 1, 0, 1); break;  // ▜
+        case 0x259D: _QUAD(0, 1, 0, 0); break;  // ▝
+        case 0x259E: _QUAD(0, 1, 1, 0); break;  // ▞
+        case 0x259F: _QUAD(0, 1, 1, 1); break;  // ▟
+        default: return 0;
+        }
+        return 1;
+    }
+
+    // Braille patterns
+    if (rune >= 0x2800 && rune <= 0x28FF) {
+        uint8_t dots = rune - 0x2800;
+        if (dots == 0) return 1;
+
+        // 2 columns, 4 rows
+        int16_t sw = cw / 2;
+        int16_t sh = ch / 4;
+
+        int16_t dot_w = (cw / 4 > 0) ? cw / 4 : 1;
+        int16_t dot_h = (ch / 8 > 0) ? ch / 8 : 1;
+
+        int16_t ox = (sw - dot_w) / 2;
+        int16_t oy = (sh - dot_h) / 2;
+
+#define _DRAW_DOT(bit, col, row)                                                                   \
+    if (dots & (bit)) _SFTE_RECT(cx + ((col) * sw) + ox, cy + ((row) * sh) + oy, dot_w, dot_h);
+
+        _DRAW_DOT(0x01, 0, 0);  // ⠁
+        _DRAW_DOT(0x02, 0, 1);  // ⠂
+        _DRAW_DOT(0x04, 0, 2);  // ⠄
+        _DRAW_DOT(0x08, 1, 0);  // ⠈
+        _DRAW_DOT(0x10, 1, 1);  // ⠐
+        _DRAW_DOT(0x20, 1, 2);  // ⠠
+        _DRAW_DOT(0x40, 0, 3);  // ⡀
+        _DRAW_DOT(0x80, 1, 3);  // ⢀
+
+#undef _DRAW_DOT
+        return 1;
+    }
+
+    uint8_t up = 0, down = 0, left = 0, right = 0;
+    uint8_t heavy = 0;
+
+#define _SET_LINE(u, d, l, r, h) up = u, down = d, left = l, right = r, heavy = h
+
+    switch (rune) {
+    case 0x2500: _SET_LINE(0, 0, 1, 1, 0); break;  // ─
+    case 0x2501: _SET_LINE(0, 0, 1, 1, 1); break;  // ━
+    case 0x2502: _SET_LINE(1, 1, 0, 0, 0); break;  // │
+    case 0x2503: _SET_LINE(1, 1, 0, 0, 1); break;  // ┃
+    case 0x250C: _SET_LINE(0, 1, 0, 1, 0); break;  // ┌
+    case 0x250F: _SET_LINE(0, 1, 0, 1, 1); break;  // ┏
+    case 0x2510: _SET_LINE(0, 1, 1, 0, 0); break;  // ┐
+    case 0x2513: _SET_LINE(0, 1, 1, 0, 1); break;  // ┓
+    case 0x2514: _SET_LINE(1, 0, 0, 1, 0); break;  // └
+    case 0x2517: _SET_LINE(1, 0, 0, 1, 1); break;  // ┗
+    case 0x2518: _SET_LINE(1, 0, 1, 0, 0); break;  // ┘
+    case 0x251B: _SET_LINE(1, 0, 1, 0, 1); break;  // ┛
+    case 0x251C: _SET_LINE(1, 1, 0, 1, 0); break;  // ├
+    case 0x2523: _SET_LINE(1, 1, 0, 1, 1); break;  // ┣
+    case 0x2524: _SET_LINE(1, 1, 1, 0, 0); break;  // ┤
+    case 0x252B: _SET_LINE(1, 1, 1, 0, 1); break;  // ┫
+    case 0x252C: _SET_LINE(0, 1, 1, 1, 0); break;  // ┬
+    case 0x2533: _SET_LINE(0, 1, 1, 1, 1); break;  // ┳
+    case 0x2534: _SET_LINE(1, 0, 1, 1, 0); break;  // ┴
+    case 0x253B: _SET_LINE(1, 0, 1, 1, 1); break;  // ┻
+    case 0x253C: _SET_LINE(1, 1, 1, 1, 0); break;  // ┼
+    case 0x254B: _SET_LINE(1, 1, 1, 1, 1); break;  // ╋
+    case 0x2571:                                   // ╱
+    case 0x2572:                                   // ╲
+    case 0x2573:                                   // ╳
+    {
+        int16_t b_lw = (cw / 8 > 0) ? cw / 8 : 1;
+        if (rune == 0x2571 || rune == 0x2573)
+            _sfte_render_line(ctx, px_buf, cx, cy + ch - 1 + y_off, cx + cw - 1, cy + y_off, b_lw,
+                              col);
+        if (rune == 0x2572 || rune == 0x2573)
+            _sfte_render_line(ctx, px_buf, cx, cy + y_off, cx + cw - 1, cy + ch - 1 + y_off, b_lw,
+                              col);
+        return 1;
+    }
+    default: return 0;
+    }
+
+    int16_t base_lw = (cw / 8 > 0) ? cw / 8 : 1;
+    int16_t lw = heavy ? (base_lw * 3) : base_lw;
+    int16_t hw = lw / 2;
+    int16_t mx = cx + cw / 2;
+    int16_t my = cy + ch / 2;
+
+    if (up) _SFTE_RECT(mx - hw, cy, lw, my - cy + hw);
+    if (down) _SFTE_RECT(mx - hw, my - hw, lw, cy + ch - my + hw);
+    if (left) _SFTE_RECT(cx, my - hw, mx - cx + hw, lw);
+    if (right) _SFTE_RECT(mx - hw, my - hw, cx + cw - mx + hw, lw);
+
+#undef _SET_LINE
+#undef _SFTE_RECT
+
+    return 1;
+}
+#endif  // SFTE_TERM_CUSTOM_BOXES
 
 /*
     Dispatcher for terminal text decorations (underlines, cursor).
@@ -6904,12 +7141,17 @@ static void _sfte_wayland_open_link_cb(void *user_data, const char *uri) {
     (void)user_data;
     if (!uri) return;
 
-    if (fork() == 0) {
-        freopen("/dev/null", "w", stdout);
-        freopen("/dev/null", "w", stderr);
-        execlp("xdg-open", "xdg-open", uri, NULL);
-        exit(1);
-    }
+    pid_t pid = fork();
+    if (pid == 0) {
+        if (fork() == 0) {
+            freopen("/dev/null", "w", stdout);
+            freopen("/dev/null", "w", stderr);
+            execlp("xdg-open", "xdg-open", uri, NULL);
+            exit(1);
+        }
+        exit(0);
+    } else if (pid > 0)
+        waitpid(pid, NULL, 0);
 }
 #endif  // SFTE_INPUT_HYPERLINKS
 
@@ -7368,8 +7610,6 @@ static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg) {
     shell output events (PTY data), and timer expirations (on cursor blink, key repeat, trail).
 */
 static void _sfte_wayland_loop(sfte_wayland_app *app) {
-    sfte_ctx *ctx = app->ctx;
-
     signal(SIGPIPE, SIG_IGN);
     setlocale(LC_ALL, "");
 
@@ -7431,9 +7671,13 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
 
             if (dmg.w > 0 && dmg.h > 0) {
 #if SFTE_TERM_DOUBLE_BUFFER
-                for (int32_t y = dmg.y; y < dmg.y + dmg.h; ++y)
-                    memcpy(&app->shm_data[y * app->width + dmg.x],
-                           &app->back_buffer[y * app->width + dmg.x], dmg.w * sizeof(uint32_t));
+                if (dmg.w == app->width)
+                    memcpy(&app->shm_data[dmg.y * app->width],
+                           &app->back_buffer[dmg.y * app->width], dmg.w * dmg.h * sizeof(uint32_t));
+                else
+                    for (int32_t y = dmg.y; y < dmg.y + dmg.h; ++y)
+                        memcpy(&app->shm_data[y * app->width + dmg.x],
+                               &app->back_buffer[y * app->width + dmg.x], dmg.w * sizeof(uint32_t));
 #endif  // SFTE_TERM_DOUBLE_BUFFER
 
                 wl_surface_damage_buffer(app->surface, dmg.x, dmg.y, dmg.w, dmg.h);
