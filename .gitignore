@@ -1,6 +1,6 @@
 /nob
 /sfte
-/xdg-shell.c
-/xdg-shell.h
+/vendor/xdg-shell.c
+/vendor/xdg-shell.h
 /nob.old
-/sfte_release.h
+/config.c
