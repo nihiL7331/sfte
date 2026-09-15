@@ -5190,8 +5190,8 @@ static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
             _sfte_csi_exec_kitty(ctx, p);
 #endif  // SFTE_INPUT_KITTY
         break;
-    default: _SFTE_WARN(ctx, UNHANDLED_CSI, cmd, cnt); break;
     }
+    _SFTE_WARN(ctx, UNHANDLED_CSI, cmd, cnt);
 }
 // =================================================================================================
 // >>parser
