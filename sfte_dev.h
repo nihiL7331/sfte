@@ -1604,6 +1604,7 @@ typedef struct {
 #endif                      // SFTE_CURSOR_BLINK
 #if SFTE_CURSOR_TRAIL
     uint8_t is_trailing;
+    uint8_t warp_tail;
 #endif  // SFTE_CURSOR_TRAIL
 #if SFTE_CURSOR_DYNAMIC
     uint8_t cursor_style;  // Block/underline/bar
@@ -4631,6 +4632,9 @@ static inline void _sfte_csi_exec_hvp(sfte_ctx *ctx, uint16_t *p) {
                                            ctx->term.scroll_top, ctx->term.scroll_bot);
     else
         ctx->term.cursor_row = _SFTE_CLAMP(_SFTE_P_IDX(p[0]), 0, ctx->term.rows - 1);
+#if SFTE_CURSOR_TRAIL
+    ctx->term.warp_tail = 1;
+#endif  // SFTE_CURSOR_TRAIL
 }
 
 /*
@@ -6104,14 +6108,18 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
         _sfte_render_damage_add(out_dmg, ctx->term.trail_dmg.x, ctx->term.trail_dmg.y,
                                 ctx->term.trail_dmg.w, ctx->term.trail_dmg.h);
 
-    if (ctx->term.hide_cursor || !ctx->term.is_trailing) {
+    float target_x = ctx->term.cursor_col * ctx->font.cell_width;
+    float target_y = ctx->term.cursor_row * ctx->font.cell_height;
+
+    if (ctx->term.hide_cursor || ctx->term.warp_tail || !ctx->term.is_trailing) {
+        ctx->term.tail_rx = target_x;
+        ctx->term.tail_ry = target_y;
+        ctx->term.warp_tail = 0;
+
         ctx->term.trail_dmg.w = 0;
         ctx->term.trail_dmg.h = 0;
         return;
     }
-
-    float target_x = ctx->term.cursor_col * ctx->font.cell_width;
-    float target_y = ctx->term.cursor_row * ctx->font.cell_height;
 
     float trail_w = ctx->font.cell_width;
     float trail_h = ctx->font.cell_height;
@@ -8330,10 +8338,7 @@ void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
         _sfte_grid_resize(ctx, new_cols, new_rows);
 
 #if SFTE_CURSOR_TRAIL
-        ctx->term.tail_rx = ctx->term.cursor_col * ctx->font.cell_width;
-        ctx->term.tail_ry = ctx->term.cursor_row * ctx->font.cell_height;
-        ctx->term.is_trailing = 0;
-        ctx->term.trail_dmg.w = 0;
+        ctx->term.warp_tail = 1;
 #endif  // SFTE_CURSOR_TRAIL
     }
 }
