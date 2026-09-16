@@ -7751,13 +7751,31 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
         // Handle incoming text from the shell
         if (fds[1].revents & (POLLIN | POLLERR | POLLHUP)) {
             uint8_t buf[SFTE_TERM_PTY_BUF_SIZE];
-            ssize_t n = read(app->pty_fd, buf, SFTE_TERM_PTY_BUF_SIZE);
+            uint8_t did_read = 0;
 
-            if (n > 0) {
-                sfte_parse(app->ctx, buf, n);
-                app->needs_render = 1;
-            } else
-                app->running = 0;  // Shell exited
+            while (1) {
+                ssize_t n = read(app->pty_fd, buf, SFTE_TERM_PTY_BUF_SIZE);
+
+                if (n > 0) {
+                    sfte_parse(app->ctx, buf, n);
+                    did_read = 1;
+                } else if (n == 0) {
+                    app->running = 0;  // Shell exited
+                    break;
+                } else {  // n < 0
+                    // EAGAIN/EWOULDBLOCK means buffer is empty
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                    // EINTR means its interrupted by signal
+                    else if (errno == EINTR)
+                        continue;
+                    else {
+                        app->running = 0;
+                        break;
+                    }
+                }
+            }
+
+            if (did_read) app->needs_render = 1;
         }
 
         // Handle key repeat timer
@@ -8031,6 +8049,9 @@ pid_t sfte_posix_pty_spawn(sfte_ctx *ctx, int32_t *out_fd, uint16_t px_w, uint16
         execlp(shell, shell, NULL);
         abort();  // if execlp returns, it failed to exec the shell
     }
+
+    int flags = fcntl(*out_fd, F_GETFL, 0);
+    fcntl(*out_fd, F_SETFL, flags | O_NONBLOCK);
 
     _SFTE_INFO(ctx, PTY_SPAWN);
     return pid;
