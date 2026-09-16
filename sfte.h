@@ -30235,12 +30235,71 @@ typedef struct {
 } sfte_kitty_state;
 #endif  // SFTE_IMG_KITTY
 
+#if SFTE_FONT_LIGATURES
+typedef struct {
+    uint16_t lookup_indices[SFTE_FONT_MAX_LIGATURE_LOOKUPS];
+    uint32_t subtable_offs[SFTE_FONT_MAX_LIGATURE_LOOKUPS][SFTE_FONT_MAX_LIGATURE_SUBTABLES];
+    uint16_t subtable_cnts[SFTE_FONT_MAX_LIGATURE_LOOKUPS];
+    uint16_t lookup_types[SFTE_FONT_MAX_LIGATURE_LOOKUPS];
+    uint16_t lookup_cnt;
+} sfte_shaper_feature;
+
+/*
+    Font shaper data context.
+*/
+typedef struct {
+    uint32_t table_off;
+    uint32_t script_list_off;
+    uint32_t feat_list_off;
+    uint32_t lookup_list_off;
+
+    sfte_shaper_feature calt;  // Contextual alternates
+    sfte_shaper_feature liga;  // Standard ligatures
+} sfte_shaper_ctx;
+
+typedef struct {
+    uint16_t sequence_idx;
+    uint16_t lookup_idx;
+} sfte_shaper_subst_record;
+#endif  // SFTE_FONT_LIGATURES
+
+/*
+    Font variant texture cache.
+*/
+typedef struct {
+#if SFTE_FONT_LIGATURES
+    sfte_shaper_ctx shaper[SFTE_FONT_MAX_COUNT];
+#endif  // SFTE_FONT_LIGATURES
+    sfte_font_backend_info info[SFTE_FONT_MAX_COUNT];
+    uint8_t *ttf_buf[SFTE_FONT_MAX_COUNT];
+    uint8_t *atlas_pxs;
+    sfte_glyph *glyphs;
+
+    float scales[SFTE_FONT_MAX_COUNT];
+
+    int16_t atlas_x;
+    int16_t atlas_y;
+    int16_t atlas_row_h;
+
+    uint8_t owns_ttf_buf[SFTE_FONT_MAX_COUNT];  // 1 if sfte allocated it via fopen, 0 if user
+                                                // provided it
+    int8_t num_fonts;
+} sfte_font_cache;
+
 /*
     Core terminal emulation state machine and grid bounds.
 */
 typedef struct {
     sfte_cell *cells;
     uint8_t *tab_stops;
+#if SFTE_FONT_LIGATURES
+    uint16_t *render_shaper_ids;
+    uint64_t *row_hashes;
+    uint16_t *row_shaper_ids;
+#endif  // SFTE_FONT_LIGATURES
+    uint16_t *render_ids;
+    uint8_t *render_font_indices;
+    sfte_font_cache **render_target_caches;
     char *osc_payload;
     size_t osc_len;
     size_t osc_cap;
@@ -30386,57 +30445,6 @@ typedef struct {
     uint8_t report_focus;
 #endif  // SFTE_TERM_FOCUS
 } sfte_term;
-
-#if SFTE_FONT_LIGATURES
-typedef struct {
-    uint16_t lookup_indices[SFTE_FONT_MAX_LIGATURE_LOOKUPS];
-    uint32_t subtable_offs[SFTE_FONT_MAX_LIGATURE_LOOKUPS][SFTE_FONT_MAX_LIGATURE_SUBTABLES];
-    uint16_t subtable_cnts[SFTE_FONT_MAX_LIGATURE_LOOKUPS];
-    uint16_t lookup_types[SFTE_FONT_MAX_LIGATURE_LOOKUPS];
-    uint16_t lookup_cnt;
-} sfte_shaper_feature;
-
-/*
-    Font shaper data context.
-*/
-typedef struct {
-    uint32_t table_off;
-    uint32_t script_list_off;
-    uint32_t feat_list_off;
-    uint32_t lookup_list_off;
-
-    sfte_shaper_feature calt;  // Contextual alternates
-    sfte_shaper_feature liga;  // Standard ligatures
-} sfte_shaper_ctx;
-
-typedef struct {
-    uint16_t sequence_idx;
-    uint16_t lookup_idx;
-} sfte_shaper_subst_record;
-#endif  // SFTE_FONT_LIGATURES
-
-/*
-    Font variant texture cache.
-*/
-typedef struct {
-#if SFTE_FONT_LIGATURES
-    sfte_shaper_ctx shaper[SFTE_FONT_MAX_COUNT];
-#endif  // SFTE_FONT_LIGATURES
-    sfte_font_backend_info info[SFTE_FONT_MAX_COUNT];
-    uint8_t *ttf_buf[SFTE_FONT_MAX_COUNT];
-    uint8_t *atlas_pxs;
-    sfte_glyph *glyphs;
-
-    float scales[SFTE_FONT_MAX_COUNT];
-
-    int16_t atlas_x;
-    int16_t atlas_y;
-    int16_t atlas_row_h;
-
-    uint8_t owns_ttf_buf[SFTE_FONT_MAX_COUNT];  // 1 if sfte allocated it via fopen, 0 if user
-                                                // provided it
-    int8_t num_fonts;
-} sfte_font_cache;
 
 /*
     Central typography metrics and caching.
@@ -30913,7 +30921,7 @@ static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, sfte_damage_
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 #if SFTE_CURSOR_TRAIL
 static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_rect *out_dmg);
-#endif
+#endif  // SFTE_CURSOR_TRAIL
 #if SFTE_TERM_ANIMATE_SCREEN
 static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_y, int32_t *in_y);
 #endif  // SFTE_TERM_ANIMATE_SCREEN
@@ -30930,16 +30938,25 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int3
                                                int32_t render_w, sfte_cell *vcell);
 static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
                                              int32_t render_w);
-#if SFTE_TERM_CUSTOM_BOXES
+#if SFTE_TERM_CUSTOM_BOXES && !SFTE_TERM_ASCII_CHARSET
 static inline void _sfte_render_line(sfte_ctx *ctx, void *px_buf, int32_t x0, int32_t y0,
                                      int32_t x1, int32_t y1, int32_t thickness, uint32_t col);
 static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
                                             uint32_t col, uint32_t rune, int32_t y_off);
-#endif  // SFTE_TERM_CUSTOM_BOXES
+#endif  // SFTE_TERM_CUSTOM_BOXES && !SFTE_TERM_ASCII_CHARSET
 static void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
                                           int32_t y_off, sfte_cell *vcell, uint8_t is_cursor);
 static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
                                         int16_t vis_row, int32_t y_off);
+#if SFTE_FONT_LIGATURES
+static inline uint64_t _sfte_render_get_row_hash(sfte_ctx *ctx, int32_t logical_row);
+static inline void _sfte_render_shape_fg_row(sfte_ctx *ctx, int32_t logical_row);
+#endif  // SFTE_FONT_LIGATURES
+static inline void _sfte_render_extract_fg_row(sfte_ctx *ctx, int32_t logical_row, int16_t row,
+                                               int16_t vis_col, int16_t vis_row);
+static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
+                                       int32_t logical_row, int16_t vis_col, int16_t vis_row,
+                                       int32_t y_off, sfte_damage_rect *out_dmg);
 static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
                                         int16_t vis_row, int32_t y_off, sfte_damage_rect *out_dmg);
 
@@ -31035,7 +31052,8 @@ static void _sfte_log_default_func(const char *tag, sfte_log_level log_level, co
     Routes to a user-provided logger if one is configured in 'ctx', otherwise falls
     back to stderr. Aborts the process if 'log_level' is PANIC.
 
-    This function is not called directly, instead its used by macros (`_SFTE_PANIC/ERROR/WARN/INFO`)
+    This function is not called directly, instead its used by macros
+   (`_SFTE_PANIC/ERROR/WARN/INFO`)
 */
 static void _sfte_log(sfte_ctx *ctx, _sfte_log_item log_item, sfte_log_level log_level,
                       uint32_t line_nr, ...) {
@@ -31216,8 +31234,8 @@ static void _sfte_rune_insert(sfte_ctx *ctx, sfte_rune rune) {
 /*
     Feeds a single byte into the UTF-8 state machine.
     Returns 1 if a complete rune has been successfully decoded.
-    Returns 0 if more bytes are needed, or if an invalid sequence was encountered (which aborts the
-    current sequence and resets the state machine).
+    Returns 0 if more bytes are needed, or if an invalid sequence was encountered (which aborts
+   the current sequence and resets the state machine).
 
     If `SFTE_TERM_ASCII_CHARSET` is 1, skips UTF8 bytes to ensure they don't break the layout.
 */
@@ -31325,7 +31343,8 @@ static inline uint32_t _sfte_color_from_rgb(uint32_t rgb) {
     Retrieves a pointer to a specific cell in memory using logical grid coordinates.
 
     A negative `logical_row` seamlessly reaches back into the scrollback ring buffer.
-    Assumes the caller has already validated that `logical_row` doesn't exceed scrollback length.
+    Assumes the caller has already validated that `logical_row` doesn't exceed scrollback
+   length.
 */
 static inline sfte_cell *_sfte_grid_get_cell(sfte_ctx *ctx, int16_t col, int32_t logical_row) {
 #if SFTE_TERM_SCROLLBACK_CAP
@@ -31741,8 +31760,8 @@ static inline void _sfte_grid_check_wrap(sfte_ctx *ctx) {
 static sfte_cell *_sfte_grid_resize_dumb_copy(sfte_cell *old_grid, int16_t old_cols,
                                               int16_t old_rows, int16_t new_cols,
                                               int16_t new_rows) {
-    if (!old_grid) return NULL;
     sfte_cell *new_grid = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
+    if (!old_grid) return new_grid;
     SFTE_ASSERT(new_grid, "failed to allocate resized grid");
 
     int16_t min_cols = new_cols < old_cols ? new_cols : old_cols;
@@ -31781,6 +31800,24 @@ static void _sfte_grid_resize_tabs(sfte_ctx *ctx, int16_t old_cols, int16_t new_
 */
 static void _sfte_grid_resize(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows) {
     if (new_cols < 1 || new_rows < 1) return;
+
+#if SFTE_FONT_LIGATURES
+    ctx->term.render_shaper_ids = (uint16_t *)SFTE_REALLOC(ctx->term.render_shaper_ids,
+                                                           new_cols * sizeof(uint16_t));
+    ctx->term.row_hashes = (uint64_t *)SFTE_REALLOC(ctx->term.row_hashes,
+                                                    new_rows * sizeof(uint64_t));
+    memset(ctx->term.row_hashes, 0,
+           new_rows * sizeof(uint64_t));  // Force cache misses on resize
+    ctx->term.row_shaper_ids = (uint16_t *)SFTE_REALLOC(ctx->term.row_shaper_ids,
+                                                        new_rows * new_cols * sizeof(uint16_t));
+#endif  // SFTE_FONT_LIGATURES
+    ctx->term.render_ids = (uint16_t *)SFTE_REALLOC(ctx->term.render_ids,
+                                                    new_cols * sizeof(uint16_t));
+    ctx->term.render_font_indices = (uint8_t *)SFTE_REALLOC(ctx->term.render_font_indices,
+                                                            new_cols * sizeof(uint8_t));
+    ctx->term.render_target_caches = (sfte_font_cache **)SFTE_REALLOC(
+        ctx->term.render_target_caches, new_cols * sizeof(sfte_font_cache *));
+
     int16_t old_cols = ctx->term.cols;
     int16_t old_rows = ctx->term.rows;
 
@@ -31811,30 +31848,33 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows)
 
 #if SFTE_TERM_ALT_SCREEN
     // Alt screen uses dumb copy, since it's never reflowed
-    sfte_cell *new_alt = NULL;
+    sfte_cell *alt_new = NULL;
     if (alt_old)
-        new_alt = _sfte_grid_resize_dumb_copy(alt_old, old_cols, old_rows, new_cols, new_rows);
-#endif  // SFTE_TERM_ALT_SCREEN
+        alt_new = _sfte_grid_resize_dumb_copy(alt_old, old_cols, old_rows, new_cols, new_rows);
 
-    SFTE_FREE(ctx->term.cells);
-#if SFTE_TERM_ALT_SCREEN
-    if (ctx->term.alt_cells) SFTE_FREE(ctx->term.alt_cells);
-    ctx->term.cells = ctx->term.alt_active ? new_alt : out.main_grid;
-    ctx->term.alt_cells = ctx->term.alt_active ? out.main_grid : NULL;
+    // Only free old grids if we got a different pointer
+    if (main_old && main_old != out.main_grid && main_old != alt_new) SFTE_FREE(main_old);
+    if (alt_old && alt_old != out.main_grid && alt_old != alt_new) SFTE_FREE(alt_old);
 
+    ctx->term.cells = ctx->term.alt_active ? alt_new : out.main_grid;
+
+    // Don't destroy the alt screen if resized while on main screen
     if (ctx->term.alt_active) {
+        ctx->term.alt_cells = out.main_grid;
         ctx->term.saved_col[0] = out.new_col;
         ctx->term.saved_row[0] = out.new_row;
         ctx->term.cursor_col = _SFTE_CLAMP(ctx->term.cursor_col, 0, new_cols - 1);
         ctx->term.cursor_row = _SFTE_CLAMP(ctx->term.cursor_row, 0, new_rows - 1);
     } else {
+        ctx->term.alt_cells = alt_new ? alt_new : alt_old;
         ctx->term.cursor_col = out.new_col;
         ctx->term.cursor_row = out.new_row;
     }
 #else   // !SFTE_TERM_ALT_SCREEN
+    if (main_old && main_old != out.main_grid) SFTE_FREE(main_old);
     ctx->term.cells = out.main_grid;
-    ctx->term.cursor_col = st.new_cx;
-    ctx->term.cursor_row = st.new_cy;
+    ctx->term.cursor_col = out.new_col;
+    ctx->term.cursor_row = out.new_row;
 #endif  // !SFTE_TERM_ALT_SCREEN
 
 #if SFTE_TERM_SCROLLBACK_CAP
@@ -32102,7 +32142,8 @@ static inline int16_t _sfte_reflow_get_len(sfte_cell *row, int16_t cols, int16_t
     }
 
     // Ensure the cursor isn't trimmed out.
-    // Handles cases where cursor_cx is beyond the actual string length, e.g., wrap pending states.
+    // Handles cases where cursor_cx is beyond the actual string length, e.g., wrap pending
+    // states.
     if (cursor_col >= 0 && len <= cursor_col) len = cursor_col + 1;
 
     return len;
@@ -32188,10 +32229,13 @@ static sfte_cell *_sfte_reflow_linearize(sfte_ctx *ctx, sfte_cell *main_old, int
 
     st->new_cols = new_cols;
     st->temp_rows = temp_rows;
-    st->reflow_col = 0, st->reflow_row = 0, st->new_col = 0, st->new_row = 0;
+    st->reflow_col = 0, st->reflow_row = 0;
+    st->new_col = 0, st->new_row = 0;
     st->is_live = 0;
 
+    // Walks the old grids and populates st->temp_rows
     _sfte_reflow_grid_into_linear(ctx, main_old, st);
+
     return temp_rows;
 }
 
@@ -32216,13 +32260,13 @@ static void _sfte_reflow_extract_view(sfte_ctx *ctx, int16_t new_cols, int16_t n
     // Clamp the viewport to the absolute limits of the text buffer
     int32_t max_top = total_lines - new_rows;
     if (max_top < 0) max_top = 0;
-
     screen_top = _SFTE_CLAMP(screen_top, 0, max_top);
 
 #if SFTE_TERM_SCROLLBACK_CAP
     out->sb_grid = (sfte_cell *)SFTE_CALLOC(ctx->term.sb_cap * new_cols, sizeof(sfte_cell));
     SFTE_ASSERT(out->sb_grid, "failed to allocate resized scrollback");
 
+    // The scrollback is above `screen_top`
     out->sb_lines = screen_top;
     if (out->sb_lines > ctx->term.sb_cap) out->sb_lines = ctx->term.sb_cap;
     int32_t sb_start = screen_top - out->sb_lines;
@@ -32429,7 +32473,8 @@ static inline float _sfte_sixel_hue_to_rgb(float p, float q, float t) {
 
 /*
     Converts HLS values to a packed 32-bit ARGB color.
-    Unlike modern HSL, sixel uses integer degrees for hue (0-360) and percentages for L/S (0-100).
+    Unlike modern HSL, sixel uses integer degrees for hue (0-360) and percentages for L/S
+   (0-100).
 */
 static inline uint32_t _sfte_sixel_hls_to_rgb(uint16_t h_deg, uint16_t l_pct, uint16_t s_pct) {
     float h = h_deg / 360.0f;
@@ -32454,10 +32499,9 @@ static inline uint32_t _sfte_sixel_hls_to_rgb(uint16_t h_deg, uint16_t l_pct, ui
 /*
     Parses the accumulated numerical parameters to update the active color or palette.
     Initiated by the pound symbol (`#`).
-    If one parameter is provided, the active color index gets changed to value of that parameter.
-    If five parameters are provided, it defines a new color.
-    Parameter values are as follows: #<idx>;<space>;<c1>;<c2>;<c3>.
-    Color space is 1 for HLS, 2 for RGB.
+    If one parameter is provided, the active color index gets changed to value of that
+   parameter. If five parameters are provided, it defines a new color. Parameter values are as
+   follows: #<idx>;<space>;<c1>;<c2>;<c3>. Color space is 1 for HLS, 2 for RGB.
 */
 static void _sfte_sixel_apply_color(sfte_ctx *ctx) {
     if (ctx->sixel.param_idx == 0 && ctx->sixel.params[0] < 256)
@@ -32491,7 +32535,8 @@ static void _sfte_sixel_apply_color(sfte_ctx *ctx) {
     `acc * 10` shifts the previously parsed value one decimal place to the left.
 
     To avoid growing the call stack via recursion when a state
-    needs to hand a byte back to SIXEL_GROUND, it uses a while-loop based on the `cont` variable.
+    needs to hand a byte back to SIXEL_GROUND, it uses a while-loop based on the `cont`
+   variable.
 */
 static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b) {
     uint8_t cont = 1;
@@ -32715,7 +32760,8 @@ static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int32_t src_wid
     This kitty protocol implementation supports:
     - direct base64 pixel streams (via 'd'),
     - reading from a local file path (via 'f', used by e.g. yazi),
-    - reading from a temporary file that the terminal is expected to delete after reading (via 't').
+    - reading from a temporary file that the terminal is expected to delete after reading (via
+   't').
 */
 static uint32_t *_sfte_kitty_decode_payload(sfte_ctx *ctx, uint8_t *raw_data, size_t raw_len,
                                             uint8_t is_file, const char *file_path, int32_t *w,
@@ -32961,9 +33007,9 @@ static const char *_sfte_kitty_exec_delete(sfte_ctx *ctx) {
     cropping and scaling, and stores the final raster in the image pool.
 
     WARN:
-    If the transmission medium is 't', the client sent a path to a temp file containing the pixels.
-    The protocol dictates that the emulator assumes ownership of this file and MUST delete it
-    after decoding to prevent disk leaks.
+    If the transmission medium is 't', the client sent a path to a temp file containing the
+   pixels. The protocol dictates that the emulator assumes ownership of this file and MUST
+   delete it after decoding to prevent disk leaks.
 
     Returns a error message used for acknowledgements if the base64 decode fails.
     Returns NULL on success.
@@ -33014,8 +33060,8 @@ static const char *_sfte_kitty_exec_transmit(sfte_ctx *ctx, sfte_img **out_img) 
     Creates a new visual placement on the grid for an image already residing in the pool.
 
     Returns a error message used for acknowledgements if the requested image ID
-    was never transmitted or has been garbage collected, OR if `_sfte_kitty_apply_placement` fails.
-    Returns NULL on success.
+    was never transmitted or has been garbage collected, OR if `_sfte_kitty_apply_placement`
+   fails. Returns NULL on success.
 */
 static const char *_sfte_kitty_exec_place(sfte_ctx *ctx) {
     for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
@@ -35225,9 +35271,9 @@ static inline void _sfte_render_damage_add(sfte_damage_rect *dmg, int32_t x, int
     Evaluates cursor movement and font bleed.
 
     Fonts often spill slightly outside their strict grid cell bounds.
-    If we only redraw the specific cell that changed, we slice off the edges of adjacent letters.
-    This pass detects damaged cells and intentionally bleeds the dirty flag
-    to adjacent rows and columns to guarantee seamless redrawing.
+    If we only redraw the specific cell that changed, we slice off the edges of adjacent
+   letters. This pass detects damaged cells and intentionally bleeds the dirty flag to adjacent
+   rows and columns to guarantee seamless redrawing.
 */
 static inline void _sfte_render_propagate_damage(sfte_ctx *ctx, int16_t vis_col, int16_t vis_row) {
     if (ctx->term.last_drawn_col != vis_col || ctx->term.last_drawn_row != vis_row) {
@@ -35259,7 +35305,8 @@ static inline void _sfte_render_propagate_damage(sfte_ctx *ctx, int16_t vis_col,
             // NOTE:
             // Mark padding as dirty to clear the bleed area.
             // it's not hidden behind an `if (r_min == 0 || r_max == ctx->term.rows - 1)`,
-            // because if damage is at left or right edge, the bleed area will be visible there too.
+            // because if damage is at left or right edge, the bleed area will be visible there
+            // too.
             ctx->padding_dirty = 1;
 
             for (int16_t y = r_min; y <= r_max; ++y)
@@ -35342,6 +35389,10 @@ static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, sfte_damage_
                 } else {
                     int16_t grid_c = (out_x - SFTE_WINDOW_PAD_X) / ctx->font.cell_width;
                     int16_t grid_r = (out_y - SFTE_WINDOW_PAD_Y) / ctx->font.cell_height;
+
+                    grid_c = _SFTE_CLAMP(grid_c, 0, ctx->term.cols - 1);
+                    grid_r = _SFTE_CLAMP(grid_r, 0, ctx->term.rows - 1);
+
                     is_dirty = ctx->term.cells[_SFTE_GRID_IDX(ctx, grid_c, grid_r)].dirty;
                 }
                 if (!is_dirty) continue;
@@ -35448,14 +35499,13 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
     _sfte_render_damage_add(out_dmg, ctx->term.trail_dmg.x, ctx->term.trail_dmg.y,
                             ctx->term.trail_dmg.w, ctx->term.trail_dmg.h);
 }
-#endif
+#endif  // SFTE_CURSOR_TRAIL
 
 #if SFTE_TERM_ANIMATE_SCREEN
 /*
-    Calculates the Y offsets for the outgoing and incoming screens during an alt-screen transition.
-    Returns 2 when finished animating.
-    Returns 1 when currently animating.
-    Returns 0 if static.
+    Calculates the Y offsets for the outgoing and incoming screens during an alt-screen
+   transition. Returns 2 when finished animating. Returns 1 when currently animating. Returns 0
+   if static.
 */
 static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_y, int32_t *in_y) {
     if (!ctx->term.is_animating) return 0;
@@ -35986,7 +36036,7 @@ static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t
 
     return 1;
 }
-#endif  // SFTE_TERM_CUSTOM_BOXES
+#endif  // SFTE_TERM_CUSTOM_BOXES && !SFTE_TERM_ASCII_CHARSET
 
 /*
     Dispatcher for terminal text decorations (underlines, cursor).
@@ -36075,61 +36125,44 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
         }
 }
 
+#if SFTE_FONT_LIGATURES
 /*
-    Extracts a single terminal row into linear arrays for shaping and rendering.
-    Resolves runes into raw glyph IDs and identifies style/color boundaries.
+    Computes and returns a 64-bit FNV-1a hash of the row's shaping inputs.
 */
-static inline void _sfte_render_extract_fg_row(sfte_ctx *ctx, int16_t row, int32_t logical_row,
-                                               int16_t vis_col, int16_t vis_row,
-                                               uint16_t *shaper_ids, uint16_t *render_ids,
-                                               uint8_t *font_indices,
-                                               sfte_font_cache **target_caches) {
+static inline uint64_t _sfte_render_get_row_hash(sfte_ctx *ctx, int32_t logical_row) {
+    uint64_t hash = 14695981039346656037ULL;  // FNV-1a 64-bit offset basis
+    const uint64_t prime = 1099511628211ULL;
+
     for (int16_t c = 0; c < ctx->term.cols; ++c) {
         sfte_cell *vcell = _sfte_grid_get_cell(ctx, c, logical_row);
         sfte_rune rune = vcell->rune ? vcell->rune : ' ';
-#if defined(SFTE_FONT_BOLD) || defined(SFTE_FONT_ITALIC) || defined(SFTE_FONT_BOLD_ITALIC)
         uint8_t attr = vcell->attr;
-#endif  // defined(SFTE_FONT_BOLD) || defined(SFTE_FONT_ITALIC) || defined(SFTE_FONT_BOLD_ITALIC)
+        uint32_t fg = _sfte_grid_get_fg(vcell);
+        uint32_t bg = _sfte_grid_get_bg(vcell);
 
-        sfte_font_cache *target_cache = &ctx->font.regular;
-#ifdef SFTE_FONT_BOLD_ITALIC
-        if ((attr & _SFTE_ATTR_BOLD) && (attr & _SFTE_ATTR_ITALIC))
-            target_cache = &ctx->font.bold_italic;
-#ifdef SFTE_FONT_BOLD
-        else
-#endif  // SFTE_FONT_BOLD
-#endif  // SFTE_FONT_BOLD_ITALIC
-#ifdef SFTE_FONT_BOLD
-            if (attr & _SFTE_ATTR_BOLD)
-            target_cache = &ctx->font.bold;
-#ifdef SFTE_FONT_ITALIC
-        else
-#endif  // SFTE_FONT_ITALIC
-#endif  // SFTE_FONT_BOLD
-#ifdef SFTE_FONT_ITALIC
-            if (attr & _SFTE_ATTR_ITALIC)
-            target_cache = &ctx->font.italic;
-#endif  // SFTE_FONT_ITALIC
-        target_caches[c] = target_cache;
-        _sfte_font_resolve_rune(target_cache, rune, &font_indices[c], &render_ids[c]);
-
-        uint8_t is_cursor = (c == vis_col && row == vis_row && !ctx->term.hide_cursor);
-
-        shaper_ids[c] = (rune == ' ' || rune == 0 || is_cursor) ? 0 : render_ids[c];
+        hash ^= ctx->term.render_shaper_ids[c];
+        hash *= prime;
+        hash ^= ctx->term.render_font_indices[c];
+        hash *= prime;
+        hash ^= attr;
+        hash *= prime;
+        hash ^= fg;
+        hash *= prime;
+        hash ^= bg;
+        hash *= prime;
     }
+
+    return hash;
 }
 
-#if SFTE_FONT_LIGATURES
 /*
     Chunks a row into continuous style/color blocks and passes them to the OpenType shaper.
     Ensures ligatures do not bleed across formatting boundaries.
 */
-static inline void _sfte_render_shape_fg_row(sfte_ctx *ctx, int32_t logical_row,
-                                             uint16_t *shaper_ids, uint8_t *font_indices,
-                                             sfte_font_cache **target_caches) {
+static inline void _sfte_render_shape_fg_row(sfte_ctx *ctx, int32_t logical_row) {
     int16_t span_start = 0;
     while (span_start < ctx->term.cols) {
-        if (!shaper_ids[span_start]) {
+        if (!ctx->term.render_shaper_ids[span_start]) {
             span_start++;
             continue;
         }
@@ -36138,23 +36171,23 @@ static inline void _sfte_render_shape_fg_row(sfte_ctx *ctx, int32_t logical_row,
         uint32_t active_fg = _sfte_grid_get_fg(start_cell);
         uint32_t active_bg = _sfte_grid_get_bg(start_cell);
 
-        sfte_font_cache *active_cache = target_caches[span_start];
-        uint8_t active_font_idx = font_indices[span_start];
+        sfte_font_cache *active_cache = ctx->term.render_target_caches[span_start];
+        uint8_t active_font_idx = ctx->term.render_font_indices[span_start];
 
         int16_t span_end = span_start + 1;
-        while (span_end < ctx->term.cols && shaper_ids[span_end] != 0) {
+        while (span_end < ctx->term.cols && ctx->term.render_shaper_ids[span_end] != 0) {
             sfte_cell *next_cell = _sfte_grid_get_cell(ctx, span_end, logical_row);
             if (_sfte_grid_get_fg(next_cell) != active_fg ||
                 _sfte_grid_get_bg(next_cell) != active_bg ||
-                target_caches[span_end] != active_cache ||
-                font_indices[span_end] != active_font_idx)
+                ctx->term.render_target_caches[span_end] != active_cache ||
+                ctx->term.render_font_indices[span_end] != active_font_idx)
                 break;
             span_end++;
         }
 
         _sfte_shaper_shape_row(&active_cache->shaper[active_font_idx],
-                               active_cache->ttf_buf[active_font_idx], &shaper_ids[span_start],
-                               span_end - span_start);
+                               active_cache->ttf_buf[active_font_idx],
+                               &ctx->term.render_shaper_ids[span_start], span_end - span_start);
 
         span_start = span_end;
     }
@@ -36162,13 +36195,49 @@ static inline void _sfte_render_shape_fg_row(sfte_ctx *ctx, int32_t logical_row,
 #endif  // SFTE_FONT_LIGATURES
 
 /*
+    Extracts a single terminal row into linear arrays for shaping and rendering.
+    Resolves runes into raw glyph IDs and identifies style/color boundaries.
+*/
+static inline void _sfte_render_extract_fg_row(sfte_ctx *ctx, int32_t logical_row, int16_t row,
+                                               int16_t vis_col, int16_t vis_row) {
+    (void)row, (void)vis_col, (void)vis_row;
+    for (int16_t c = 0; c < ctx->term.cols; ++c) {
+        sfte_cell *vcell = _sfte_grid_get_cell(ctx, c, logical_row);
+        sfte_rune rune = vcell->rune ? vcell->rune : ' ';
+#if defined(SFTE_FONT_BOLD) || defined(SFTE_FONT_ITALIC) || defined(SFTE_FONT_BOLD_ITALIC)
+        uint8_t attr = vcell->attr;
+#endif  // defined(SFTE_FONT_BOLD) || defined(SFTE_FONT_ITALIC) || defined(SFTE_FONT_BOLD_ITALIC)
+
+        sfte_font_cache *target_cache = &ctx->font.regular;
+#ifdef SFTE_FONT_BOLD
+        if (attr & _SFTE_ATTR_BOLD) target_cache = &ctx->font.bold;
+#endif  // SFTE_FONT_BOLD
+#ifdef SFTE_FONT_ITALIC
+        if (attr & _SFTE_ATTR_ITALIC) target_cache = &ctx->font.italic;
+#endif  // SFTE_FONT_ITALIC
+#ifdef SFTE_FONT_BOLD_ITALIC
+        if ((attr & _SFTE_ATTR_BOLD) && (attr & _SFTE_ATTR_ITALIC))
+            target_cache = &ctx->font.bold_italic;
+#endif  // SFTE_FONT_BOLD_ITALIC
+        ctx->term.render_target_caches[c] = target_cache;
+        _sfte_font_resolve_rune(target_cache, rune, &ctx->term.render_font_indices[c],
+                                &ctx->term.render_ids[c]);
+
+#if SFTE_FONT_LIGATURES
+        uint8_t is_cursor = (c == vis_col && row == vis_row && !ctx->term.hide_cursor);
+        ctx->term.render_shaper_ids[c] = (rune == ' ' || rune == 0 || is_cursor)
+                                             ? 0
+                                             : ctx->term.render_ids[c];
+#endif  // SFTE_FONT_LIGATURES
+    }
+}
+
+/*
     Iterates over a shaped row and dispatches foreground/decoration drawing.
 */
 static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
                                        int32_t logical_row, int16_t vis_col, int16_t vis_row,
-                                       int32_t y_off, uint16_t *shaper_ids, uint16_t *render_ids,
-                                       uint8_t *font_indices, sfte_font_cache **target_caches,
-                                       sfte_damage_rect *out_dmg) {
+                                       int32_t y_off, sfte_damage_rect *out_dmg) {
     for (int16_t c = 0; c < ctx->term.cols; ++c) {
         int32_t idx = _SFTE_GRID_IDX(ctx, c, row);
         if (!ctx->term.cells[idx].dirty) continue;
@@ -36208,12 +36277,16 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
 #endif
         if (is_cursor && _SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BLOCK) fg = bg;
 
-        if (font_indices[c] == 0 && shaper_ids[c] != 0 && shaper_ids[c] != render_ids[c]) {
-            render_ids[c] = shaper_ids[c];
+#if SFTE_FONT_LIGATURES
+        if (ctx->term.render_font_indices[c] == 0 && ctx->term.render_shaper_ids[c] != 0 &&
+            ctx->term.render_shaper_ids[c] != ctx->term.render_ids[c]) {
+            ctx->term.render_ids[c] = ctx->term.render_shaper_ids[c];
         }
+#endif  // SFTE_TERM_LIGATURES
 
-        _sfte_render_fg_cell(ctx, px_buf, c, row, y_off, rune, render_ids[c], font_indices[c], fg,
-                             target_caches[c]);
+        _sfte_render_fg_cell(ctx, px_buf, c, row, y_off, rune, ctx->term.render_ids[c],
+                             ctx->term.render_font_indices[c], fg,
+                             ctx->term.render_target_caches[c]);
         _sfte_render_decorations_cell(ctx, px_buf, c, row, y_off, vcell, is_cursor);
 
         int32_t dmg_cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
@@ -36235,24 +36308,26 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
 */
 static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
                                         int16_t vis_row, int32_t y_off, sfte_damage_rect *out_dmg) {
-    uint16_t shaper_ids[ctx->term.cols];
-    uint16_t render_ids[ctx->term.cols];
-    uint8_t font_indices[ctx->term.cols];
-    sfte_font_cache *target_caches[ctx->term.cols];
-
     for (int16_t r = 0; r < ctx->term.rows; ++r) {
         int32_t logical_r = r;
 #if SFTE_TERM_SCROLLBACK_CAP
         logical_r -= ctx->term.sb_offset;
 #endif  // SFTE_TERM_SCROLLBACK_CAP
 
-        _sfte_render_extract_fg_row(ctx, r, logical_r, vis_col, vis_row, shaper_ids, render_ids,
-                                    font_indices, target_caches);
+        _sfte_render_extract_fg_row(ctx, r, logical_r, vis_col, vis_row);
+
 #if SFTE_FONT_LIGATURES
-        _sfte_render_shape_fg_row(ctx, logical_r, shaper_ids, font_indices, target_caches);
+        uint64_t row_hash = _sfte_render_get_row_hash(ctx, logical_r);
+        uint16_t *memo_ids = &ctx->term.row_shaper_ids[r * ctx->term.cols];
+        if (ctx->term.row_hashes[r] == row_hash)
+            memcpy(ctx->term.render_shaper_ids, memo_ids, ctx->term.cols * sizeof(uint16_t));
+        else {
+            _sfte_render_shape_fg_row(ctx, logical_r);
+            ctx->term.row_hashes[r] = row_hash;
+            memcpy(memo_ids, ctx->term.render_shaper_ids, ctx->term.cols * sizeof(uint16_t));
+        }
 #endif  // SFTE_FONT_LIGATURES
-        _sfte_render_fg_row(ctx, px_buf, r, logical_r, vis_col, vis_row, y_off, shaper_ids,
-                            render_ids, font_indices, target_caches, out_dmg);
+        _sfte_render_fg_row(ctx, px_buf, r, logical_r, vis_col, vis_row, y_off, out_dmg);
     }
 }
 
@@ -37158,6 +37233,16 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
 
     ctx->term.cols = SFTE_TERM_INIT_COLS;
     ctx->term.rows = SFTE_TERM_INIT_ROWS;
+#if SFTE_FONT_LIGATURES
+    ctx->term.render_shaper_ids = (uint16_t *)SFTE_CALLOC(SFTE_TERM_INIT_COLS, sizeof(uint16_t));
+    ctx->term.row_hashes = (uint64_t *)SFTE_CALLOC(SFTE_TERM_INIT_ROWS, sizeof(uint64_t));
+    ctx->term.row_shaper_ids = (uint16_t *)SFTE_CALLOC(SFTE_TERM_INIT_COLS * SFTE_TERM_INIT_ROWS,
+                                                       sizeof(uint16_t));
+#endif  // SFTE_FONT_LIGATURES
+    ctx->term.render_ids = (uint16_t *)SFTE_CALLOC(SFTE_TERM_INIT_COLS, sizeof(uint16_t));
+    ctx->term.render_font_indices = (uint8_t *)SFTE_CALLOC(SFTE_TERM_INIT_COLS, sizeof(uint8_t));
+    ctx->term.render_target_caches = (sfte_font_cache **)SFTE_CALLOC(SFTE_TERM_INIT_COLS,
+                                                                     sizeof(sfte_font_cache *));
     ctx->term.auto_wrap = 1;
     ctx->term.origin_mode = 0;
 
