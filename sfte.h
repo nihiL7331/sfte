@@ -13454,17 +13454,18 @@ static inline void _sfte_stb_init(sfte_font_backend_info *info, const uint8_t *d
 static inline float _sfte_stb_get_scale(sfte_font_backend_info *info, float px_hei);
 static inline void _sfte_stb_vmetrics(sfte_font_backend_info *info, int *ascent, int *descent,
                                       int *linegap);
-static inline int _sfte_stb_bounds(sfte_font_backend_info *info, uint32_t rune, float scale,
-                                   int *adv, int *x0, int *y0, int *x1, int *y1);
+static inline void _sfte_stb_bounds(sfte_font_backend_info *info, int glyph_id, float scale,
+                                    int *adv, int *x0, int *y0, int *x1, int *y1);
 static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, float scale,
                                   uint8_t *atlas_ptr, int gw, int gh, int atlas_stride);
+static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #else  // SFTE_FONT_CUSTOM_BACKEND
 #if !defined(SFTE_FONT_INIT) || !defined(SFTE_FONT_GET_SCALE) || !defined(SFTE_FONT_VMETRICS) ||   \
-    !defined(SFTE_FONT_BOUNDS) || !defined(SFTE_FONT_BAKE)
+    !defined(SFTE_FONT_BOUNDS) || !defined(SFTE_FONT_BAKE) || !define(SFTE_FONT_GET_ID)
 #error                                                                                             \
-    "SFTE_FONT_CUSTOM_BACKEND requires defining all 5 macro hooks: INIT, GET_SCALE, VMETRICS, BOUNDS and BAKE."
+    "SFTE_FONT_CUSTOM_BACKEND requires defining all 6 macro hooks: INIT, GET_SCALE, VMETRICS, BOUNDS, BAKE and GET_ID."
 #endif  // !defined(SFTE_FONT_INIT) || !defined(SFTE_FONT_GET_SCALE) || !defined(SFTE_FONT_VMETRICS)
-        // || !defined(SFTE_FONT_BOUNDS) || !defined(SFTE_FONT_BAKE)
+        // || !defined(SFTE_FONT_BOUNDS) || !defined(SFTE_FONT_BAKE) || !defined(SFTE_FONT_GET_ID)
 #endif  // SFTE_FONT_CUSTOM_BACKEND
 
 /*
@@ -13487,6 +13488,34 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 #ifndef SFTE_FONT_MAX_SIZE
 #define SFTE_FONT_MAX_SIZE 96.0f
 #endif  // SFTE_FONT_MAX_SIZE
+
+/*
+    Enables font ligatures support.
+*/
+#ifndef SFTE_FONT_LIGATURES
+#define SFTE_FONT_LIGATURES 1
+#endif  // SFTE_FONT_LIGATURES
+
+/*
+    Maximum amount of lookup indices for a ligature shaper feature.
+*/
+#ifndef SFTE_FONT_MAX_LIGATURE_LOOKUPS
+#define SFTE_FONT_MAX_LIGATURE_LOOKUPS 256
+#endif  // SFTE_FONT_MAX_LIGATURE_LOOKUPS
+
+/*
+    Maximum amount of subtables per lookup for ligatures.
+*/
+#ifndef SFTE_FONT_MAX_LIGATURE_SUBTABLES
+#define SFTE_FONT_MAX_LIGATURE_SUBTABLES 16
+#endif  // SFTE_FONT_MAX_LIGATURE_SUBTABLES
+
+/*
+    Maximum amount of records for ligatures.
+*/
+#ifndef SFTE_FONT_MAX_LIGATURE_RECORDS
+#define SFTE_FONT_MAX_LIGATURE_RECORDS 8
+#endif  // SFTE_FONT_MAX_LIGATURE_RECORDS
 
 /*
     Max number of fallback fonts (primary + fallbacks).
@@ -29956,6 +29985,13 @@ xdg_popup_reposition(struct xdg_popup *xdg_popup, struct xdg_positioner *positio
 // Constraints a value within a specified inclusive range [min, max].
 #define _SFTE_CLAMP(val, min, max) ((val) < (min) ? (min) : ((val) > (max) ? (max) : (val)))
 
+// Reads a 16-bit big-endian value from `d` array starting from `off` byte.
+#define _SFTE_R16BE(d, off) (uint16_t)(((d)[off] << 8) | (d)[(off) + 1])
+
+// Reads a 32-bit big-endian value from `d` array starting from `off` byte.
+#define _SFTE_R32BE(d, off)                                                                        \
+    (uint32_t)(((d)[off] << 24) | ((d)[(off) + 1] << 16) | ((d)[(off) + 2] << 8) | (d)[(off) + 3])
+
 #ifndef SFTE_NO_LOGGING
 
 #define _SFTE_LOG_ITEMS                                                                            \
@@ -30106,10 +30142,11 @@ typedef struct {
     Represents a baked texture atlas entry for a single character.
 */
 typedef struct {
-    sfte_rune rune;
+    uint16_t glyph_id;
+    int16_t xadvance;
     uint16_t x0, y0, x1, y1;  // Atlas texture coordinates
     int16_t xoff, yoff;       // Render offsets
-    int16_t xadvance;
+    uint8_t font_idx;         // 0=primary, 1+=fallbacks
 } sfte_glyph;
 
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
@@ -30316,6 +30353,7 @@ typedef struct {
 #endif                      // SFTE_CURSOR_BLINK
 #if SFTE_CURSOR_TRAIL
     uint8_t is_trailing;
+    uint8_t warp_tail;
 #endif  // SFTE_CURSOR_TRAIL
 #if SFTE_CURSOR_DYNAMIC
     uint8_t cursor_style;  // Block/underline/bar
@@ -30349,10 +30387,41 @@ typedef struct {
 #endif  // SFTE_TERM_FOCUS
 } sfte_term;
 
+#if SFTE_FONT_LIGATURES
+typedef struct {
+    uint16_t lookup_indices[SFTE_FONT_MAX_LIGATURE_LOOKUPS];
+    uint32_t subtable_offs[SFTE_FONT_MAX_LIGATURE_LOOKUPS][SFTE_FONT_MAX_LIGATURE_SUBTABLES];
+    uint16_t subtable_cnts[SFTE_FONT_MAX_LIGATURE_LOOKUPS];
+    uint16_t lookup_types[SFTE_FONT_MAX_LIGATURE_LOOKUPS];
+    uint16_t lookup_cnt;
+} sfte_shaper_feature;
+
+/*
+    Font shaper data context.
+*/
+typedef struct {
+    uint32_t table_off;
+    uint32_t script_list_off;
+    uint32_t feat_list_off;
+    uint32_t lookup_list_off;
+
+    sfte_shaper_feature calt;  // Contextual alternates
+    sfte_shaper_feature liga;  // Standard ligatures
+} sfte_shaper_ctx;
+
+typedef struct {
+    uint16_t sequence_idx;
+    uint16_t lookup_idx;
+} sfte_shaper_subst_record;
+#endif  // SFTE_FONT_LIGATURES
+
 /*
     Font variant texture cache.
 */
 typedef struct {
+#if SFTE_FONT_LIGATURES
+    sfte_shaper_ctx shaper[SFTE_FONT_MAX_COUNT];
+#endif  // SFTE_FONT_LIGATURES
     sfte_font_backend_info info[SFTE_FONT_MAX_COUNT];
     uint8_t *ttf_buf[SFTE_FONT_MAX_COUNT];
     uint8_t *atlas_pxs;
@@ -30772,6 +30841,43 @@ static inline void _sfte_parser_dcs_dispatch(sfte_ctx *ctx, uint8_t terminator);
 static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b);
 
 // -------------------------------------------------------------------------------------------------
+// >shaper
+// -------------------------------------------------------------------------------------------------
+#if SFTE_FONT_LIGATURES
+static inline uint16_t _sfte_shaper_consume16(const uint8_t *ttf_data, uint32_t *off);
+static inline uint32_t _sfte_shaper_consume32(const uint8_t *ttf_data, uint32_t *off);
+static inline uint32_t _sfte_shaper_get_font_table_off(const uint8_t *ttf_data, const char tag[4]);
+static inline void _sfte_shaper_load_feature(sfte_shaper_ctx *ctx, const uint8_t *ttf_data,
+                                             const char tag[4], sfte_shaper_feature *out_feat);
+static inline void _sfte_shaper_parse_subtables(sfte_shaper_ctx *ctx, const uint8_t *ttf_data,
+                                                uint16_t lookup_idx, uint32_t lookup_tab_off,
+                                                uint16_t lookup_type, uint16_t subtable_cnt);
+static inline void _sfte_shaper_parse_lookups(sfte_shaper_ctx *ctx, const uint8_t *ttf_data);
+static inline void _sfte_shaper_init(sfte_shaper_ctx *ctx, const uint8_t *ttf_data);
+static inline int32_t _sfte_shaper_get_coverage_index(const uint8_t *ttf_data, uint32_t cov_off,
+                                                      uint16_t glyph_id);
+static inline uint16_t _sfte_shaper_get_class(const uint8_t *ttf_data, uint32_t class_off,
+                                              uint16_t glyph_id);
+static inline uint16_t _sfte_shaper_get_type1_subst(const uint8_t *ttf_data, uint32_t t1_off,
+                                                    uint16_t glyph_id);
+static inline uint8_t _sfte_shaper_match_rule_format1(const uint8_t *ttf_data, uint32_t rule_off,
+                                                      uint16_t *grid, size_t grid_len, size_t pos,
+                                                      sfte_shaper_subst_record *out_records,
+                                                      uint16_t *out_cnt);
+static inline void _sfte_shaper_apply_subst(sfte_shaper_ctx *ctx, const uint8_t *ttf_data,
+                                            uint16_t *grid, size_t pos,
+                                            const sfte_shaper_subst_record *records,
+                                            uint16_t records_cnt);
+static inline uint8_t _sfte_shaper_eval_format1(sfte_shaper_ctx *ctx, const uint8_t *ttf_data,
+                                                uint32_t sub_off, uint16_t cur_glyph,
+                                                uint16_t *grid, size_t grid_len, size_t pos);
+static inline uint8_t _sfte_shaper_eval_format3(sfte_shaper_ctx *ctx, const uint8_t *ttf_data,
+                                                uint32_t sub_off, uint16_t *grid, size_t grid_len,
+                                                size_t pos);
+static inline void _sfte_shaper_shape_row(sfte_shaper_ctx *ctx, const uint8_t *ttf_data,
+                                          uint16_t *grid, size_t grid_len);
+#endif  // SFTE_FONT_LIGATURES
+// -------------------------------------------------------------------------------------------------
 // >font
 // -------------------------------------------------------------------------------------------------
 #ifndef SFTE_FONT_CUSTOM_BACKEND
@@ -30780,14 +30886,18 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b);
 #define SFTE_FONT_VMETRICS _sfte_stb_vmetrics
 #define SFTE_FONT_BOUNDS _sfte_stb_bounds
 #define SFTE_FONT_BAKE _sfte_stb_bake
+#define SFTE_FONT_GET_ID _sfte_stb_get_id
 #endif  // !SFTE_FONT_CUSTOM_BACKEND
 static inline sfte_font_cache *_sfte_font_get_cache(sfte_ctx *ctx, sfte_font_style style);
 static inline void _sfte_font_clear_cache(sfte_font_cache *cache);
 static inline void _sfte_font_update_scales(sfte_ctx *ctx, sfte_font_cache *cache);
 static inline void _sfte_font_pack_and_bake(sfte_font_cache *cache, sfte_glyph *g, int32_t font_idx,
-                                            int32_t glyph_idx, int32_t gw, int32_t gh);
-static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_ptr, sfte_rune rune);
-static void _sfte_font_reset_cache(sfte_ctx *ctx);
+                                            int32_t glyph_id, int32_t gw, int32_t gh);
+static inline sfte_glyph *_sfte_font_get_glyph(sfte_font_cache *cache, uint16_t glyph_id,
+                                               uint8_t font_idx);
+static inline void _sfte_font_resolve_rune(sfte_font_cache *cache, sfte_rune rune,
+                                           uint8_t *out_font_idx, uint16_t *out_glyph_id);
+static inline void _sfte_font_reset_cache(sfte_ctx *ctx);
 
 // -------------------------------------------------------------------------------------------------
 // >render
@@ -30803,7 +30913,7 @@ static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, sfte_damage_
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 #if SFTE_CURSOR_TRAIL
 static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_rect *out_dmg);
-#endif  // SFTE_CURSOR_TRAIL
+#endif
 #if SFTE_TERM_ANIMATE_SCREEN
 static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_y, int32_t *in_y);
 #endif  // SFTE_TERM_ANIMATE_SCREEN
@@ -30814,12 +30924,12 @@ static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, u
 static void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
                                  int32_t y_off, uint32_t bg);
 static void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
-                                 int32_t y_off, sfte_rune rune, uint32_t fg,
-                                 sfte_font_cache *target_cache);
+                                 int32_t y_off, sfte_rune rune, uint16_t glyph_id, uint8_t font_idx,
+                                 uint32_t fg, sfte_font_cache *target_cache);
 static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
                                                int32_t render_w, sfte_cell *vcell);
 static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
-                                             int render_w);
+                                             int32_t render_w);
 #if SFTE_TERM_CUSTOM_BOXES
 static inline void _sfte_render_line(sfte_ctx *ctx, void *px_buf, int32_t x0, int32_t y0,
                                      int32_t x1, int32_t y1, int32_t thickness, uint32_t col);
@@ -33339,6 +33449,9 @@ static inline void _sfte_csi_exec_hvp(sfte_ctx *ctx, uint16_t *p) {
                                            ctx->term.scroll_top, ctx->term.scroll_bot);
     else
         ctx->term.cursor_row = _SFTE_CLAMP(_SFTE_P_IDX(p[0]), 0, ctx->term.rows - 1);
+#if SFTE_CURSOR_TRAIL
+    ctx->term.warp_tail = 1;
+#endif  // SFTE_CURSOR_TRAIL
 }
 
 /*
@@ -34400,6 +34513,448 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
     }
 }
 // =================================================================================================
+// >>shaper
+// =================================================================================================
+#if SFTE_FONT_LIGATURES
+#define _SFTE_MATCH_TAG(t1, t2)                                                                    \
+    (t1)[0] == (t2)[0] && (t1)[1] == (t2)[1] && (t1)[2] == (t2)[2] && (t1)[3] == (t2)[3]
+
+/*
+    Grabs a 16-bit big-endian value from `offset` and places the `offset` after grabbed value.
+*/
+static inline uint16_t _sfte_shaper_consume16(const uint8_t *ttf_data, uint32_t *off) {
+    uint16_t val = _SFTE_R16BE(ttf_data, *off);
+    *off += sizeof(uint16_t);
+    return val;
+}
+
+/*
+    Grabs a 32-bit big-endian value from `offset` and places the `offset` after grabbed value.
+*/
+static inline uint32_t _sfte_shaper_consume32(const uint8_t *ttf_data, uint32_t *off) {
+    uint32_t val = _SFTE_R32BE(ttf_data, *off);
+    *off += sizeof(uint32_t);
+    return val;
+}
+
+/*
+    Returns the byte offset of a specific table in TTF font data.
+    Returns 0 if not found.
+*/
+static inline uint32_t _sfte_shaper_get_font_table_off(const uint8_t *ttf_data, const char tag[4]) {
+    // 0-3 - sfnt version
+    // 4-7 - number of tables
+    // 12+ - tables
+    uint32_t off = sizeof(uint32_t);
+    uint32_t num_tables = _sfte_shaper_consume16(ttf_data, &off);
+    off += 3 * sizeof(uint16_t);
+
+    for (uint32_t i = 0; i < num_tables; ++i, off += 4 * sizeof(uint8_t) + 3 * sizeof(uint32_t))
+        if (_SFTE_MATCH_TAG(&ttf_data[off], tag))
+            return _SFTE_R32BE(ttf_data, off + 2 * sizeof(uint32_t));
+
+    return 0;
+}
+
+/*
+    Locates a specific GSUB feature (like 'calt' or 'liga') and extracts its lookup indices.
+*/
+static inline void _sfte_shaper_load_feature(sfte_shaper_ctx *ctx, const uint8_t *ttf_data,
+                                             const char tag[4], sfte_shaper_feature *out_feat) {
+    out_feat->lookup_cnt = 0;
+    if (ctx->feat_list_off == 0) return;
+
+    // FeatureList header data:
+    // 0-1 - FeatureCount
+    // 2+  - FeatureRecords
+    uint32_t fl_off = ctx->feat_list_off;
+    uint16_t feat_cnt = _sfte_shaper_consume16(ttf_data, &fl_off);
+
+    for (uint32_t i = 0, rec_off = fl_off; i < feat_cnt;
+         ++i, rec_off += 4 * sizeof(uint8_t) + sizeof(uint16_t))
+
+        if (_SFTE_MATCH_TAG(&ttf_data[rec_off], tag)) {
+            rec_off += 4 * sizeof(uint8_t);
+            uint32_t feat_tab_off = ctx->feat_list_off + _sfte_shaper_consume16(ttf_data, &rec_off);
+
+            // FeatureTable header data:
+            // 0-1 - FeatureParams offset
+            // 2-3 - LookupIndexCount
+            // 4+  - LookupListIndices
+            feat_tab_off += sizeof(uint16_t);  // Skip FeatureParams
+            uint16_t lookup_cnt = _sfte_shaper_consume16(ttf_data, &feat_tab_off);
+
+            for (uint16_t j = 0; j < lookup_cnt && j < SFTE_FONT_MAX_LIGATURE_LOOKUPS; ++j)
+                out_feat->lookup_indices[j] = _SFTE_R16BE(ttf_data,
+                                                          feat_tab_off + (j * sizeof(uint16_t)));
+
+            out_feat->lookup_cnt = lookup_cnt > SFTE_FONT_MAX_LIGATURE_LOOKUPS
+                                       ? SFTE_FONT_MAX_LIGATURE_LOOKUPS
+                                       : lookup_cnt;
+            return;
+        }
+}
+
+/*
+    Parses inner subtables and extension lookups (type 8 -> type 6).
+*/
+static inline void _sfte_shaper_parse_subtables(sfte_shaper_ctx *ctx, const uint8_t *ttf_data,
+                                                uint16_t lookup_idx, uint32_t lookup_tab_off,
+                                                uint16_t lookup_type, uint16_t subtable_cnt) {
+    ctx->calt.subtable_cnts[lookup_idx] = subtable_cnt > SFTE_FONT_MAX_LIGATURE_LOOKUPS
+                                              ? SFTE_FONT_MAX_LIGATURE_LOOKUPS
+                                              : subtable_cnt;
+
+    for (uint16_t s = 0; s < ctx->calt.subtable_cnts[lookup_idx]; ++s) {
+        uint16_t st_off_rel = _SFTE_R16BE(ttf_data, lookup_tab_off + (s * sizeof(uint16_t)));
+        uint32_t st_off_base = lookup_tab_off - 3 * sizeof(uint16_t) + st_off_rel;
+        uint32_t st_off = st_off_base;
+
+        uint16_t type = lookup_type;
+        if (lookup_type == 8) {  // Extension lookup
+            uint16_t ext_format = _sfte_shaper_consume16(ttf_data, &st_off);
+            if (ext_format == 1) {
+                type = _sfte_shaper_consume16(ttf_data, &st_off);
+                uint32_t ext_off_rel = _sfte_shaper_consume32(ttf_data, &st_off);
+                st_off = st_off_base + ext_off_rel;
+            }
+        }
+
+        ctx->calt.lookup_types[lookup_idx] = type;
+        ctx->calt.subtable_offs[lookup_idx][s] = st_off;
+    }
+}
+
+/*
+    Parses the GSUB LookupList and stores offsets for contextual rules.
+*/
+static inline void _sfte_shaper_parse_lookups(sfte_shaper_ctx *ctx, const uint8_t *ttf_data) {
+    if (ctx->lookup_list_off == 0) return;
+
+    // LookupList header data:
+    // 0-1 - LookupCount
+    // 2+  - offsets to lookup tables
+    uint32_t ll_off = ctx->lookup_list_off;
+    uint16_t l_cnt = _sfte_shaper_consume16(ttf_data, &ll_off);
+
+    for (uint16_t i = 0; i < ctx->calt.lookup_cnt; ++i) {
+        uint16_t idx = ctx->calt.lookup_indices[i];
+        if (idx >= l_cnt) continue;
+
+        uint32_t lt_off = ctx->lookup_list_off +
+                          _SFTE_R16BE(ttf_data, ll_off + (idx * sizeof(uint16_t)));
+
+        // LookupTable header data:
+        // 0-1 - LookupType
+        // 2-3 - LookupFlag
+        // 4-5 - SubTableCount
+        uint16_t l_type = _sfte_shaper_consume16(ttf_data, &lt_off);
+        lt_off += sizeof(uint16_t);  // Skip LookupFlag
+        uint16_t st_cnt = _sfte_shaper_consume16(ttf_data, &lt_off);
+
+        if (st_cnt > 0)
+            _sfte_shaper_parse_subtables(ctx, ttf_data, i, lt_off, l_type, st_cnt);
+        else {
+            ctx->calt.lookup_types[i] = 0;
+            for (uint16_t s = 0; s < SFTE_FONT_MAX_LIGATURE_SUBTABLES; ++s)
+                ctx->calt.subtable_offs[i][s] = 0;
+        }
+    }
+}
+
+/*
+    Initializes the OpenType GSUB shaper state machine from raw TTF data.
+*/
+static inline void _sfte_shaper_init(sfte_shaper_ctx *ctx, const uint8_t *ttf_data) {
+    ctx->table_off = _sfte_shaper_get_font_table_off(ttf_data, "GSUB");
+    if (ctx->table_off == 0) return;
+
+    uint32_t t_off = ctx->table_off;
+
+    // GSUB 1.0 header data:
+    // 0-1 - major version
+    // 2-3 - minor version
+    // 4-5 - ScriptList offset
+    // 6-7 - FeatureList offset
+    // 8-9 - LookupList offset
+
+    uint16_t major_ver = _sfte_shaper_consume16(ttf_data, &t_off);
+    t_off += sizeof(uint16_t);  // Skip minor
+    if (major_ver != 1) return;
+
+    ctx->script_list_off = ctx->table_off + _sfte_shaper_consume16(ttf_data, &t_off);
+    ctx->feat_list_off = ctx->table_off + _sfte_shaper_consume16(ttf_data, &t_off);
+    ctx->lookup_list_off = ctx->table_off + _sfte_shaper_consume16(ttf_data, &t_off);
+
+    _sfte_shaper_load_feature(ctx, ttf_data, "calt", &ctx->calt);
+    _sfte_shaper_load_feature(ctx, ttf_data, "liga", &ctx->liga);
+
+    _sfte_shaper_parse_lookups(ctx, ttf_data);
+}
+
+/*
+    Resolves a glyphs index within a Coverage table (format 1 or 2).
+    Returns -1 if the glyph is not covered by the rule.
+*/
+static inline int32_t _sfte_shaper_get_coverage_index(const uint8_t *ttf_data, uint32_t cov_off,
+                                                      uint16_t glyph_id) {
+    if (cov_off == 0) return -1;
+
+    uint16_t format = _sfte_shaper_consume16(ttf_data, &cov_off);
+
+    if (format == 1) {  // Array of individual glyph IDs
+        uint16_t g_cnt = _sfte_shaper_consume16(ttf_data, &cov_off);
+        for (uint16_t i = 0; i < g_cnt; ++i)
+            if (_SFTE_R16BE(ttf_data, cov_off + (i * sizeof(uint16_t))) == glyph_id) return i;
+
+    } else if (format == 2) {  // Array of glyph ID ranges
+        uint16_t gr_cnt = _sfte_shaper_consume16(ttf_data, &cov_off);
+        for (uint32_t i = 0, r_off = cov_off; i < gr_cnt; ++i, r_off += 3 * sizeof(uint16_t))
+            if (glyph_id >= _SFTE_R16BE(ttf_data, r_off) &&
+                glyph_id <= _SFTE_R16BE(ttf_data, r_off + sizeof(uint16_t)))
+                return _SFTE_R16BE(ttf_data, r_off + 2 * sizeof(uint16_t)) +
+                       (glyph_id - _SFTE_R16BE(ttf_data, r_off));
+    }
+
+    return -1;
+}
+
+/*
+    Resolves a glyphs class within a ClassDef table.
+*/
+static inline uint16_t _sfte_shaper_get_class(const uint8_t *ttf_data, uint32_t class_off,
+                                              uint16_t glyph_id) {
+    if (class_off == 0) return 0;
+
+    uint16_t format = _sfte_shaper_consume16(ttf_data, &class_off);
+
+    if (format == 1) {  // Array of classses for a contiguous range of glyph IDs
+        uint16_t c_start = _sfte_shaper_consume16(ttf_data, &class_off);
+        uint16_t c_cnt = _sfte_shaper_consume16(ttf_data, &class_off);
+
+        if (glyph_id >= c_start && glyph_id < c_start + c_cnt)
+            return _SFTE_R16BE(ttf_data, class_off + ((glyph_id - c_start) * sizeof(uint16_t)));
+
+    } else if (format == 2) {  // Array of glyph ID ranges mapping to specific classes
+        uint16_t g_cnt = _sfte_shaper_consume16(ttf_data, &class_off);
+
+        for (uint16_t i = 0; i < g_cnt; ++i, class_off += 3 * sizeof(uint16_t))
+            if (glyph_id >= _SFTE_R16BE(ttf_data, class_off) &&
+                glyph_id <= _SFTE_R16BE(ttf_data, class_off + sizeof(uint16_t)))
+                return _SFTE_R16BE(ttf_data, class_off + 2 * sizeof(uint16_t));
+    }
+
+    return 0;
+}
+
+/*
+    Evaluates a single substitution rule (LookupType=1).
+*/
+static inline uint16_t _sfte_shaper_get_type1_subst(const uint8_t *ttf_data, uint32_t t1_off,
+                                                    uint16_t glyph_id) {
+    uint32_t t_off = t1_off;
+    uint16_t format = _sfte_shaper_consume16(ttf_data, &t_off);
+    if (format != 1 && format != 2) return glyph_id;
+
+    uint32_t c_off = t1_off + _sfte_shaper_consume16(ttf_data, &t_off);
+
+    int32_t c_idx = _sfte_shaper_get_coverage_index(ttf_data, c_off, glyph_id);
+    if (c_idx < 0) return glyph_id;
+
+    if (format == 1)
+        return (uint16_t)(glyph_id + _SFTE_R16BE(ttf_data, t_off));
+    else if (c_idx < _sfte_shaper_consume16(ttf_data, &t_off))
+        return _SFTE_R16BE(ttf_data, t_off + (c_idx * sizeof(uint16_t)));
+
+    return glyph_id;
+}
+
+/*
+    Evaluates a specific rule sequence.
+    Returns 1 if sequence matches, fills out `out_records` and `out_cnt`.
+    Returns 0 if sequence doesn't match.
+*/
+static inline uint8_t _sfte_shaper_match_rule_format1(const uint8_t *ttf_data, uint32_t rule_off,
+                                                      uint16_t *grid, size_t grid_len, size_t pos,
+                                                      sfte_shaper_subst_record *out_records,
+                                                      uint16_t *out_cnt) {
+    // Backtrack, stored in reverse visual order
+    uint16_t b_cnt = _sfte_shaper_consume16(ttf_data, &rule_off);
+    if (pos < b_cnt) return 0;  // Not enough cells behind to match
+    for (uint16_t i = 0; i < b_cnt; ++i)
+        if (grid[pos - (i + 1)] != _sfte_shaper_consume16(ttf_data, &rule_off)) return 0;
+
+    // Input, 0 is implicit via Coverage, check 1 to input_cnt-1
+    uint16_t i_cnt = _sfte_shaper_consume16(ttf_data, &rule_off);
+    uint16_t ia_len = (i_cnt > 0) ? i_cnt - 1 : 0;
+    if (pos + i_cnt > grid_len) return 0;  // Not enough cells ahead to match
+    for (uint16_t i = 0; i < ia_len; ++i)
+        if (grid[pos + (i + 1)] != _sfte_shaper_consume16(ttf_data, &rule_off)) return 0;
+
+    // Lookahead, starts immediately after the input sequence
+    uint16_t l_cnt = _sfte_shaper_consume16(ttf_data, &rule_off);
+    if (pos + i_cnt + l_cnt > grid_len) return 0;  // Not enough cells for lookahead
+    for (uint16_t i = 0; i < l_cnt; ++i)
+        if (grid[pos + (i + i_cnt)] != _sfte_shaper_consume16(ttf_data, &rule_off)) return 0;
+
+    // Matched, extract substitution records
+    *out_cnt = _sfte_shaper_consume16(ttf_data, &rule_off);
+    for (uint16_t i = 0; i < *out_cnt && i < SFTE_FONT_MAX_LIGATURE_RECORDS; ++i) {
+        out_records[i].sequence_idx = _sfte_shaper_consume16(ttf_data, &rule_off);
+        out_records[i].lookup_idx = _sfte_shaper_consume16(ttf_data, &rule_off);
+    }
+
+    return 1;
+}
+
+/*
+    Applies substitution records to the temporary glyph ID buffer.
+*/
+static inline void _sfte_shaper_apply_subst(sfte_shaper_ctx *ctx, const uint8_t *ttf_data,
+                                            uint16_t *grid, size_t pos,
+                                            const sfte_shaper_subst_record *records,
+                                            uint16_t records_cnt) {
+    for (uint16_t i = 0; i < records_cnt; ++i) {
+        uint16_t t_pos = pos + records[i].sequence_idx;
+        uint32_t tl_off = ctx->lookup_list_off +
+                          _SFTE_R16BE(ttf_data, ctx->lookup_list_off + sizeof(uint16_t) +
+                                                    (records[i].lookup_idx * sizeof(uint16_t)));
+
+        uint16_t ts_rel_off = _SFTE_R16BE(ttf_data, tl_off + 3 * sizeof(uint16_t));
+        uint32_t ts_off = tl_off + ts_rel_off;
+
+        grid[t_pos] = _sfte_shaper_get_type1_subst(ttf_data, ts_off, grid[t_pos]);
+    }
+}
+
+/*
+    Evaluates a format 1 contextual lookup (Rule-based).
+    Returns 1 on success.
+    Returns 0 if failed to match a rule.
+*/
+static inline uint8_t _sfte_shaper_eval_format1(sfte_shaper_ctx *ctx, const uint8_t *ttf_data,
+                                                uint32_t sub_off, uint16_t cur_glyph,
+                                                uint16_t *grid, size_t grid_len, size_t pos) {
+    uint32_t s_off = sub_off + sizeof(uint16_t);  // Skip format
+
+    uint32_t c_off = sub_off + _sfte_shaper_consume16(ttf_data, &s_off);
+    int32_t c_idx = _sfte_shaper_get_coverage_index(ttf_data, c_off, cur_glyph);
+    if (c_idx < 0) return false;
+
+    uint16_t rs_cnt = _sfte_shaper_consume16(ttf_data, &s_off);
+    if (c_idx >= rs_cnt) return false;
+
+    uint32_t rs_off = sub_off + 3 * sizeof(uint16_t) + (c_idx * sizeof(uint16_t));
+    uint16_t rs_rel_off = _SFTE_R16BE(ttf_data, rs_off);
+    if (!rs_rel_off) return false;
+
+    uint32_t rs_base_off = sub_off + rs_rel_off;
+    rs_off = rs_base_off;
+    uint16_t r_cnt = _sfte_shaper_consume16(ttf_data, &rs_off);
+
+    for (uint16_t r = 0; r < r_cnt; ++r) {
+        uint32_t r_off = rs_base_off + _sfte_shaper_consume16(ttf_data, &rs_off);
+
+        sfte_shaper_subst_record records[SFTE_FONT_MAX_LIGATURE_RECORDS];
+        uint16_t rec_cnt = 0;
+
+        if (_sfte_shaper_match_rule_format1(ttf_data, r_off, grid, grid_len, pos, records,
+                                            &rec_cnt)) {
+            _sfte_shaper_apply_subst(ctx, ttf_data, grid, pos, records, rec_cnt);
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/*
+    Evaluates a format 3 contextual lookup (Coverage-based).
+    Returns 1 on success.
+    Returns 0 if backtrack/input/lookahead failed.
+*/
+static inline uint8_t _sfte_shaper_eval_format3(sfte_shaper_ctx *ctx, const uint8_t *ttf_data,
+                                                uint32_t sub_off, uint16_t *grid, size_t grid_len,
+                                                size_t pos) {
+    uint32_t s_off = sub_off + sizeof(uint16_t);  // Skip format
+
+    // Backtrack, stored in reverse visual order
+    uint16_t b_cnt = _sfte_shaper_consume16(ttf_data, &s_off);
+    if (pos < b_cnt) return 0;
+    for (uint16_t i = 0; i < b_cnt; ++i)
+        if (_sfte_shaper_get_coverage_index(ttf_data,
+                                            sub_off + _sfte_shaper_consume16(ttf_data, &s_off),
+                                            grid[pos - (i + 1)]) < 0)
+            return 0;
+
+    // Input, includes the current glyph at index 0
+    uint16_t i_cnt = _sfte_shaper_consume16(ttf_data, &s_off);
+    if (pos + i_cnt > grid_len) return 0;
+    for (uint16_t i = 0; i < i_cnt; ++i)
+        if (_sfte_shaper_get_coverage_index(
+                ttf_data, sub_off + _sfte_shaper_consume16(ttf_data, &s_off), grid[pos + i]) < 0)
+            return 0;
+
+    // Lookahead, starts immediately after the input sequence
+    uint16_t l_cnt = _sfte_shaper_consume16(ttf_data, &s_off);
+    if (pos + i_cnt + l_cnt > grid_len) return 0;
+    for (uint16_t i = 0; i < l_cnt; ++i)
+        if (_sfte_shaper_get_coverage_index(ttf_data,
+                                            sub_off + _sfte_shaper_consume16(ttf_data, &s_off),
+                                            grid[pos + i_cnt + i]) < 0)
+            return 0;
+
+    // Matched, extract and apply substitutions
+    uint16_t rec_cnt = _sfte_shaper_consume16(ttf_data, &s_off);
+    sfte_shaper_subst_record records[SFTE_FONT_MAX_LIGATURE_RECORDS];
+
+    for (uint16_t i = 0; i < rec_cnt && i < SFTE_FONT_MAX_LIGATURE_RECORDS; ++i) {
+        records[i].sequence_idx = _sfte_shaper_consume16(ttf_data, &s_off);
+        records[i].lookup_idx = _sfte_shaper_consume16(ttf_data, &s_off);
+    }
+
+    _sfte_shaper_apply_subst(ctx, ttf_data, grid, pos, records, rec_cnt);
+
+    return 1;
+}
+
+/*
+    Shapes a continuous block of uniform text against all lookups.
+    OpenType dictates a cascading loop.
+    A lookup must evaluate the entire string before yielding to the next lookup.
+    A simple loop would fail on something like '==='.
+*/
+static inline void _sfte_shaper_shape_row(sfte_shaper_ctx *ctx, const uint8_t *ttf_data,
+                                          uint16_t *grid, size_t grid_len) {
+    for (uint16_t i = 0; i < ctx->calt.lookup_cnt; ++i) {
+        if (ctx->calt.lookup_types[i] != 6) continue;
+
+        for (size_t pos = 0; pos < grid_len; ++pos) {
+            uint16_t g = grid[pos];
+            if (!g) continue;
+
+            for (uint16_t s = 0; s < ctx->calt.subtable_cnts[i]; ++s) {
+                uint32_t s_off = ctx->calt.subtable_offs[i][s];
+                if (!s_off) continue;
+
+                uint16_t format = _SFTE_R16BE(ttf_data, s_off);
+                uint8_t matched = 0;
+
+                if (format == 1)
+                    matched = _sfte_shaper_eval_format1(ctx, ttf_data, s_off, g, grid, grid_len,
+                                                        pos);
+                else if (format == 3)
+                    matched = _sfte_shaper_eval_format3(ctx, ttf_data, s_off, grid, grid_len, pos);
+
+                if (matched) break;
+            }
+        }
+    }
+}
+
+#undef _SFTE_MATCH_TAG
+#endif  // SFTE_FONT_LIGATURES
+// =================================================================================================
 // >>font
 // =================================================================================================
 #ifndef SFTE_FONT_CUSTOM_BACKEND
@@ -34420,16 +34975,11 @@ static inline void _sfte_stb_vmetrics(sfte_font_backend_info *info, int *ascent,
     stbtt_GetFontVMetrics(info, ascent, descent, linegap);
 }
 
-static inline int _sfte_stb_bounds(sfte_font_backend_info *info, uint32_t rune, float scale,
-                                   int *adv, int *x0, int *y0, int *x1, int *y1) {
-    int glyph_idx = stbtt_FindGlyphIndex(info, rune);
-    if (glyph_idx == 0) return 0;
-
+static inline void _sfte_stb_bounds(sfte_font_backend_info *info, int glyph_id, float scale,
+                                    int *adv, int *x0, int *y0, int *x1, int *y1) {
     int lsb;
-    stbtt_GetGlyphHMetrics(info, glyph_idx, adv, &lsb);
-    stbtt_GetGlyphBitmapBox(info, glyph_idx, scale, scale, x0, y0, x1, y1);
-
-    return glyph_idx;
+    stbtt_GetGlyphHMetrics(info, glyph_id, adv, &lsb);
+    stbtt_GetGlyphBitmapBox(info, glyph_id, scale, scale, x0, y0, x1, y1);
 }
 
 static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, float scale,
@@ -34456,7 +35006,11 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
         }
 
     if (temp_buf != stack_buf) SFTE_FREE(temp_buf);
-#endif  // SFTE_FONT_OVERSAMPLE
+#endif  // SFTE_FONT_OVERSAMPLE > 1
+}
+
+static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune) {
+    return stbtt_FindGlyphIndex(info, rune);
 }
 #endif  // !SFTE_FONT_CUSTOM_BACKEND
 
@@ -34510,7 +35064,7 @@ static inline void _sfte_font_update_scales(sfte_ctx *ctx, sfte_font_cache *cach
     we step down by the height of the tallest glyph in that row.
 */
 static inline void _sfte_font_pack_and_bake(sfte_font_cache *cache, sfte_glyph *g, int32_t font_idx,
-                                            int32_t glyph_idx, int32_t gw, int32_t gh) {
+                                            int32_t glyph_id, int32_t gw, int32_t gh) {
     if (cache->atlas_x + gw >= SFTE_FONT_ATLAS_SIZE) {
         cache->atlas_x = 0;
         cache->atlas_y += cache->atlas_row_h + _SFTE_FONT_PADDING;
@@ -34528,7 +35082,7 @@ static inline void _sfte_font_pack_and_bake(sfte_font_cache *cache, sfte_glyph *
 
     if (gw > 0 && gh > 0) {
         int32_t atlas_idx = g->y0 * SFTE_FONT_ATLAS_SIZE + g->x0;
-        SFTE_FONT_BAKE(&cache->info[font_idx], glyph_idx, cache->scales[font_idx],
+        SFTE_FONT_BAKE(&cache->info[font_idx], glyph_id, cache->scales[font_idx],
                        &cache->atlas_pxs[atlas_idx], gw, gh, SFTE_FONT_ATLAS_SIZE);
     }
 
@@ -34537,58 +35091,36 @@ static inline void _sfte_font_pack_and_bake(sfte_font_cache *cache, sfte_glyph *
 
 /*
     Retrieves a cached glyph raster, or bakes a new one on cache miss.
-
-    Handles cascading fallback fonts and cross-style fallbacks.
-    So, for example, on request of a nerd symbol in bold,
-    if it's not found in bold it falls back to regular,
-    and if it's not found in main regular it fallbacks to lower-priority fonts,
-    eventually finding the symbol.
+    This function is blind to unicode, it expects a pre-resolved TrueType ID and font index from
+   `_sfte_font_resolve_rune`.
 */
-static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_ptr,
-                                        sfte_rune rune) {
-    sfte_font_cache *cache = *cache_ptr;
-    if (rune == 0) rune = ' ';
+static inline sfte_glyph *_sfte_font_get_glyph(sfte_font_cache *cache, uint16_t glyph_id,
+                                               uint8_t font_idx) {
+    if (glyph_id == 0) return NULL;
 
-    uint32_t h = rune % SFTE_FONT_GLYPH_CAP;
+    uint32_t h = (glyph_id ^ (font_idx << 16)) % SFTE_FONT_GLYPH_CAP;
 
     // hash map logic
     for (uint16_t i = 0; i < SFTE_FONT_GLYPH_CAP; ++i) {
         uint16_t idx = (h + i) % SFTE_FONT_GLYPH_CAP;
 
-        if (cache->glyphs[idx].rune == rune) return &cache->glyphs[idx];  // Cache hit
-        if (cache->glyphs[idx].rune != 0) continue;                       // Collision
+        if (cache->glyphs[idx].glyph_id == glyph_id && cache->glyphs[idx].font_idx == font_idx)
+            return &cache->glyphs[idx];                  // Cache hit
+        if (cache->glyphs[idx].glyph_id != 0) continue;  // Collision
 
         // Cache miss, look up bounds across primary and fallback fonts
-        int32_t font_idx = 0;
-        int32_t glyph_idx = 0;
         int32_t adv = 0, x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-
-        // Start in primary font [0].
-        // Then look through fallback fonts [1-SFTE_FONTS_MAX_COUNT]
-        for (uint8_t f = 0; f < cache->num_fonts; ++f) {
-            glyph_idx = SFTE_FONT_BOUNDS(&cache->info[f], rune, cache->scales[f], &adv, &x0, &y0,
-                                         &x1, &y1);
-            if (glyph_idx != 0) {
-                font_idx = f;
-                break;
-            }
-        }
-
-        // If a glyph was not found and cache isn't regular, look in regular.
-        // This is useful e.g. when a certain app tries to draw nerd symbols
-        // in bold/italic/bold italic instead of regular.
-        if (glyph_idx == 0 && cache != &ctx->font.regular) {
-            *cache_ptr = &ctx->font.regular;
-            return _sfte_font_get_glyph(ctx, cache_ptr, rune);
-        }
+        SFTE_FONT_BOUNDS(&cache->info[font_idx], glyph_id, cache->scales[font_idx], &adv, &x0, &y0,
+                         &x1, &y1);
 
         sfte_glyph *g = &cache->glyphs[idx];
-        g->rune = rune;
+        g->glyph_id = glyph_id;
         g->xadvance = (int)(adv * cache->scales[font_idx] + 0.5f);
         g->xoff = x0;
         g->yoff = y0;
+        g->font_idx = font_idx;
 
-        _sfte_font_pack_and_bake(cache, g, font_idx, glyph_idx, x1 - x0, y1 - y0);
+        _sfte_font_pack_and_bake(cache, g, font_idx, glyph_id, x1 - x0, y1 - y0);
 
         return g;
     }
@@ -34597,10 +35129,32 @@ static sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache **cache_p
 }
 
 /*
+    Resolves a unicode rune to a specific font index and TrueType glyph ID.
+    Handles cascading fallback fonts.
+    Sets both values to 0 if glyph is not found.
+*/
+static inline void _sfte_font_resolve_rune(sfte_font_cache *cache, sfte_rune rune,
+                                           uint8_t *out_font_idx, uint16_t *out_glyph_id) {
+    if (rune == 0) rune = ' ';
+
+    for (uint8_t f = 0; f < cache->num_fonts; ++f) {
+        uint16_t id = (uint16_t)SFTE_FONT_GET_ID(&cache->info[f], rune);
+        if (id != 0) {
+            *out_font_idx = f;
+            *out_glyph_id = id;
+            return;
+        }
+    }
+
+    *out_font_idx = 0;
+    *out_glyph_id = 0;
+}
+
+/*
     Purges all glyph atlases and recalculates strict terminal grid metrics.
     Must be called on startup, and whenever the DPI or font size changes.
 */
-static void _sfte_font_reset_cache(sfte_ctx *ctx) {
+static inline void _sfte_font_reset_cache(sfte_ctx *ctx) {
     _sfte_font_clear_cache(&ctx->font.regular);
     _sfte_font_update_scales(ctx, &ctx->font.regular);
 
@@ -34629,8 +35183,10 @@ static void _sfte_font_reset_cache(sfte_ctx *ctx) {
 
     // NOTE:
     // Terminal column width is locked to advance of 'M'.
-    sfte_font_cache *dummy = &ctx->font.regular;
-    sfte_glyph *m = _sfte_font_get_glyph(ctx, &dummy, 'M');
+    uint8_t m_font_idx = 0;
+    uint16_t m_glyph_id = 0;
+    _sfte_font_resolve_rune(&ctx->font.regular, 'M', &m_font_idx, &m_glyph_id);
+    sfte_glyph *m = _sfte_font_get_glyph(&ctx->font.regular, m_glyph_id, m_font_idx);
     ctx->font.cell_width = m->xadvance;
 }
 // =================================================================================================
@@ -34811,14 +35367,18 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
         _sfte_render_damage_add(out_dmg, ctx->term.trail_dmg.x, ctx->term.trail_dmg.y,
                                 ctx->term.trail_dmg.w, ctx->term.trail_dmg.h);
 
-    if (ctx->term.hide_cursor || !ctx->term.is_trailing) {
+    float target_x = ctx->term.cursor_col * ctx->font.cell_width;
+    float target_y = ctx->term.cursor_row * ctx->font.cell_height;
+
+    if (ctx->term.hide_cursor || ctx->term.warp_tail || !ctx->term.is_trailing) {
+        ctx->term.tail_rx = target_x;
+        ctx->term.tail_ry = target_y;
+        ctx->term.warp_tail = 0;
+
         ctx->term.trail_dmg.w = 0;
         ctx->term.trail_dmg.h = 0;
         return;
     }
-
-    float target_x = ctx->term.cursor_col * ctx->font.cell_width;
-    float target_y = ctx->term.cursor_row * ctx->font.cell_height;
 
     float trail_w = ctx->font.cell_width;
     float trail_h = ctx->font.cell_height;
@@ -35049,20 +35609,19 @@ static void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16
     It blends the requested foreground color into the existing background using this alpha mask.
 */
 static void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
-                                 int32_t y_off, sfte_rune rune, uint32_t fg,
-                                 sfte_font_cache *target_cache) {
+                                 int32_t y_off, sfte_rune rune, uint16_t glyph_id, uint8_t font_idx,
+                                 uint32_t fg, sfte_font_cache *target_cache) {
     if (rune == ' ') return;
 
     int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
     int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
 
-#if SFTE_TERM_CUSTOM_BOXES
+#if SFTE_TERM_CUSTOM_BOXES && !SFTE_TERM_ASCII_CHARSET
     if ((rune >= 0x2500 && rune <= 0x259F) || (rune >= 0x2800 && rune <= 0x28FF))
         if (_sfte_render_box_char(ctx, px_buf, cx, cy, fg, rune, y_off)) return;
 #endif  // SFTE_TERM_CUSTOM_BOXES
 
-    sfte_font_cache *actual_cache = target_cache;
-    sfte_glyph *g = _sfte_font_get_glyph(ctx, &actual_cache, rune);
+    sfte_glyph *g = _sfte_font_get_glyph(target_cache, glyph_id, font_idx);
     if (!g) return;
 
     int32_t glyph_width = g->x1 - g->x0;
@@ -35078,7 +35637,7 @@ static void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16
             if (screen_x < 0 || screen_x >= ctx->width || screen_y < 0 || screen_y >= ctx->height)
                 continue;
 
-            uint8_t alpha = actual_cache
+            uint8_t alpha = target_cache
                                 ->atlas_pxs[(g->y0 + y) * SFTE_FONT_ATLAS_SIZE + (g->x0 + x)] &
                             0xFF;
 
@@ -35168,7 +35727,6 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int3
 
 /*
     Renders non-block cursors (bar/underline).
-    Block cursors are rendered naturally by inverting the cells background/foreground colors.
 */
 static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
                                              int32_t render_w) {
@@ -35213,10 +35771,10 @@ static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_
     }
 }
 
-#if SFTE_TERM_CUSTOM_BOXES
+#if SFTE_TERM_CUSTOM_BOXES && !SFTE_TERM_ASCII_CHARSET
 /*
     A stripped down Xialoin Wu line algorithm optimized for integer endpoints.
-    Draws anti-aliased 1px lines for terminal cell diagonals.
+    Draws anti-aliased lines for terminal cell diagonals.
 */
 static inline void _sfte_render_line(sfte_ctx *ctx, void *px_buf, int32_t x0, int32_t y0,
                                      int32_t x1, int32_t y1, int32_t thickness, uint32_t col) {
@@ -35518,84 +36076,183 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
 }
 
 /*
+    Extracts a single terminal row into linear arrays for shaping and rendering.
+    Resolves runes into raw glyph IDs and identifies style/color boundaries.
+*/
+static inline void _sfte_render_extract_fg_row(sfte_ctx *ctx, int16_t row, int32_t logical_row,
+                                               int16_t vis_col, int16_t vis_row,
+                                               uint16_t *shaper_ids, uint16_t *render_ids,
+                                               uint8_t *font_indices,
+                                               sfte_font_cache **target_caches) {
+    for (int16_t c = 0; c < ctx->term.cols; ++c) {
+        sfte_cell *vcell = _sfte_grid_get_cell(ctx, c, logical_row);
+        sfte_rune rune = vcell->rune ? vcell->rune : ' ';
+#if defined(SFTE_FONT_BOLD) || defined(SFTE_FONT_ITALIC) || defined(SFTE_FONT_BOLD_ITALIC)
+        uint8_t attr = vcell->attr;
+#endif  // defined(SFTE_FONT_BOLD) || defined(SFTE_FONT_ITALIC) || defined(SFTE_FONT_BOLD_ITALIC)
+
+        sfte_font_cache *target_cache = &ctx->font.regular;
+#ifdef SFTE_FONT_BOLD_ITALIC
+        if ((attr & _SFTE_ATTR_BOLD) && (attr & _SFTE_ATTR_ITALIC))
+            target_cache = &ctx->font.bold_italic;
+#ifdef SFTE_FONT_BOLD
+        else
+#endif  // SFTE_FONT_BOLD
+#endif  // SFTE_FONT_BOLD_ITALIC
+#ifdef SFTE_FONT_BOLD
+            if (attr & _SFTE_ATTR_BOLD)
+            target_cache = &ctx->font.bold;
+#ifdef SFTE_FONT_ITALIC
+        else
+#endif  // SFTE_FONT_ITALIC
+#endif  // SFTE_FONT_BOLD
+#ifdef SFTE_FONT_ITALIC
+            if (attr & _SFTE_ATTR_ITALIC)
+            target_cache = &ctx->font.italic;
+#endif  // SFTE_FONT_ITALIC
+        target_caches[c] = target_cache;
+        _sfte_font_resolve_rune(target_cache, rune, &font_indices[c], &render_ids[c]);
+
+        uint8_t is_cursor = (c == vis_col && row == vis_row && !ctx->term.hide_cursor);
+
+        shaper_ids[c] = (rune == ' ' || rune == 0 || is_cursor) ? 0 : render_ids[c];
+    }
+}
+
+#if SFTE_FONT_LIGATURES
+/*
+    Chunks a row into continuous style/color blocks and passes them to the OpenType shaper.
+    Ensures ligatures do not bleed across formatting boundaries.
+*/
+static inline void _sfte_render_shape_fg_row(sfte_ctx *ctx, int32_t logical_row,
+                                             uint16_t *shaper_ids, uint8_t *font_indices,
+                                             sfte_font_cache **target_caches) {
+    int16_t span_start = 0;
+    while (span_start < ctx->term.cols) {
+        if (!shaper_ids[span_start]) {
+            span_start++;
+            continue;
+        }
+
+        sfte_cell *start_cell = _sfte_grid_get_cell(ctx, span_start, logical_row);
+        uint32_t active_fg = _sfte_grid_get_fg(start_cell);
+        uint32_t active_bg = _sfte_grid_get_bg(start_cell);
+
+        sfte_font_cache *active_cache = target_caches[span_start];
+        uint8_t active_font_idx = font_indices[span_start];
+
+        int16_t span_end = span_start + 1;
+        while (span_end < ctx->term.cols && shaper_ids[span_end] != 0) {
+            sfte_cell *next_cell = _sfte_grid_get_cell(ctx, span_end, logical_row);
+            if (_sfte_grid_get_fg(next_cell) != active_fg ||
+                _sfte_grid_get_bg(next_cell) != active_bg ||
+                target_caches[span_end] != active_cache ||
+                font_indices[span_end] != active_font_idx)
+                break;
+            span_end++;
+        }
+
+        _sfte_shaper_shape_row(&active_cache->shaper[active_font_idx],
+                               active_cache->ttf_buf[active_font_idx], &shaper_ids[span_start],
+                               span_end - span_start);
+
+        span_start = span_end;
+    }
+}
+#endif  // SFTE_FONT_LIGATURES
+
+/*
+    Iterates over a shaped row and dispatches foreground/decoration drawing.
+*/
+static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
+                                       int32_t logical_row, int16_t vis_col, int16_t vis_row,
+                                       int32_t y_off, uint16_t *shaper_ids, uint16_t *render_ids,
+                                       uint8_t *font_indices, sfte_font_cache **target_caches,
+                                       sfte_damage_rect *out_dmg) {
+    for (int16_t c = 0; c < ctx->term.cols; ++c) {
+        int32_t idx = _SFTE_GRID_IDX(ctx, c, row);
+        if (!ctx->term.cells[idx].dirty) continue;
+
+        sfte_cell *vcell = _sfte_grid_get_cell(ctx, c, logical_row);
+        uint8_t attr = vcell->attr;
+
+#if SFTE_FONT_WIDE_CHARS
+        if (attr & _SFTE_ATTR_DUMMY) {
+            _sfte_render_damage_add(out_dmg, c * ctx->font.cell_width + SFTE_WINDOW_PAD_X,
+                                    row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y,
+                                    ctx->font.cell_width, ctx->font.cell_height);
+            ctx->term.cells[idx].dirty = 0;
+            continue;
+        }
+#endif
+        sfte_rune rune = vcell->rune ? vcell->rune : ' ';
+        uint32_t fg = _sfte_grid_get_fg(vcell);
+        uint32_t bg = _sfte_grid_get_bg(vcell);
+
+        if (attr & _SFTE_ATTR_REVERSE
+#if SFTE_TERM_FOCUS
+            && ctx->term.is_focused
+#endif  // SFTE_TERM_FOCUS
+        ) {
+            uint32_t tmp = fg;
+            fg = bg;
+            bg = tmp;
+        }
+#ifdef SFTE_BOLD_WHITE
+        if (attr & _SFTE_ATTR_BOLD) fg = SFTE_COLOR_FG;
+#endif
+
+        uint8_t is_cursor = (c == vis_col && row == vis_row && !ctx->term.hide_cursor);
+#if SFTE_CURSOR_BLINK
+        if (!ctx->term.blink_visible) is_cursor = 0;
+#endif
+        if (is_cursor && _SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BLOCK) fg = bg;
+
+        if (font_indices[c] == 0 && shaper_ids[c] != 0 && shaper_ids[c] != render_ids[c]) {
+            render_ids[c] = shaper_ids[c];
+        }
+
+        _sfte_render_fg_cell(ctx, px_buf, c, row, y_off, rune, render_ids[c], font_indices[c], fg,
+                             target_caches[c]);
+        _sfte_render_decorations_cell(ctx, px_buf, c, row, y_off, vcell, is_cursor);
+
+        int32_t dmg_cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
+        int32_t dmg_ch = ctx->font.cell_height;
+
+        if (row == 0) {
+            dmg_cy = 0;
+            dmg_ch += SFTE_WINDOW_PAD_Y;
+        } else if (row == ctx->term.rows - 1) {
+            dmg_ch += ctx->height - (dmg_cy + dmg_ch);
+        }
+        _sfte_render_damage_add(out_dmg, 0, dmg_cy, ctx->width, dmg_ch);
+    }
+}
+
+/*
     Foreground rendering pass.
     Renders the whole grid, contrary to `_sfte_render_fg_cell`.
 */
 static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
                                         int16_t vis_row, int32_t y_off, sfte_damage_rect *out_dmg) {
-    for (int16_t r = 0; r < ctx->term.rows; ++r) {
-        for (int16_t c = 0; c < ctx->term.cols; ++c) {
-            int32_t idx = _SFTE_GRID_IDX(ctx, c, r);
-            if (!ctx->term.cells[idx].dirty) continue;
+    uint16_t shaper_ids[ctx->term.cols];
+    uint16_t render_ids[ctx->term.cols];
+    uint8_t font_indices[ctx->term.cols];
+    sfte_font_cache *target_caches[ctx->term.cols];
 
-            int32_t logical_r = r;
+    for (int16_t r = 0; r < ctx->term.rows; ++r) {
+        int32_t logical_r = r;
 #if SFTE_TERM_SCROLLBACK_CAP
-            logical_r -= ctx->term.sb_offset;
+        logical_r -= ctx->term.sb_offset;
 #endif  // SFTE_TERM_SCROLLBACK_CAP
 
-            sfte_cell *vcell = _sfte_grid_get_cell(ctx, c, logical_r);
-#if SFTE_FONT_WIDE_CHARS
-            if (vcell->attr & _SFTE_ATTR_DUMMY) {
-                _sfte_render_damage_add(out_dmg, c * ctx->font.cell_width + SFTE_WINDOW_PAD_X,
-                                        r * ctx->font.cell_height + SFTE_WINDOW_PAD_Y,
-                                        ctx->font.cell_width, ctx->font.cell_height);
-                ctx->term.cells[idx].dirty = 0;
-                continue;
-            }
-#endif
-
-            sfte_rune rune = vcell->rune ? vcell->rune : ' ';
-            uint32_t fg = _sfte_grid_get_fg(vcell);
-            uint32_t bg = _sfte_grid_get_bg(vcell);
-            uint8_t attr = vcell->attr;
-
-            if (attr & _SFTE_ATTR_REVERSE
-#if SFTE_TERM_FOCUS
-                && ctx->term.is_focused
-#endif  // SFTE_TERM_FOCUS
-            ) {
-                uint32_t tmp = fg;
-                fg = bg;
-                bg = tmp;
-            }
-#ifdef SFTE_BOLD_WHITE
-            if (attr & _SFTE_ATTR_BOLD) fg = SFTE_COLOR_FG;
-#endif
-
-            uint8_t is_cursor = (c == vis_col && r == vis_row && !ctx->term.hide_cursor);
-#if SFTE_CURSOR_BLINK
-            if (!ctx->term.blink_visible) is_cursor = 0;
-#endif
-            if (is_cursor && _SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BLOCK) fg = bg;
-
-            sfte_font_cache *target_cache = &ctx->font.regular;
-#ifdef SFTE_FONT_BOLD_ITALIC
-            if ((attr & _SFTE_ATTR_BOLD) && (attr & _SFTE_ATTR_ITALIC))
-                target_cache = &ctx->font.bold_italic;
-#endif
-#ifdef SFTE_FONT_BOLD
-            else if (attr & _SFTE_ATTR_BOLD)
-                target_cache = &ctx->font.bold;
-#endif
-#ifdef SFTE_FONT_ITALIC
-            else if (attr & _SFTE_ATTR_ITALIC)
-                target_cache = &ctx->font.italic;
-#endif
-
-            _sfte_render_fg_cell(ctx, px_buf, c, r, y_off, rune, fg, target_cache);
-            _sfte_render_decorations_cell(ctx, px_buf, c, r, y_off, vcell, is_cursor);
-
-            int32_t dmg_cy = r * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
-            int32_t dmg_ch = ctx->font.cell_height;
-
-            if (r == 0) {
-                dmg_cy = 0;
-                dmg_ch += SFTE_WINDOW_PAD_Y;
-            } else if (r == ctx->term.rows - 1) {
-                dmg_ch += ctx->height - (dmg_cy + dmg_ch);
-            }
-            _sfte_render_damage_add(out_dmg, 0, dmg_cy, ctx->width, dmg_ch);
-        }
+        _sfte_render_extract_fg_row(ctx, r, logical_r, vis_col, vis_row, shaper_ids, render_ids,
+                                    font_indices, target_caches);
+#if SFTE_FONT_LIGATURES
+        _sfte_render_shape_fg_row(ctx, logical_r, shaper_ids, font_indices, target_caches);
+#endif  // SFTE_FONT_LIGATURES
+        _sfte_render_fg_row(ctx, px_buf, r, logical_r, vis_col, vis_row, y_off, shaper_ids,
+                            render_ids, font_indices, target_caches, out_dmg);
     }
 }
 
@@ -36406,13 +37063,31 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
         // Handle incoming text from the shell
         if (fds[1].revents & (POLLIN | POLLERR | POLLHUP)) {
             uint8_t buf[SFTE_TERM_PTY_BUF_SIZE];
-            ssize_t n = read(app->pty_fd, buf, SFTE_TERM_PTY_BUF_SIZE);
+            uint8_t did_read = 0;
 
-            if (n > 0) {
-                sfte_parse(app->ctx, buf, n);
-                app->needs_render = 1;
-            } else
-                app->running = 0;  // Shell exited
+            while (1) {
+                ssize_t n = read(app->pty_fd, buf, SFTE_TERM_PTY_BUF_SIZE);
+
+                if (n > 0) {
+                    sfte_parse(app->ctx, buf, n);
+                    did_read = 1;
+                } else if (n == 0) {
+                    app->running = 0;  // Shell exited
+                    break;
+                } else {  // n < 0
+                    // EAGAIN/EWOULDBLOCK means buffer is empty
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                    // EINTR means its interrupted by signal
+                    else if (errno == EINTR)
+                        continue;
+                    else {
+                        app->running = 0;
+                        break;
+                    }
+                }
+            }
+
+            if (did_read) app->needs_render = 1;
         }
 
         // Handle key repeat timer
@@ -36631,6 +37306,10 @@ void sfte_font_load_mem(sfte_ctx *ctx, sfte_font_style style, const uint8_t *ttf
 
     SFTE_FONT_INIT(&cache->info[idx], cache->ttf_buf[idx]);
 
+#if SFTE_FONT_LIGATURES
+    _sfte_shaper_init(&cache->shaper[idx], cache->ttf_buf[idx]);
+#endif  // SFTE_FONT_LIGATURES
+
     if (style == SFTE_FONT_STYLE_REGULAR && idx == 0)
         _sfte_font_reset_cache(ctx);
     else {
@@ -36686,6 +37365,9 @@ pid_t sfte_posix_pty_spawn(sfte_ctx *ctx, int32_t *out_fd, uint16_t px_w, uint16
         execlp(shell, shell, NULL);
         abort();  // if execlp returns, it failed to exec the shell
     }
+
+    int flags = fcntl(*out_fd, F_GETFL, 0);
+    fcntl(*out_fd, F_SETFL, flags | O_NONBLOCK);
 
     _SFTE_INFO(ctx, PTY_SPAWN);
     return pid;
@@ -36964,10 +37646,7 @@ void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
         _sfte_grid_resize(ctx, new_cols, new_rows);
 
 #if SFTE_CURSOR_TRAIL
-        ctx->term.tail_rx = ctx->term.cursor_col * ctx->font.cell_width;
-        ctx->term.tail_ry = ctx->term.cursor_row * ctx->font.cell_height;
-        ctx->term.is_trailing = 0;
-        ctx->term.trail_dmg.w = 0;
+        ctx->term.warp_tail = 1;
 #endif  // SFTE_CURSOR_TRAIL
     }
 }
