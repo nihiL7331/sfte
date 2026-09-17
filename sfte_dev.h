@@ -2083,8 +2083,10 @@ static inline sfte_cell *_sfte_grid_get_cell(sfte_ctx *ctx, int16_t col, int32_t
 static inline uint32_t _sfte_grid_get_bg(sfte_cell *cell);
 static inline uint32_t _sfte_grid_get_fg(sfte_cell *cell);
 static inline uint32_t _sfte_grid_get_ul(sfte_cell *cell);
+#if SFTE_CURSOR_TRAIL || SFTE_INPUT_MOUSE
 static void _sfte_grid_from_px(sfte_ctx *ctx, int32_t px_x, int32_t px_y, int16_t *out_col,
                                int32_t *out_logical_row, int16_t *out_screen_row);
+#endif  // SFTE_CURSOR_TRAIL || SFTE_INPUT_MOUSE
 static inline void _sfte_grid_dirty_rows(sfte_ctx *ctx, int32_t logical_row1, int32_t logical_row2);
 static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int16_t start_col,
                                          int32_t start_logical_row, int16_t cols, int16_t rows);
@@ -8219,12 +8221,14 @@ static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
 
     if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !app->xkb_state) return;
 
-    // Clear selection on key press
+// Clear selection on key press
+#if SFTE_INPUT_SELECTION
     if (app->ctx->term.mouse_sel_active) {
         app->ctx->term.mouse_sel_active = 0;
         _sfte_grid_dirty_range(app->ctx, 0, app->ctx->term.cols * app->ctx->term.rows);
         app->needs_render = 1;
     }
+#endif  // SFTE_INPUT_SELECTION
 
     if (app->repeat_rate > 0 && app->repeating_key != key) {
         struct itimerspec its;
@@ -9828,9 +9832,9 @@ sfte_wayland_app *sfte_wayland_init(void) {
     app->running = 1;
     app->ctx = sfte_init(_sfte_wayland_write_cb, app);
 
-#if SFTE_CLIPBOARD && SFTE_CLIPBOARD_OSC52
+#if SFTE_CLIPBOARD && SFTE_INPUT_SELECTION && SFTE_CLIPBOARD_OSC52
     app->ctx->osc52_clipboard_cb = _sfte_wayland_osc52_clipboard_cb;
-#endif  // SFTE_CLIPBOARD && SFTE_CLIPBOARD_OSC52
+#endif  // SFTE_CLIPBOARD && SFTE_INPUT_SELECTION && SFTE_CLIPBOARD_OSC52
 #if SFTE_INPUT_HYPERLINKS
     app->ctx->open_link_cb = _sfte_wayland_open_link_cb;
 #endif  // SFTE_INPUT_HYPERLINKS
