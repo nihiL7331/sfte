@@ -1990,6 +1990,7 @@ static void _sfte_grid_scroll_images(sfte_ctx *ctx, int16_t lines, int16_t top, 
 static void _sfte_grid_push_scrollback(sfte_ctx *ctx, int16_t lines);
 #endif  // SFTE_TERM_SCROLLBACK_CAP
 static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, uint32_t start_idx, uint32_t cnt);
+static inline void _sfte_grid_clear_rows(sfte_ctx *ctx, int16_t start_row, int16_t cnt);
 static void _sfte_grid_scroll(sfte_ctx *ctx, int16_t lines);
 static inline void _sfte_grid_check_wrap(sfte_ctx *ctx);
 static sfte_cell *_sfte_grid_resize_dumb_copy(sfte_cell *old_grid, int16_t old_cols,
@@ -2926,6 +2927,17 @@ static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, uint32_t start_idx, uin
 #if SFTE_IMG_SIXEL
     _sfte_grid_clear_sixel(ctx, start_idx, cnt);
 #endif  // SFTE_IMG_SIXEL
+}
+
+/*
+    Wipes `cnt` rows starting from `start_row`, resetting them to ' ' and applying the
+    currently active terminal foreground, background and text attributes.
+    Also triggers the deletion of any Sixel images that intersect these rows.
+    Does NOT move the cursor.
+*/
+static inline void _sfte_grid_clear_rows(sfte_ctx *ctx, int16_t start_row, int16_t cnt) {
+    for (int16_t r = start_row; r < start_row + cnt; ++r)
+        _sfte_grid_clear_cells(ctx, _sfte_grid_get_idx(ctx, 0, r), ctx->term.cols);
 }
 
 /*
