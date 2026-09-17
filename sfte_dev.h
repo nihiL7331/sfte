@@ -843,7 +843,9 @@ typedef struct {
 #if SFTE_WAYLAND
 static void _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg);
 static void _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *arg);
+#if SFTE_TERM_SCROLLBACK_CAP
 static void _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg);
+#endif  // SFTE_TERM_SCROLLBACK_CAP
 static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg);
 static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_WAYLAND
@@ -1644,7 +1646,9 @@ typedef struct {
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
     uint32_t cursor_color;
 #if SFTE_TERM_SCROLL_SMOOTH
+#if SFTE_TERM_SCROLLBACK_CAP
     int32_t last_sb_offset;
+#endif  // SFTE_TERM_SCROLLBACK_CAP
     float scroll_y_offset;
 #endif  // SFTE_TERM_SCROLL_SMOOTH
 
@@ -1847,8 +1851,8 @@ typedef struct {
 #if SFTE_TERM_SCROLLBACK_CAP
     sfte_cell *sb_grid;
     int32_t sb_lines;
-    int16_t new_col, new_row;
 #endif  // SFTE_TERM_SCROLLBACK_CAP
+    int16_t new_col, new_row;
 } _sfte_resize_buffers;
 
 #if SFTE_TERM_REFLOW
@@ -2748,13 +2752,16 @@ static inline void _sfte_grid_dirty_rows(sfte_ctx *ctx, int32_t logical_row1,
             int32_t row_start_idx = _sfte_grid_get_idx(ctx, 0, logical_r);
             for (int16_t c = 0; c < ctx->term.cols; ++c)
                 ctx->term.cells[row_start_idx + c].dirty = 1;
-        } else {
+        }
+#if SFTE_TERM_SCROLLBACK_CAP
+        else {
             int32_t cap = ctx->term.sb_cap;
             int32_t ring_row = ((ctx->term.sb_head + logical_r) % cap + cap) % cap;
             int32_t row_start_idx = ring_row * ctx->term.cols;
             for (int16_t c = 0; c < ctx->term.cols; ++c)
                 ctx->term.scrollback[row_start_idx + c].dirty = 1;
         }
+#endif  // SFTE_TERM_SCROLLBACK_CAP
 }
 
 /*
@@ -3562,6 +3569,7 @@ static sfte_cell *_sfte_reflow_linearize(sfte_ctx *ctx, sfte_cell *main_old, int
 static void _sfte_reflow_extract_view(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows,
                                       int16_t target_row, _sfte_reflow_state *st,
                                       _sfte_resize_buffers *out) {
+    (void)ctx;
     int32_t total_lines = st->reflow_row + (st->reflow_col > 0 ? 1 : 0);
 
     out->main_grid = (sfte_cell *)SFTE_CALLOC(new_cols * new_rows, sizeof(sfte_cell));
@@ -6895,7 +6903,7 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
     if (anim_state == 1) passes_cnt = 2;
 #endif  // SFTE_TERM_ANIMATE_SCREEN
 
-#if SFTE_TERM_SCROLL_SMOOTH
+#if SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
     int32_t sb_diff = ctx->term.sb_offset - ctx->term.last_sb_offset;
     if (sb_diff != 0) {
         ctx->term.scroll_y_offset -= sb_diff * ctx->font.cell_height;
@@ -6920,7 +6928,7 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
         }
         needs_wipe = 1;
     }
-#endif  // SFTE_TERM_SCROLL_SMOOTH
+#endif  // SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
 
     if (needs_wipe) {
         _sfte_render_damage_add(out_dmg, 0, 0, ctx->width, ctx->height);
