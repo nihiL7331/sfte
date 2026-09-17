@@ -7576,13 +7576,15 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
         _sfte_render_extract_fg_row(ctx, logical_r, r, vis_col, vis_row);
 
 #if SFTE_FONT_LIGATURES
+        int32_t cache_idx = (logical_r >= 0) ? ((logical_r + ctx->term.grid_off) % ctx->term.rows)
+                                             : r;
         uint64_t row_hash = _sfte_render_get_row_hash(ctx, logical_r);
-        uint16_t *memo_ids = &ctx->term.row_shaper_ids[r * ctx->term.cols];
-        if (ctx->term.row_hashes[r] == row_hash)
+        uint16_t *memo_ids = &ctx->term.row_shaper_ids[cache_idx * ctx->term.cols];
+        if (ctx->term.row_hashes[cache_idx] == row_hash)
             memcpy(ctx->term.render_shaper_ids, memo_ids, ctx->term.cols * sizeof(uint16_t));
         else {
             _sfte_render_shape_fg_row(ctx, logical_r);
-            ctx->term.row_hashes[r] = row_hash;
+            ctx->term.row_hashes[cache_idx] = row_hash;
             memcpy(memo_ids, ctx->term.render_shaper_ids, ctx->term.cols * sizeof(uint16_t));
         }
 #endif  // SFTE_FONT_LIGATURES
