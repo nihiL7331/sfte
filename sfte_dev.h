@@ -1447,7 +1447,7 @@ static const char *_sfte_log_messages[] = {_SFTE_LOG_ITEMS};
 #define _SFTE_CHAR_WIDTH(rune) 1
 #endif
 
-#if SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL
+#if SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL || (SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP)
 #ifndef SFTE_TIME_MS
 #include <time.h>
 static inline uint64_t _sfte_time_ms(void) {
@@ -1457,7 +1457,8 @@ static inline uint64_t _sfte_time_ms(void) {
 }
 #define SFTE_TIME_MS() _sfte_time_ms()
 #endif  // SFTE_TIME_MS
-#endif  // SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL
+#endif  // SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL || (SFTE_TERM_SCROLL_SMOOTH &&
+        // SFTE_TERM_SCROLLBACK_CAP)
 // =================================================================================================
 // >>internal data structures
 // =================================================================================================
