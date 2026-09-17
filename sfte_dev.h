@@ -43,6 +43,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #include "vendor/stb_image.h"
 #endif  // !defined(SFTE_IMG_KITTY) || SFTE_IMG_KITTY
 
+#include <float.h>   // FLT_MAX
 #include <stddef.h>  // size_t
 #include <stdint.h>
 
@@ -91,7 +92,33 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_ASSERT
 #include <assert.h>
 #define SFTE_ASSERT(c, m) assert((c) && (m))
+#define SFTE_STATIC_ASSERT(c, m) _Static_assert(c, m)
 #endif  // !SFTE_ASSERT
+
+/*
+    Internal helper macro used to ensure the value set
+    for a macro is within predefined bounds [min;max].
+*/
+#define _SFTE_ENSURE_RANGE(val, min, max)                                                          \
+    SFTE_STATIC_ASSERT((val) >= (min) && (val) <= (max),                                           \
+                       #val " must be strictly between " #min " and " #max)
+
+/*
+    Internal helper macro used to ensure the dependencies
+    for a macro value were met.
+    Usage:
+
+    _SFTE_ENSURE_DEPS(dependent_macro, dependency1 && dependency2);
+*/
+#define _SFTE_ENSURE_DEPS(macro, dep)                                                              \
+    SFTE_STATIC_ASSERT(!(macro) || (dep), #macro " unmet dependencies: " #dep)
+
+typedef enum {
+    SFTE_LOG_LVL_PANIC,
+    SFTE_LOG_LVL_ERROR,
+    SFTE_LOG_LVL_WARN,
+    SFTE_LOG_LVL_INFO,
+} sfte_log_level;
 
 /*
     Available levels of severity:
@@ -103,6 +130,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_LOG_LEVEL
 #define SFTE_LOG_LEVEL SFTE_LOG_LVL_ERROR
 #endif  // SFTE_LOG_LEVEL
+_SFTE_ENSURE_RANGE(SFTE_LOG_LEVEL, SFTE_LOG_LVL_PANIC, SFTE_LOG_LVL_INFO);
 
 /*
     String prefixed to every log output.
@@ -119,8 +147,8 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 
 */
 #ifndef SFTE_LOG_FUNC
-#define SFTE_LOG_FUNC _sfte_log_default_func
-#endif  // SFTE_LOG_FUNC
+#define SFTE_LOG_FUNC _sfte_log_default_func /* fuzz skip */
+#endif                                       // SFTE_LOG_FUNC
 
 // =================================================================================================
 // >>term macros
@@ -139,6 +167,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_FOCUS
 #define SFTE_TERM_FOCUS 1
 #endif  // SFTE_TERM_FOCUS
+_SFTE_ENSURE_RANGE(SFTE_TERM_FOCUS, 0, 1);
 
 /*
     Initial terminal grid column size.
@@ -146,6 +175,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_INIT_COLS
 #define SFTE_TERM_INIT_COLS 80
 #endif  // SFTE_TERM_INIT_COLS
+_SFTE_ENSURE_RANGE(SFTE_TERM_INIT_COLS, 1, INT16_MAX);
 
 /*
     Initial terminal grid row size.
@@ -153,6 +183,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_INIT_ROWS
 #define SFTE_TERM_INIT_ROWS 24
 #endif  // SFTE_TERM_INIT_ROWS
+_SFTE_ENSURE_RANGE(SFTE_TERM_INIT_ROWS, 1, INT16_MAX);
 
 /*
     Number of bytes read from the PTY per poll event.
@@ -160,6 +191,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_PTY_BUF_SIZE
 #define SFTE_TERM_PTY_BUF_SIZE 4096
 #endif  // SFTE_TERM_PTY_BUF_SIZE
+_SFTE_ENSURE_RANGE(SFTE_TERM_PTY_BUF_SIZE, 1, UINT16_MAX);
 
 /*
     Tab stop interval in grid cells.
@@ -167,6 +199,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_TAB_WIDTH
 #define SFTE_TERM_TAB_WIDTH 8
 #endif  // SFTE_TERM_TAB_WIDTH
+_SFTE_ENSURE_RANGE(SFTE_TERM_TAB_WIDTH, 1, INT16_MAX);
 
 /*
     Enables procedural rendering for box drawing characters (U+2500 - U+257F).
@@ -175,6 +208,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_CUSTOM_BOXES
 #define SFTE_TERM_CUSTOM_BOXES 1
 #endif  // SFTE_TERM_CUSTOM_BOXES
+_SFTE_ENSURE_RANGE(SFTE_TERM_CUSTOM_BOXES, 0, 1);
 
 /*
     Enables standard terminal alternate screen buffer (used by TUIs extensively).
@@ -182,8 +216,9 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
     but CAN and WILL break TUIs rendering.
 */
 #ifndef SFTE_TERM_ALT_SCREEN
-#define SFTE_TERM_ALT_SCREEN 1
+#define SFTE_TERM_ALT_SCREEN 0
 #endif  // SFTE_TERM_ALT_SCREEN
+_SFTE_ENSURE_RANGE(SFTE_TERM_ALT_SCREEN, 0, 1);
 
 /*
     Defines frame rate during rendering (in frames per second).
@@ -192,18 +227,35 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_REFRESH_RATE
 #define SFTE_TERM_REFRESH_RATE 60
 #endif  // SFTE_TERM_REFRESH_RATE
+_SFTE_ENSURE_RANGE(SFTE_TERM_REFRESH_RATE, 1, 720);
+
+/*
+    Maintains a secondary pixel buffer to prevent tearing.
+    Can be disabled without any noticeable changes on minimal setups,
+    lowering the memory usage (and requiring one less memcpy in hot path).
+    NOTE:
+    Needs to be enabled for cursor trails and screen buffer transitions.
+*/
+#ifndef SFTE_TERM_DOUBLE_BUFFER
+#define SFTE_TERM_DOUBLE_BUFFER 1
+#endif  // SFTE_TERM_DOUBLE_BUFFER
+_SFTE_ENSURE_RANGE(SFTE_TERM_DOUBLE_BUFFER, 0, 1);
 
 /*
     Enables scrolling animation on TUI open/close (alt screen toggle).
+    Obviously requires `SFTE_TERM_ALT_SCREEN` to be enabled to work.
 
     NOTE:
     This is an experimental feature.
     It makes the animation toggle on EVERY alt screen switch.
     It's purely sugar candy, might slightly affect the CPU usage.
+    It also doesn't work if inside tmux.
 */
 #ifndef SFTE_TERM_ANIMATE_SCREEN
 #define SFTE_TERM_ANIMATE_SCREEN 0
 #endif  // SFTE_TERM_ANIMATE_SCREEN
+_SFTE_ENSURE_RANGE(SFTE_TERM_ANIMATE_SCREEN, 0, 1);
+_SFTE_ENSURE_DEPS(SFTE_TERM_ANIMATE_SCREEN, SFTE_TERM_ALT_SCREEN &&SFTE_TERM_DOUBLE_BUFFER);
 
 /*
     Duration of the scrolling animation on TUI open/close (alt screen toggle).
@@ -211,6 +263,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_ANIM_DUR_MS
 #define SFTE_TERM_ANIM_DUR_MS 250.0f
 #endif  // SFTE_TERM_ANIM_DUR_MS
+_SFTE_ENSURE_RANGE(SFTE_TERM_ANIM_DUR_MS, 0.0f, FLT_MAX);
 
 /*
     Enables text reflow when resizing the terminal window.
@@ -219,25 +272,17 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_REFLOW
 #define SFTE_TERM_REFLOW 1
 #endif  // SFTE_TERM_REFLOW
-
-/*
-    Maintains a secondary pixel buffer to prevent tearing.
-    Can be disabled without any noticeable changes on minimal setups,
-    lowering the memory usage (and requiring one less memcpy in hot path).
-    NOTE:
-    Needs to be enabled for cursor trails and (WIP) screen buffer transitions.
-*/
-#ifndef SFTE_TERM_DOUBLE_BUFFER
-#define SFTE_TERM_DOUBLE_BUFFER 1
-#endif  // SFTE_TERM_DOUBLE_BUFFER
+_SFTE_ENSURE_RANGE(SFTE_TERM_REFLOW, 0, 1);
 
 /*
     Maximum lines of scrollback history kept in memory.
     Increasing it WILL affect the memory footprint size.
+    Setting it to 0 disables scrollback logic entirely.
 */
 #ifndef SFTE_TERM_SCROLLBACK_CAP
 #define SFTE_TERM_SCROLLBACK_CAP 2000
 #endif  // SFTE_TERM_SCROLLBACK_CAP
+_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLLBACK_CAP, 0, INT32_MAX);
 
 /*
     Determines if `clear` commands (CSI 3 J) actually wipe the scrollback buffer.
@@ -246,6 +291,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_SCROLLBACK_CLEAR
 #define SFTE_TERM_SCROLLBACK_CLEAR 1
 #endif  // SFTE_TERM_SCROLLBACK_CLEAR
+_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLLBACK_CLEAR, 0, 1);
 
 /*
     Number of lines to shift per mouse wheel / trackpad scroll tick.
@@ -256,6 +302,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_SCROLL_STEP
 #define SFTE_TERM_SCROLL_STEP 3
 #endif  // SFTE_TERM_SCROLL_STEP
+_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLL_STEP, 0, INT32_MAX);
 
 /*
     Enables smooth text scrolling.
@@ -265,6 +312,8 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_SCROLL_SMOOTH
 #define SFTE_TERM_SCROLL_SMOOTH 1
 #endif  // SFTE_TERM_SCROLL_SMOOTH
+_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLL_SMOOTH, 0, 1);
+_SFTE_ENSURE_DEPS(SFTE_TERM_SCROLL_SMOOTH, SFTE_TERM_SCROLLBACK_CAP);
 
 /*
     Affects how fast the scroll smooths to its target position.
@@ -272,6 +321,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_SCROLL_DECAY
 #define SFTE_TERM_SCROLL_DECAY 0.05f
 #endif  // SFTE_TERM_SCROLL_DECAY
+_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLL_DECAY, 0.0f, FLT_MAX);
 
 /*
     Narrows the allowed characters range to ASCII, lowering the memory usage.
@@ -280,6 +330,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_ASCII_CHARSET
 #define SFTE_TERM_ASCII_CHARSET 0
 #endif  // SFTE_TERM_ASCII_CHARSET
+_SFTE_ENSURE_RANGE(SFTE_TERM_ASCII_CHARSET, 0, 1);
 
 // =================================================================================================
 // >>window macros
@@ -291,6 +342,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_WINDOW_PAD_X
 #define SFTE_WINDOW_PAD_X 8
 #endif  // SFTE_WINDOW_PAD_X
+_SFTE_ENSURE_RANGE(SFTE_WINDOW_PAD_X, 0, INT32_MAX);
 
 /*
     Vertical padding around the terminal grid in pixels.
@@ -298,6 +350,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_WINDOW_PAD_Y
 #define SFTE_WINDOW_PAD_Y 8
 #endif  // SFTE_WINDOW_PAD_Y
+_SFTE_ENSURE_RANGE(SFTE_WINDOW_PAD_Y, 0, INT32_MAX);
 
 // =================================================================================================
 // >>color macros
@@ -309,6 +362,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_COLOR_TRUECOLOR
 #define SFTE_COLOR_TRUECOLOR 1
 #endif  // SFTE_COLOR_TRUECOLOR
+_SFTE_ENSURE_RANGE(SFTE_COLOR_TRUECOLOR, 0, 1);
 
 /*
     Default background color (RGB888).
@@ -316,6 +370,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_COLOR_BG
 #define SFTE_COLOR_BG 0x000000
 #endif  // SFTE_COLOR_BG
+_SFTE_ENSURE_RANGE(SFTE_COLOR_BG, 0x000000, 0xFFFFFF);
 
 /*
     Default text foreground color (text and underlines, if applicable).
@@ -324,6 +379,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_COLOR_FG
 #define SFTE_COLOR_FG 0xFFFFFF
 #endif  // SFTE_COLOR_FG
+_SFTE_ENSURE_RANGE(SFTE_COLOR_FG, 0x000000, 0xFFFFFF);
 
 /*
     Background opacity (0x00 transparent to 0xFF opaque).
@@ -331,6 +387,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_COLOR_BG_OPACITY
 #define SFTE_COLOR_BG_OPACITY 0xFF
 #endif  // SFTE_COLOR_BG_OPACITY
+_SFTE_ENSURE_RANGE(SFTE_COLOR_BG_OPACITY, 0x00, 0xFF);
 
 /*
     16-color ANSI fallback palette.
@@ -390,7 +447,7 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #else  // SFTE_FONT_CUSTOM_BACKEND
 #if !defined(SFTE_FONT_INIT) || !defined(SFTE_FONT_GET_SCALE) || !defined(SFTE_FONT_VMETRICS) ||   \
-    !defined(SFTE_FONT_BOUNDS) || !defined(SFTE_FONT_BAKE) || !define(SFTE_FONT_GET_ID)
+    !defined(SFTE_FONT_BOUNDS) || !defined(SFTE_FONT_BAKE) || !defined(SFTE_FONT_GET_ID)
 #error                                                                                             \
     "SFTE_FONT_CUSTOM_BACKEND requires defining all 6 macro hooks: INIT, GET_SCALE, VMETRICS, BOUNDS, BAKE and GET_ID."
 #endif  // !defined(SFTE_FONT_INIT) || !defined(SFTE_FONT_GET_SCALE) || !defined(SFTE_FONT_VMETRICS)
@@ -398,18 +455,12 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #endif  // SFTE_FONT_CUSTOM_BACKEND
 
 /*
-    Starting font size in pixels.
-*/
-#ifndef SFTE_FONT_DEFAULT_SIZE
-#define SFTE_FONT_DEFAULT_SIZE 12.0f
-#endif  // SFTE_FONT_DEFAULT_SIZE
-
-/*
     Minimum size of the font in pixels.
 */
 #ifndef SFTE_FONT_MIN_SIZE
-#define SFTE_FONT_MIN_SIZE 4.0f
+#define SFTE_FONT_MIN_SIZE 1.0f
 #endif  // SFTE_FONT_MIN_SIZE
+_SFTE_ENSURE_RANGE(SFTE_FONT_MIN_SIZE, 0.1f, FLT_MAX);
 
 /*
     Maximum size of the font in pixels.
@@ -417,6 +468,15 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_MAX_SIZE
 #define SFTE_FONT_MAX_SIZE 96.0f
 #endif  // SFTE_FONT_MAX_SIZE
+_SFTE_ENSURE_RANGE(SFTE_FONT_MAX_SIZE, 0.1f, FLT_MAX);
+
+/*
+    Starting font size in pixels.
+*/
+#ifndef SFTE_FONT_DEFAULT_SIZE
+#define SFTE_FONT_DEFAULT_SIZE 12.0f
+#endif  // SFTE_FONT_DEFAULT_SIZE
+_SFTE_ENSURE_RANGE(SFTE_FONT_DEFAULT_SIZE, 0.1f, FLT_MAX);
 
 /*
     Enables font ligatures support.
@@ -424,6 +484,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_LIGATURES
 #define SFTE_FONT_LIGATURES 1
 #endif  // SFTE_FONT_LIGATURES
+_SFTE_ENSURE_RANGE(SFTE_FONT_LIGATURES, 0, 1);
 
 /*
     Maximum amount of lookup indices for a ligature shaper feature.
@@ -431,6 +492,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_MAX_LIGATURE_LOOKUPS
 #define SFTE_FONT_MAX_LIGATURE_LOOKUPS 256
 #endif  // SFTE_FONT_MAX_LIGATURE_LOOKUPS
+_SFTE_ENSURE_RANGE(SFTE_FONT_MAX_LIGATURE_LOOKUPS, 1, UINT16_MAX);
 
 /*
     Maximum amount of subtables per lookup for ligatures.
@@ -438,6 +500,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_MAX_LIGATURE_SUBTABLES
 #define SFTE_FONT_MAX_LIGATURE_SUBTABLES 16
 #endif  // SFTE_FONT_MAX_LIGATURE_SUBTABLES
+_SFTE_ENSURE_RANGE(SFTE_FONT_MAX_LIGATURE_SUBTABLES, 1, UINT16_MAX);
 
 /*
     Maximum amount of records for ligatures.
@@ -445,6 +508,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_MAX_LIGATURE_RECORDS
 #define SFTE_FONT_MAX_LIGATURE_RECORDS 8
 #endif  // SFTE_FONT_MAX_LIGATURE_RECORDS
+_SFTE_ENSURE_RANGE(SFTE_FONT_MAX_LIGATURE_RECORDS, 1, UINT16_MAX);
 
 /*
     Max number of fallback fonts (primary + fallbacks).
@@ -452,10 +516,11 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_MAX_COUNT
 #define SFTE_FONT_MAX_COUNT 4
 #endif  // SFTE_FONT_MAX_COUNT
+_SFTE_ENSURE_RANGE(SFTE_FONT_MAX_COUNT, 1, INT8_MAX);
 
 /*
     Font oversample scale.
-    If <= 1, no oversampling occurs.
+    If set to 1, no oversampling occurs.
 
     NOTE:
     To avoid jagged baseline issues, blurring of horizontal stems
@@ -464,6 +529,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_OVERSAMPLE
 #define SFTE_FONT_OVERSAMPLE 1
 #endif  // SFTE_FONT_OVERSAMPLE
+_SFTE_ENSURE_RANGE(SFTE_FONT_OVERSAMPLE, 1, 16);
 
 /*
     Tweaks scaling per-font to match baseline heights.
@@ -481,6 +547,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_ZOOM
 #define SFTE_FONT_ZOOM 1
 #endif  // SFTE_FONT_ZOOM
+_SFTE_ENSURE_RANGE(SFTE_FONT_ZOOM, 0, 1);
 
 /*
     Enables double-width characters rendering (useful e.g. for Chinese symbols).
@@ -488,6 +555,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_WIDE_CHARS
 #define SFTE_FONT_WIDE_CHARS 1
 #endif  // SFTE_FONT_WIDE_CHARS
+_SFTE_ENSURE_RANGE(SFTE_FONT_WIDE_CHARS, 0, 1);
 
 /*
     Fixes clipping issues on symbols bigger than their cell by expanding the dirty render box.
@@ -498,6 +566,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_BLEED
 #define SFTE_FONT_BLEED 1
 #endif  // SFTE_FONT_BLEED
+_SFTE_ENSURE_RANGE(SFTE_FONT_BLEED, 0, 1);
 
 /*
     Dimensions for the 2D texture atlas caching rendered glyphs.
@@ -506,6 +575,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_ATLAS_SIZE
 #define SFTE_FONT_ATLAS_SIZE 1024
 #endif  // SFTE_FONT_ATLAS_SIZE
+_SFTE_ENSURE_RANGE(SFTE_FONT_ATLAS_SIZE, 1, INT32_MAX);
 
 /*
     Maximum number of distinct characters cached in memory at once.
@@ -514,6 +584,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_GLYPH_CAP
 #define SFTE_FONT_GLYPH_CAP 4096
 #endif  // SFTE_FONT_GLYPH_CAP
+_SFTE_ENSURE_RANGE(SFTE_FONT_GLYPH_CAP, 1, UINT16_MAX);
 
 /*
     Maximum amount of combining (width = 0) glyphs on one cell.
@@ -521,10 +592,17 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_MAX_COMBINING
 #define SFTE_FONT_MAX_COMBINING 2
 #endif  // SFTE_FONT_MAX_COMBINING
+_SFTE_ENSURE_RANGE(SFTE_FONT_MAX_COMBINING, 0, 16);
 
 // =================================================================================================
 // >>cursor macros
 // =================================================================================================
+
+typedef enum sfte_cursor_style {
+    SFTE_CURSOR_STYLE_BLOCK,
+    SFTE_CURSOR_STYLE_UNDERLINE,
+    SFTE_CURSOR_STYLE_BAR,
+} sfte_cursor_style;
 
 /*
     Sets the default terminal cursor style.
@@ -541,6 +619,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CURSOR_STYLE
 #define SFTE_CURSOR_STYLE SFTE_CURSOR_STYLE_BLOCK
 #endif  // SFTE_CURSOR_STYLE
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_STYLE, SFTE_CURSOR_STYLE_BLOCK, SFTE_CURSOR_STYLE_BAR);
 
 /*
     Allows programs to dynamically change the cursor shape via escape sequences.
@@ -549,6 +628,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CURSOR_DYNAMIC
 #define SFTE_CURSOR_DYNAMIC 1
 #endif  // SFTE_CURSOR_DYNAMIC
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_DYNAMIC, 0, 1);
 
 /*
     Default cursor color (RGB888).
@@ -556,6 +636,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CURSOR_COLOR
 #define SFTE_CURSOR_COLOR 0xFFFFFF
 #endif  // SFTE_CURSOR_COLOR
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_COLOR, 0x000000, 0xFFFFFF);
 
 /*
     Determines the width of bar cursors and height of underline cursors relative to font size.
@@ -563,6 +644,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CURSOR_THICK_RATIO
 #define SFTE_CURSOR_THICK_RATIO 0.1f
 #endif  // SFTE_CURSOR_THICK_RATIO
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_THICK_RATIO, 0.0f, 1.0f);
 
 /*
     Enables cursor blinking.
@@ -571,10 +653,12 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CURSOR_BLINK
 #define SFTE_CURSOR_BLINK 1
 #endif  // SFTE_CURSOR_BLINK
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_BLINK, 0, 1);
 
 #ifndef SFTE_CURSOR_BLINK_RATE_MS
 #define SFTE_CURSOR_BLINK_RATE_MS 500
 #endif  // SFTE_CURSOR_BLINK_RATE_MS
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_BLINK_RATE_MS, 0, UINT32_MAX);
 
 /*
     Renders an animated smooth-scrolling ghost trail behind the cursor,
@@ -591,6 +675,8 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CURSOR_TRAIL
 #define SFTE_CURSOR_TRAIL 0
 #endif  // SFTE_CURSOR_TRAIL
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_TRAIL, 0, 1024);
+_SFTE_ENSURE_DEPS(SFTE_CURSOR_TRAIL, SFTE_TERM_DOUBLE_BUFFER);
 
 /*
     Affects how fast the trail disappears.
@@ -598,6 +684,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CURSOR_TRAIL_DECAY
 #define SFTE_CURSOR_TRAIL_DECAY 0.01f
 #endif  // SFTE_CURSOR_TRAIL_DECAY
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_TRAIL_DECAY, 0.01f, FLT_MAX);
 
 // =================================================================================================
 // >>underline macros
@@ -610,6 +697,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_UNDERLINE_EXTENDED
 #define SFTE_UNDERLINE_EXTENDED 1
 #endif  // SFTE_UNDERLINE_EXTENDED
+_SFTE_ENSURE_RANGE(SFTE_UNDERLINE_EXTENDED, 0, 1);
 
 /*
     Enables underlines with custom true-colors distint from the text (CSI 58:2::R:G:B m).
@@ -618,6 +706,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_UNDERLINE_COLORED
 #define SFTE_UNDERLINE_COLORED 1
 #endif  // SFTE_UNDERLINE_COLORED
+_SFTE_ENSURE_RANGE(SFTE_UNDERLINE_COLORED, 0, 1);
 
 /*
     Line thickness relative to font cell height.
@@ -625,6 +714,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_UNDERLINE_THICK_RATIO
 #define SFTE_UNDERLINE_THICK_RATIO 0.1f
 #endif  // SFTE_UNDERLINE_THICK_RATIO
+_SFTE_ENSURE_RANGE(SFTE_UNDERLINE_THICK_RATIO, 0.0f, 1.0f);
 
 /*
     Gap between text baseline and the underline relative to cell height.
@@ -632,6 +722,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_UNDERLINE_OFFSET_RATIO
 #define SFTE_UNDERLINE_OFFSET_RATIO 0.12f
 #endif  // SFTE_UNDERLINE_OFFSET_RATIO
+_SFTE_ENSURE_RANGE(SFTE_UNDERLINE_OFFSET_RATIO, -1.0f, 1.0f);
 
 // =================================================================================================
 // >>img macros
@@ -643,6 +734,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_IMG_SIXEL
 #define SFTE_IMG_SIXEL 1
 #endif  // SFTE_IMG_SIXEL
+_SFTE_ENSURE_RANGE(SFTE_IMG_SIXEL, 0, 1);
 
 /*
     Enables kitty image protocol support.
@@ -650,15 +742,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_IMG_KITTY
 #define SFTE_IMG_KITTY 1
 #endif  // SFTE_IMG_KITTY
-
-/*
-    Smallest allocated dimension size for a temporary pixel buffer
-    used while creating a sixel image from escape sequences.
-    Initial allocation is SFTE_IMG_SIXEL_INIT_SIZE x SFTE_IMG_SIXEL_INIT_SIZE.
-*/
-#ifndef SFTE_IMG_SIXEL_INIT_SIZE
-#define SFTE_IMG_SIXEL_INIT_SIZE 256
-#endif  // SFTE_IMG_SIXEL_INIT_SIZE
+_SFTE_ENSURE_RANGE(SFTE_IMG_KITTY, 0, 1);
 
 /*
     Maximum allocated dimension size for a temporary pixel buffer
@@ -669,15 +753,17 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_IMG_SIXEL_MAX_SIZE
 #define SFTE_IMG_SIXEL_MAX_SIZE 4096
 #endif  // SFTE_IMG_SIXEL_MAX_SIZE
+_SFTE_ENSURE_RANGE(SFTE_IMG_SIXEL_MAX_SIZE, 64, INT32_MAX);
 
 /*
-    Initial capacity of the base64 kitty encoding temporary buffer.
-    Due to how kitty sequences are structured, it can grow (gets doubled on OOM)
-    while reading the image data, since size is unknown during the read.
+    Smallest allocated dimension size for a temporary pixel buffer
+    used while creating a sixel image from escape sequences.
+    Initial allocation is SFTE_IMG_SIXEL_INIT_SIZE x SFTE_IMG_SIXEL_INIT_SIZE.
 */
-#ifndef SFTE_KITTY_B64_INIT_CAP
-#define SFTE_KITTY_B64_INIT_CAP 4096
-#endif  // SFTE_KITTY_B64_INIT_CAP
+#ifndef SFTE_IMG_SIXEL_INIT_SIZE
+#define SFTE_IMG_SIXEL_INIT_SIZE 64
+#endif  // SFTE_IMG_SIXEL_INIT_SIZE
+_SFTE_ENSURE_RANGE(SFTE_IMG_SIXEL_INIT_SIZE, 1, SFTE_IMG_SIXEL_MAX_SIZE);
 
 /*
     Maximum capacity of the base64 kitty encoding temporary buffer.
@@ -692,13 +778,17 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_KITTY_B64_MAX_CAP
 #define SFTE_KITTY_B64_MAX_CAP (16 * 1024 * 1024)
 #endif  // SFTE_KITTY_B64_MAX_CAP
+_SFTE_ENSURE_RANGE(SFTE_KITTY_B64_MAX_CAP, 128, UINT32_MAX);
 
 /*
-    Initial capacity of the shared image reference pool.
+    Initial capacity of the base64 kitty encoding temporary buffer.
+    Due to how kitty sequences are structured, it can grow (gets doubled on OOM)
+    while reading the image data, since size is unknown during the read.
 */
-#ifndef SFTE_IMG_POOL_INIT_CAP
-#define SFTE_IMG_POOL_INIT_CAP 16
-#endif  // SFTE_IMG_POOL_INIT_CAP
+#ifndef SFTE_KITTY_B64_INIT_CAP
+#define SFTE_KITTY_B64_INIT_CAP 128
+#endif  // SFTE_KITTY_B64_INIT_CAP
+_SFTE_ENSURE_RANGE(SFTE_KITTY_B64_INIT_CAP, 1, SFTE_KITTY_B64_MAX_CAP);
 
 /*
     Maximum capacity of the shared image reference pool.
@@ -707,13 +797,15 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_IMG_POOL_MAX_CAP
 #define SFTE_IMG_POOL_MAX_CAP 1024
 #endif  // SFTE_IMG_POOL_MAX_CAP
+_SFTE_ENSURE_RANGE(SFTE_IMG_POOL_MAX_CAP, 8, UINT32_MAX);
 
 /*
-    Initial capacity of active viewport placements.
+    Initial capacity of the shared image reference pool.
 */
-#ifndef SFTE_IMG_PLACEMENT_INIT_CAP
-#define SFTE_IMG_PLACEMENT_INIT_CAP 32
-#endif  // SFTE_IMG_PLACEMENT_INIT_CAP
+#ifndef SFTE_IMG_POOL_INIT_CAP
+#define SFTE_IMG_POOL_INIT_CAP 8
+#endif  // SFTE_IMG_POOL_INIT_CAP
+_SFTE_ENSURE_RANGE(SFTE_IMG_POOL_INIT_CAP, 1, SFTE_IMG_POOL_MAX_CAP);
 
 /*
     Maximum capacity of active viewport placements.
@@ -722,6 +814,15 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_IMG_PLACEMENT_MAX_CAP
 #define SFTE_IMG_PLACEMENT_MAX_CAP 4096
 #endif  // SFTE_IMG_PLACEMENT_MAX_CAP
+_SFTE_ENSURE_RANGE(SFTE_IMG_PLACEMENT_MAX_CAP, 16, UINT32_MAX);
+
+/*
+    Initial capacity of active viewport placements.
+*/
+#ifndef SFTE_IMG_PLACEMENT_INIT_CAP
+#define SFTE_IMG_PLACEMENT_INIT_CAP 16
+#endif  // SFTE_IMG_PLACEMENT_INIT_CAP
+_SFTE_ENSURE_RANGE(SFTE_IMG_PLACEMENT_INIT_CAP, 1, SFTE_IMG_PLACEMENT_MAX_CAP);
 
 // =================================================================================================
 // >>input macros
@@ -734,6 +835,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_INPUT_MOUSE
 #define SFTE_INPUT_MOUSE 1
 #endif  // SFTE_INPUT_MOUSE
+_SFTE_ENSURE_RANGE(SFTE_INPUT_MOUSE, 0, 1);
 
 /*
     Enables text selection.
@@ -745,6 +847,8 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_INPUT_SELECTION
 #define SFTE_INPUT_SELECTION 1
 #endif  // SFTE_INPUT_SELECTION
+_SFTE_ENSURE_RANGE(SFTE_INPUT_SELECTION, 0, 1);
+_SFTE_ENSURE_DEPS(SFTE_INPUT_SELECTION, SFTE_INPUT_MOUSE);
 
 /*
     Enables kitty extended keyboard protocol.
@@ -753,6 +857,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_INPUT_KITTY
 #define SFTE_INPUT_KITTY 1
 #endif  // SFTE_INPUT_KITTY
+_SFTE_ENSURE_RANGE(SFTE_INPUT_KITTY, 0, 1);
 
 /*
     Enables OSC 8 clickable terminal hyperlinks.
@@ -760,13 +865,8 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_INPUT_HYPERLINKS
 #define SFTE_INPUT_HYPERLINKS 1
 #endif  // SFTE_INPUT_HYPERLINKS
-
-/*
-    Initial dynamic buffer count for hyperlinks.
-*/
-#ifndef SFTE_INPUT_HYPERLINKS_INIT_CAP
-#define SFTE_INPUT_HYPERLINKS_INIT_CAP 128
-#endif  // SFTE_INPUT_HYPERLINKS_POOL_INIT_CAP
+_SFTE_ENSURE_RANGE(SFTE_INPUT_HYPERLINKS, 0, 1);
+_SFTE_ENSURE_DEPS(SFTE_INPUT_HYPERLINKS, SFTE_INPUT_MOUSE);
 
 /*
     Maximum dynamic buffer count for hyperlinks.
@@ -775,6 +875,15 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_INPUT_HYPERLINKS_MAX_CAP
 #define SFTE_INPUT_HYPERLINKS_MAX_CAP 65535
 #endif  // SFTE_INPUT_HYPERLINKS_MAX_CAP
+_SFTE_ENSURE_RANGE(SFTE_INPUT_HYPERLINKS_MAX_CAP, 16, UINT32_MAX);
+
+/*
+    Initial dynamic buffer count for hyperlinks.
+*/
+#ifndef SFTE_INPUT_HYPERLINKS_INIT_CAP
+#define SFTE_INPUT_HYPERLINKS_INIT_CAP 16
+#endif  // SFTE_INPUT_HYPERLINKS_POOL_INIT_CAP
+_SFTE_ENSURE_RANGE(SFTE_INPUT_HYPERLINKS_INIT_CAP, 1, SFTE_INPUT_HYPERLINKS_MAX_CAP);
 
 // =================================================================================================
 // >>clipboard macros
@@ -786,6 +895,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CLIPBOARD
 #define SFTE_CLIPBOARD 1
 #endif  // SFTE_CLIPBOARD
+_SFTE_ENSURE_RANGE(SFTE_CLIPBOARD, 0, 1);
 
 /*
     Maximum buffer size to copy at once.
@@ -793,6 +903,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CLIPBOARD_BUF_SIZE
 #define SFTE_CLIPBOARD_BUF_SIZE 4096
 #endif  // SFTE_CLIPBOARD_BUF_SIZE
+_SFTE_ENSURE_RANGE(SFTE_CLIPBOARD_BUF_SIZE, 1, UINT32_MAX);
 
 /*
     Allows host applications to read/write the clipboard via OSC 52.
@@ -801,17 +912,12 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CLIPBOARD_OSC52
 #define SFTE_CLIPBOARD_OSC52 1
 #endif  // SFTE_CLIPBOARD_OSC52
+_SFTE_ENSURE_RANGE(SFTE_CLIPBOARD_OSC52, 0, 1);
+_SFTE_ENSURE_DEPS(SFTE_CLIPBOARD_OSC52, SFTE_CLIPBOARD);
 
 // =================================================================================================
 // >>osc macros
 // =================================================================================================
-
-/*
-    Initial size of OSC payload buffer.
-*/
-#ifndef SFTE_OSC_INIT_CAP
-#define SFTE_OSC_INIT_CAP 1024
-#endif  // SFTE_OSC_INIT_CAP
 
 /*
     Maximum size of OSC payload buffer.
@@ -820,6 +926,15 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_OSC_MAX_CAP
 #define SFTE_OSC_MAX_CAP (16 * 1024 * 1024)
 #endif  // SFTE_OSC_MAX_CAP
+_SFTE_ENSURE_RANGE(SFTE_OSC_MAX_CAP, 128, UINT32_MAX);
+
+/*
+    Initial size of OSC payload buffer.
+*/
+#ifndef SFTE_OSC_INIT_CAP
+#define SFTE_OSC_INIT_CAP 128
+#endif  // SFTE_OSC_INIT_CAP
+_SFTE_ENSURE_RANGE(SFTE_OSC_INIT_CAP, 1, SFTE_OSC_MAX_CAP);
 
 // =================================================================================================
 // >>modifiers and shortcuts macros
@@ -841,8 +956,10 @@ typedef struct {
 } sfte_shortcut;
 
 #if SFTE_WAYLAND
+#if SFTE_FONT_ZOOM
 static void _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg);
 static void _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *arg);
+#endif  // SFTE_FONT_ZOOM
 #if SFTE_TERM_SCROLLBACK_CAP
 static void _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_TERM_SCROLLBACK_CAP
@@ -909,12 +1026,6 @@ typedef enum sfte_font_style {
     SFTE_FONT_STYLE_BOLD_ITALIC = 3,
 #endif  // SFTE_FONT_BOLD_ITALIC
 } sfte_font_style;
-
-typedef enum sfte_cursor_style {
-    SFTE_CURSOR_STYLE_BLOCK,
-    SFTE_CURSOR_STYLE_UNDERLINE,
-    SFTE_CURSOR_STYLE_BAR,
-} sfte_cursor_style;
 
 typedef enum sfte_modifier {
     SFTE_MOD_NONE = 0b0000,
@@ -1336,7 +1447,7 @@ static const char *_sfte_log_messages[] = {_SFTE_LOG_ITEMS};
 #define _SFTE_CHAR_WIDTH(rune) 1
 #endif
 
-#if SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL
+#if SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL || (SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP)
 #ifndef SFTE_TIME_MS
 #include <time.h>
 static inline uint64_t _sfte_time_ms(void) {
@@ -1346,18 +1457,12 @@ static inline uint64_t _sfte_time_ms(void) {
 }
 #define SFTE_TIME_MS() _sfte_time_ms()
 #endif  // SFTE_TIME_MS
-#endif  // SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL
+#endif  // SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL || (SFTE_TERM_SCROLL_SMOOTH &&
+        // SFTE_TERM_SCROLLBACK_CAP)
 // =================================================================================================
 // >>internal data structures
 // =================================================================================================
 #ifndef SFTE_NO_LOGGING
-typedef enum {
-    SFTE_LOG_LVL_PANIC,
-    SFTE_LOG_LVL_ERROR,
-    SFTE_LOG_LVL_WARN,
-    SFTE_LOG_LVL_INFO,
-} sfte_log_level;
-
 typedef struct sfte_logger {
     void (*func)(const char *tag,  // Always "sfte"
                  sfte_log_level log_level,
@@ -1400,9 +1505,9 @@ typedef enum {
 */
 typedef struct {
     sfte_rune rune;
-#if SFTE_FONT_WIDE_CHARS
+#if SFTE_FONT_WIDE_CHARS && SFTE_FONT_MAX_COMBINING
     sfte_rune combining_runes[SFTE_FONT_MAX_COMBINING];
-#endif  // SFTE_FONT_WIDE_CHARS
+#endif  // SFTE_FONT_WIDE_CHARS && SFTE_FONT_MAX_COMBINING
 
 #if SFTE_INPUT_HYPERLINKS
     uint16_t link_idx;  // 0=no link, >0=index to `term.link_pool`
@@ -1462,7 +1567,9 @@ typedef struct {
     int16_t y_off;
     int8_t z_idx;  // <0=below text, >=0=above text
     uint8_t is_sixel;
+#if SFTE_TERM_ALT_SCREEN
     uint8_t alt_screen;  // 0=main, 1=alt
+#endif                   // SFTE_TERM_ALT_SCREEN
 } sfte_img_placement;
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 
@@ -1611,12 +1718,12 @@ typedef struct {
     uint64_t last_move_ms;
     uint64_t last_trail_update_ms;
 #endif  // SFTE_CURSOR_TRAIL
-#if SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     uint64_t anim_start_ms;
-#endif  // SFTE_TERM_ANIMATE_SCREEN
-#if SFTE_TERM_SCROLL_SMOOTH
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#if SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
     uint64_t last_scroll_ms;
-#endif  // SFTE_TERM_SCROLL_SMOOTH
+#endif  // SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
 
     uint32_t saved_fg[2];  // 0=main, 1=alt
     uint32_t saved_bg[2];  // 0=main, 1=alt
@@ -1645,12 +1752,10 @@ typedef struct {
     uint32_t next_img_id;
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
     uint32_t cursor_color;
-#if SFTE_TERM_SCROLL_SMOOTH
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
     int32_t last_sb_offset;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
     float scroll_y_offset;
-#endif  // SFTE_TERM_SCROLL_SMOOTH
+#endif  // SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
 
     int16_t cols;
     int16_t rows;
@@ -1725,13 +1830,13 @@ typedef struct {
 #if SFTE_UNDERLINE_EXTENDED
     uint8_t cur_ul_style;
 #endif  // SFTE_UNDERLINE_EXTENDED
-#if SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     uint8_t is_animating;
     uint8_t anim_dir;  // 1=entering alt screen, -1=leaving
-#endif                 // SFTE_TERM_ANIMATE_SCREEN
-#if SFTE_TERM_SCROLL_SMOOTH
+#endif                 // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#if SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
     uint8_t is_scrolling;
-#endif  // SFTE_TERM_SCROLL_SMOOTH
+#endif  // SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
 #if SFTE_TERM_FOCUS
     uint8_t is_focused;
     uint8_t report_focus;
@@ -1978,8 +2083,10 @@ static inline sfte_cell *_sfte_grid_get_cell(sfte_ctx *ctx, int16_t col, int32_t
 static inline uint32_t _sfte_grid_get_bg(sfte_cell *cell);
 static inline uint32_t _sfte_grid_get_fg(sfte_cell *cell);
 static inline uint32_t _sfte_grid_get_ul(sfte_cell *cell);
+#if SFTE_CURSOR_TRAIL || SFTE_INPUT_MOUSE
 static void _sfte_grid_from_px(sfte_ctx *ctx, int32_t px_x, int32_t px_y, int16_t *out_col,
                                int32_t *out_logical_row, int16_t *out_screen_row);
+#endif  // SFTE_CURSOR_TRAIL || SFTE_INPUT_MOUSE
 static inline void _sfte_grid_dirty_rows(sfte_ctx *ctx, int32_t logical_row1, int32_t logical_row2);
 static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int16_t start_col,
                                          int32_t start_logical_row, int16_t cols, int16_t rows);
@@ -2001,8 +2108,10 @@ static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, uint32_t start_idx, uin
 static inline void _sfte_grid_clear_rows(sfte_ctx *ctx, int16_t start_row, int16_t cnt);
 static void _sfte_grid_scroll(sfte_ctx *ctx, int16_t lines);
 static inline void _sfte_grid_check_wrap(sfte_ctx *ctx);
+#if SFTE_TERM_ALT_SCREEN || !SFTE_TERM_REFLOW
 static sfte_cell *_sfte_grid_resize_dumb_copy(sfte_cell *old_grid, int16_t old_cols,
                                               int16_t old_rows, int16_t new_cols, int16_t new_rows);
+#endif  // SFTE_TERM_ALT_SCREEN || !SFTE_TERM_REFLOW
 static void _sfte_grid_resize_tabs(sfte_ctx *ctx, int16_t old_cols, int16_t new_cols);
 static void _sfte_grid_resize(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows);
 
@@ -2017,7 +2126,9 @@ static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id);
 // -------------------------------------------------------------------------------------------------
 // >view
 // -------------------------------------------------------------------------------------------------
+#if SFTE_WINDOW_PAD_X || SFTE_WINDOW_PAD_Y
 static void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf);
+#endif  // SFTE_WINDOW_PAD_X || SFTE_WINDOW_PAD_Y
 
 // -------------------------------------------------------------------------------------------------
 // >input
@@ -2218,9 +2329,9 @@ static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, uint8_t is_b
 #if SFTE_CURSOR_TRAIL
 static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_rect *out_dmg);
 #endif  // SFTE_CURSOR_TRAIL
-#if SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_y, int32_t *in_y);
-#endif  // SFTE_TERM_ANIMATE_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
                                                   _sfte_pass_info *passes,
                                                   sfte_damage_rect *out_dmg);
@@ -2478,10 +2589,12 @@ static void _sfte_rune_insert(sfte_ctx *ctx, sfte_rune rune) {
                 prev = &ctx->term.cells[prev_idx];
             }
 
+#if SFTE_FONT_MAX_COMBINING
             if (prev->combining_cnt < SFTE_FONT_MAX_COMBINING) {
                 prev->combining_runes[prev->combining_cnt++] = rune;
                 prev->dirty = 1;
             }
+#endif  // SFTE_FONT_MAX_COMBINING
         }
 #endif  // SFTE_FONT_WIDE_CHARS
         return;
@@ -3089,6 +3202,7 @@ static inline void _sfte_grid_check_wrap(sfte_ctx *ctx) {
 // >resize
 // -------------------------------------------------------------------------------------------------
 
+#if SFTE_TERM_ALT_SCREEN || !SFTE_TERM_REFLOW
 /*
     Performs a simple 2D truncation/padding copy of a grid.
     Used for alt-screens (which don't reflow) and as the primary resizer in non-reflow builds.
@@ -3110,6 +3224,7 @@ static sfte_cell *_sfte_grid_resize_dumb_copy(sfte_cell *old_grid, int16_t old_c
 
     return new_grid;
 }
+#endif  // SFTE_TERM_ALT_SCREEN || !SFTE_TERM_REFLOW
 
 /*
     Reallocates the tab stops array and populates new columns with default intervals.
@@ -3157,7 +3272,9 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows)
 
     int16_t grid_off_old = ctx->term.grid_off;
     int16_t old_cols = ctx->term.cols;
+#if SFTE_TERM_ALT_SCREEN || !SFTE_TERM_REFLOW
     int16_t old_rows = ctx->term.rows;
+#endif  // SFTE_TERM_ALT_SCREEN || !SFTE_TERM_REFLOW
 
 #if SFTE_TERM_ALT_SCREEN
     sfte_cell *main_old = ctx->term.alt_active ? ctx->term.alt_cells : ctx->term.cells;
@@ -3295,6 +3412,7 @@ static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id) {
 // >>view
 // =================================================================================================
 
+#if SFTE_WINDOW_PAD_X || SFTE_WINDOW_PAD_Y
 /*
     Fills the padding regions around the terminal grid with the background color.
 */
@@ -3322,6 +3440,7 @@ static void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf) {
     }
 #endif  // SFTE_WINDOW_PAD_X
 }
+#endif  // SFTE_WINDOW_PAD_X || SFTE_WINDOW_PAD_Y
 
 // =================================================================================================
 // >>input
@@ -3705,7 +3824,9 @@ static inline void _sfte_sixel_commit(sfte_ctx *ctx) {
                          .start_row = ctx->sixel.start_row,
                          .z_idx = 1,
                          .is_sixel = 1,
+#if SFTE_TERM_ALT_SCREEN
                          .alt_screen = ctx->term.alt_active,
+#endif  // SFTE_TERM_ALT_SCREEN
                      });
             if (p) {
                 img->ref_cnt++;
@@ -3971,7 +4092,10 @@ static void _sfte_sixel_deinit(sfte_ctx *ctx) {
 */
 size_t _sfte_kitty_kb_encode(sfte_ctx *ctx, sfte_key key, uint32_t codepoint, uint32_t mod_mask,
                              char *out_buf, size_t max_bytes) {
-    uint8_t s_idx = ctx->term.alt_active ? 1 : 0;
+    uint8_t s_idx = 0;
+#if SFTE_TERM_ALT_SCREEN
+    s_idx = ctx->term.alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
     uint16_t flags = ctx->term.kitty_kb_stack[s_idx][ctx->term.kitty_kb_stack_idx[s_idx]];
     if (flags == 0) return 0;
 
@@ -4140,7 +4264,7 @@ static uint32_t *_sfte_kitty_decode_payload(sfte_ctx *ctx, uint8_t *raw_data, si
                 pixel_len = ftell(f);
                 fseek(f, 0, SEEK_SET);
                 pixel_src = (uint8_t *)SFTE_MALLOC(pixel_len);
-                fread(pixel_src, 1, pixel_len, f);
+                (void)fread(pixel_src, 1, pixel_len, f);
                 fclose(f);
             } else
                 pixel_src = NULL;
@@ -4294,7 +4418,9 @@ static const char *_sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img) {
                                                            .x_off = ctx->kitty.x_off,
                                                            .y_off = ctx->kitty.y_off,
                                                            .z_idx = ctx->kitty.z_idx,
+#if SFTE_TERM_ALT_SCREEN
                                                            .alt_screen = ctx->term.alt_active,
+#endif  // SFTE_TERM_ALT_SCREEN
                                                        });
 
     if (!p) return "ENOMEM: placement pool capacity reached";
@@ -4329,7 +4455,10 @@ static const char *_sfte_kitty_exec_query(sfte_ctx *ctx) {
 static const char *_sfte_kitty_exec_delete(sfte_ctx *ctx) {
     for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
         sfte_img_placement *p = &ctx->term.img_placements[i];
-        if (p->alt_screen != ctx->term.alt_active || p->is_sixel) continue;
+#if SFTE_TERM_ALT_SCREEN
+        if (p->alt_screen != ctx->term.alt_active) continue;
+#endif  // SFTE_TERM_ALT_SCREEN
+        if (p->is_sixel) continue;
 
         sfte_img *img = _sfte_img_find(ctx, p->img_id);
         if (!img) return "EINVAL: failed to find image to delete";
@@ -4660,7 +4789,9 @@ static inline void _sfte_csi_exec_ed(sfte_ctx *ctx, int16_t mode, int16_t col) {
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
         for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
             sfte_img_placement *p = &ctx->term.img_placements[i];
+#if SFTE_TERM_ALT_SCREEN
             if (p->alt_screen != ctx->term.alt_active) continue;
+#endif  // SFTE_TERM_ALT_SCREEN
 
             sfte_img *img = _sfte_img_find(ctx, p->img_id);
             if (!img) continue;
@@ -4903,7 +5034,10 @@ static inline void _sfte_csi_set_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt, 
         } else if (p[i] == 1047 || p[i] == 1048 || p[i] == 1049) {
             // 1048 / 1049 save cursor
             if (p[i] == 1048 || p[i] == 1049) {
-                int s_idx = ctx->term.alt_active ? 1 : 0;
+                uint8_t s_idx = 0;
+#if SFTE_TERM_ALT_SCREEN
+                s_idx = ctx->term.alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
                 ctx->term.saved_grid_off[s_idx] = ctx->term.grid_off;
                 ctx->term.saved_col[s_idx] = ctx->term.cursor_col;
                 ctx->term.saved_row[s_idx] = ctx->term.cursor_row;
@@ -4923,11 +5057,11 @@ static inline void _sfte_csi_set_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt, 
 #if SFTE_CURSOR_TRAIL
                 ctx->term.last_move_ms = 0;
 #endif  // SFTE_CURSOR_TRAIL
-#if SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
                 ctx->term.is_animating = 1;
                 ctx->term.anim_dir = 1;
                 ctx->term.anim_start_ms = SFTE_TIME_MS();
-#endif  // SFTE_TERM_ANIMATE_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 
                 if (!ctx->term.alt_cells)
                     ctx->term.alt_cells = (sfte_cell *)SFTE_CALLOC(ctx->term.cols * ctx->term.rows,
@@ -4969,8 +5103,9 @@ static inline void _sfte_csi_reset_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt
         if (p[i] == 25) {
             ctx->term.hide_cursor = 1;
             ctx->term.cells[_sfte_grid_get_idx(ctx, col, ctx->term.cursor_row)].dirty = 1;
+        }
 #if SFTE_TERM_FOCUS
-        } else if (p[i] == 1004)
+        else if (p[i] == 1004)
             ctx->term.report_focus = 0;
 #endif  // SFTE_TERM_FOCUS
         else if (p[i] == 2004)
@@ -5020,7 +5155,10 @@ static inline void _sfte_csi_reset_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt
 #endif  // SFTE_TERM_ALT_SCREEN
 
             if (p[i] == 1048 || p[i] == 1049) {
-                int s_idx = ctx->term.alt_active ? 1 : 0;
+                uint8_t s_idx = 0;
+#if SFTE_TERM_ALT_SCREEN
+                s_idx = ctx->term.alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
                 ctx->term.grid_off = ctx->term.saved_grid_off[s_idx];
                 ctx->term.cursor_col = _SFTE_CLAMP(ctx->term.saved_col[s_idx], 0,
                                                    ctx->term.cols - 1);
@@ -5281,7 +5419,10 @@ static inline void _sfte_csi_exec_decstbm(sfte_ctx *ctx, uint16_t *p, uint16_t c
 */
 static inline void _sfte_csi_exec_scosc(sfte_ctx *ctx, uint16_t *p) {
     if (p[0] != 0) return;  // Avoid colliding with kitty support command
-    uint8_t s_idx = ctx->term.alt_active ? 1 : 0;
+    uint8_t s_idx = 0;
+#if SFTE_TERM_ALT_SCREEN
+    s_idx = ctx->term.alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
     ctx->term.saved_col[s_idx] = ctx->term.cursor_col;
     ctx->term.saved_row[s_idx] = ctx->term.cursor_row;
     ctx->term.saved_fg[s_idx] = ctx->term.cur_fg;
@@ -5316,7 +5457,10 @@ static inline void _sfte_csi_exec_xtwinops(sfte_ctx *ctx, uint16_t *p) {
 */
 static inline void _sfte_csi_exec_scorc(sfte_ctx *ctx, uint16_t *p) {
     if (ctx->term.vt_dec_priv != 0 || p[0] != 0) return;
-    uint8_t s_idx = ctx->term.alt_active ? 1 : 0;
+    uint8_t s_idx = 0;
+#if SFTE_TERM_ALT_SCREEN
+    s_idx = ctx->term.alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
     ctx->term.cursor_col = _SFTE_CLAMP(ctx->term.saved_col[s_idx], 0, ctx->term.cols - 1);
     ctx->term.cursor_row = _SFTE_CLAMP(ctx->term.saved_row[s_idx], 0, ctx->term.rows - 1);
     ctx->term.cur_fg = ctx->term.saved_fg[s_idx];
@@ -5334,7 +5478,10 @@ static inline void _sfte_csi_exec_scorc(sfte_ctx *ctx, uint16_t *p) {
 */
 static inline void _sfte_csi_exec_kitty(sfte_ctx *ctx, uint16_t *p) {
     if (ctx->term.vt_dec_priv == 0) return;
-    uint8_t s_idx = ctx->term.alt_active ? 1 : 0;
+    uint8_t s_idx = 0;
+#if SFTE_TERM_ALT_SCREEN
+    s_idx = ctx->term.alt_active;
+#endif                                 // SFTE_TERM_ALT_SCREEN
     if (ctx->term.vt_dec_priv == 1) {  // CSI ? u (query)
         char buf[32];
         uint16_t flags = ctx->term.kitty_kb_stack[s_idx][ctx->term.kitty_kb_stack_idx[s_idx]];
@@ -5568,7 +5715,10 @@ static inline void _sfte_parser_esc_ris(sfte_ctx *ctx) {
     The terminal can store one set of data per screen (main/alt).
 */
 static inline void _sfte_parser_esc_sc(sfte_ctx *ctx) {
-    uint8_t s_idx = ctx->term.alt_active ? 1 : 0;
+    uint8_t s_idx = 0;
+#if SFTE_TERM_ALT_SCREEN
+    s_idx = ctx->term.alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
     ctx->term.saved_col[s_idx] = ctx->term.cursor_col;
     ctx->term.saved_row[s_idx] = ctx->term.cursor_row;
     ctx->term.saved_fg[s_idx] = ctx->term.cur_fg;
@@ -5585,7 +5735,10 @@ static inline void _sfte_parser_esc_sc(sfte_ctx *ctx) {
     The terminal can store one set of data per screen (main/alt).
 */
 static inline void _sfte_parser_esc_rc(sfte_ctx *ctx) {
-    uint8_t s_idx = ctx->term.alt_active ? 1 : 0;
+    uint8_t s_idx = 0;
+#if SFTE_TERM_ALT_SCREEN
+    s_idx = ctx->term.alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
     // NOTE:
     // We need to clamp here since between SC and RC a resize could've occured.
     ctx->term.cursor_col = _SFTE_CLAMP(ctx->term.saved_col[s_idx], 0, ctx->term.cols - 1);
@@ -5653,9 +5806,9 @@ static inline void _sfte_parser_osc_dispatch(sfte_ctx *ctx, uint8_t terminator) 
     ctx->term.osc_payload[ctx->term.osc_len] = '\0';
 
     if (strncmp(ctx->term.osc_payload, "10;?", 4) == 0 ||
-        strncmp(ctx->term.osc_payload, "11;?", 4) == 0 ||
+        strncmp(ctx->term.osc_payload, "11;?", 4) == 0
 #if SFTE_CURSOR_DYNAMIC
-        strncmp(ctx->term.osc_payload, "12;?", 4) == 0
+        || strncmp(ctx->term.osc_payload, "12;?", 4) == 0
 #endif  // SFTE_CURSOR_DYNAMIC
     ) {
         uint8_t code_char = ctx->term.osc_payload[1];
@@ -5807,7 +5960,7 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
             }
             _sfte_rune_insert(ctx, b);
 #else   // !SFTE_TERM_ASCII_CHARSET
-                if (_sfte_rune_utf8_decode(ctx, b)) _sfte_rune_insert(ctx, ctx->term.utf8_rune_acc);
+            if (_sfte_rune_utf8_decode(ctx, b)) _sfte_rune_insert(ctx, ctx->term.utf8_rune_acc);
 #endif  // !SFTE_TERM_ASCII_CHARSET
         }
         break;
@@ -6248,14 +6401,14 @@ static inline uint8_t _sfte_shaper_eval_format1(sfte_shaper_ctx *ctx, const uint
 
     uint32_t c_off = sub_off + _sfte_shaper_consume16(ttf_data, &s_off);
     int32_t c_idx = _sfte_shaper_get_coverage_index(ttf_data, c_off, cur_glyph);
-    if (c_idx < 0) return false;
+    if (c_idx < 0) return 0;
 
     uint16_t rs_cnt = _sfte_shaper_consume16(ttf_data, &s_off);
-    if (c_idx >= rs_cnt) return false;
+    if (c_idx >= rs_cnt) return 0;
 
     uint32_t rs_off = sub_off + 3 * sizeof(uint16_t) + (c_idx * sizeof(uint16_t));
     uint16_t rs_rel_off = _SFTE_R16BE(ttf_data, rs_off);
-    if (!rs_rel_off) return false;
+    if (!rs_rel_off) return 0;
 
     uint32_t rs_base_off = sub_off + rs_rel_off;
     rs_off = rs_base_off;
@@ -6717,7 +6870,9 @@ static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, uint8_t is_b
                                        int32_t base_y_off, uint8_t pad_was_dirty) {
     for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
         sfte_img_placement *p = &ctx->term.img_placements[i];
+#if SFTE_TERM_ALT_SCREEN
         if (p->alt_screen != ctx->term.alt_active) continue;
+#endif  // SFTE_TERM_ALT_SCREEN
 
         uint8_t is_bg_img = (p->z_idx < 0);
         if (is_bg_img != is_bg_pass) continue;
@@ -6858,7 +7013,7 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
 }
 #endif  // SFTE_CURSOR_TRAIL
 
-#if SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 /*
     Calculates the Y offsets for the outgoing and incoming screens during an alt-screen
    transition. Returns 2 when finished animating. Returns 1 when currently animating. Returns 0
@@ -6886,7 +7041,7 @@ static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_
     }
     return 1;
 }
-#endif  // SFTE_TERM_ANIMATE_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 
 /*
     Prepares render passes.
@@ -6901,13 +7056,15 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
 
     uint8_t needs_wipe = 0;
     uint8_t passes_cnt = 1;
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     int32_t out_y = 0, in_y = 0;
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 
-#if SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     uint8_t anim_state = _sfte_render_get_anim_offsets(ctx, &out_y, &in_y);
     if (anim_state == 1 || anim_state == 2) needs_wipe = 1;
     if (anim_state == 1) passes_cnt = 2;
-#endif  // SFTE_TERM_ANIMATE_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 
 #if SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
     int32_t sb_diff = ctx->term.sb_offset - ctx->term.last_sb_offset;
@@ -6947,15 +7104,15 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
 
         for (int32_t i = 0; i < ctx->term.rows * ctx->term.cols; ++i) {
             ctx->term.cells[i].dirty = 1;
+#if SFTE_TERM_ALT_SCREEN
             if (passes_cnt == 2 && ctx->term.alt_cells) ctx->term.alt_cells[i].dirty = 1;
+#endif  // SFTE_TERM_ALT_SCREEN
         }
     }
 
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     if (passes_cnt == 2) {
         passes[0].y_off = out_y;
-#if SFTE_TERM_SCROLL_SMOOTH
-        passes[0].y_off += (int32_t)ctx->term.scroll_y_offset;
-#endif  // SFTE_TERM_SCROLL_SMOOTH
         passes[0].grid = ctx->term.alt_cells;
         passes[0].hide_cursor = 1;
 
@@ -6966,9 +7123,9 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
         passes[1].grid = ctx->term.cells;
         passes[1].hide_cursor = ctx->term.hide_cursor;
     }
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 #if SFTE_TERM_SCROLL_SMOOTH
-    else
-        passes[0].y_off = (int32_t)ctx->term.scroll_y_offset;
+    passes[0].y_off = (int32_t)ctx->term.scroll_y_offset;
 #endif  // SFTE_TERM_SCROLL_SMOOTH
 
     return passes_cnt;
@@ -7140,7 +7297,7 @@ static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_
 #if SFTE_CURSOR_DYNAMIC
     uint32_t active_cur_color = ctx->term.cursor_color;
 #else   // !SFTE_CURSOR_DYNAMIC
-        uint32_t active_cur_color = SFTE_CURSOR_COLOR;
+    uint32_t active_cur_color = SFTE_CURSOR_COLOR;
 #endif  // !SFTE_CURSOR_DYNAMIC
     uint32_t cur_col = SFTE_COLOR_ALPHA_MASK | (active_cur_color & ~SFTE_COLOR_ALPHA_MASK);
 
@@ -7470,7 +7627,7 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
 #if SFTE_CURSOR_DYNAMIC
                 _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, ctx->term.cursor_color);
 #else   // !SFTE_CURSOR_DYNAMIC
-                    _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, SFTE_CURSOR_COLOR);
+                _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, SFTE_CURSOR_COLOR);
 #endif  // !SFTE_CURSOR_DYNAMIC
             } else
                 _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, bg);
@@ -7689,7 +7846,7 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
 */
 static void _sfte_wayland_write_cb(void *user_data, const char *data, size_t len) {
     sfte_wayland_app *app = (sfte_wayland_app *)user_data;
-    if (app->pty_fd > 0) write(app->pty_fd, data, len);
+    if (app->pty_fd) (void)write(app->pty_fd, data, len);
 }
 
 /*
@@ -7860,7 +8017,7 @@ static void _sfte_wayland_data_source_send(void *data, struct wl_data_source *sr
                                            const char *mime_type, int32_t fd) {
     (void)src, (void)mime_type;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
-    if (app->selection_text) write(fd, app->selection_text, strlen(app->selection_text));
+    if (app->selection_text) (void)write(fd, app->selection_text, strlen(app->selection_text));
 
     close(fd);
 }
@@ -7943,9 +8100,9 @@ static void _sfte_wayland_pointer_button(void *data, struct wl_pointer *pointer,
                          SFTE_WINDOW_PAD_Y);
     app->needs_render = 1;
 
-#if SFTE_CLIPBOARD
+#if SFTE_CLIPBOARD && SFTE_INPUT_SELECTION
     if (state == WL_POINTER_BUTTON_STATE_RELEASED) _sfte_wayland_clipboard_copy(app->ctx, NULL);
-#endif  // SFTE_CLIPBOARD
+#endif  // SFTE_CLIPBOARD && SFTE_INPUT_SELECTION
 #endif  // SFTE_INPUT_MOUSE
 }
 
@@ -8005,8 +8162,8 @@ static void _sfte_wayland_open_link_cb(void *user_data, const char *uri) {
     pid_t pid = fork();
     if (pid == 0) {
         if (fork() == 0) {
-            freopen("/dev/null", "w", stdout);
-            freopen("/dev/null", "w", stderr);
+            (void)freopen("/dev/null", "w", stdout);
+            (void)freopen("/dev/null", "w", stderr);
             execlp("xdg-open", "xdg-open", uri, NULL);
             exit(1);
         }
@@ -8064,12 +8221,14 @@ static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
 
     if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !app->xkb_state) return;
 
-    // Clear selection on key press
+// Clear selection on key press
+#if SFTE_INPUT_SELECTION
     if (app->ctx->term.mouse_sel_active) {
         app->ctx->term.mouse_sel_active = 0;
         _sfte_grid_dirty_range(app->ctx, 0, app->ctx->term.cols * app->ctx->term.rows);
         app->needs_render = 1;
     }
+#endif  // SFTE_INPUT_SELECTION
 
     if (app->repeat_rate > 0 && app->repeating_key != key) {
         struct itimerspec its;
@@ -8349,9 +8508,9 @@ static void _sfte_wayland_unload(sfte_wayland_app *app) {
     if (app->xdg_wm_base) xdg_wm_base_destroy(app->xdg_wm_base);
 
     if (app->keyboard) wl_keyboard_release(app->keyboard);
-#if SFTE_INPUT_MOUSE
+#if SFTE_INPUT_SELECTION
     if (app->pointer) wl_pointer_release(app->pointer);
-#endif  // SFTE_INPUT_MOUSE
+#endif  // SFTE_INPUT_SELECTION
 #if SFTE_CLIPBOARD
     if (app->data_offer) wl_data_offer_destroy(app->data_offer);
     if (app->data_source) wl_data_source_destroy(app->data_source);
@@ -8840,9 +8999,9 @@ int32_t sfte_get_timeout_ms(sfte_ctx *ctx) {
     int32_t frame_ms = 1000 / SFTE_TERM_REFRESH_RATE;
     if (frame_ms < 1) frame_ms = 1;
 
-#if SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     if (ctx->term.is_animating) return frame_ms;
-#endif  // SFTE_TERM_ANIMATE_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 #if SFTE_TERM_SCROLL_SMOOTH
     if (ctx->term.is_scrolling) return frame_ms;
 #endif  // SFTE_TERM_SCROLL_SMOOTH
@@ -8873,9 +9032,9 @@ uint8_t sfte_tick(sfte_ctx *ctx) {
     if (!ctx) return 0;
     uint8_t needs_render = 0;
 
-#if SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     if (ctx->term.is_animating) needs_render = 1;
-#endif  // SFTE_TERM_ANIMATE_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 
 #if SFTE_TERM_SCROLL_SMOOTH
     if (ctx->term.is_scrolling) needs_render = 1;
@@ -9020,16 +9179,20 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
     int32_t base_y_off = _sfte_grid_log2vis(ctx, 0) * ctx->font.cell_height;
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 
+#if SFTE_TERM_ALT_SCREEN
     uint8_t orig_alt_active = ctx->term.alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
 
     for (uint8_t p = 0; p < num_passes; ++p) {
         ctx->term.cells = passes[p].grid;
         ctx->term.hide_cursor = passes[p].hide_cursor;
 
+#if SFTE_TERM_ALT_SCREEN
         if (num_passes == 2 && p == 0)
             ctx->term.alt_active = !orig_alt_active;
         else
             ctx->term.alt_active = orig_alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
 
         // Rendering order:
         // BG grid -> BG images -> FG grid -> FG images
@@ -9046,12 +9209,14 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
     }
 
+#if SFTE_TERM_ALT_SCREEN
     ctx->term.alt_active = orig_alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
 
 #if SFTE_CURSOR_TRAIL
-#if SFTE_TERM_SCREEN_ANIMATE
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     if (!ctx->term.is_animating)
-#endif  // SFTE_TERM_SCREEN_ANIMATE
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
         _sfte_render_trail(ctx, px_buf, out_dmg);
 #endif  // SFTE_CURSOR_TRAIL
 
@@ -9083,9 +9248,9 @@ void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
     ctx->height = h;
     ctx->padding_dirty = 1;
 
-    int16_t new_cols = (w - (2 * SFTE_WINDOW_PAD_X)) / ctx->font.cell_width;
+    int16_t new_cols = (w - (2 * SFTE_WINDOW_PAD_X)) / (int32_t)ctx->font.cell_width;
     if (new_cols < 1) new_cols = 1;
-    int16_t new_rows = (h - (2 * SFTE_WINDOW_PAD_Y)) / ctx->font.cell_height;
+    int16_t new_rows = (h - (2 * SFTE_WINDOW_PAD_Y)) / (int32_t)ctx->font.cell_height;
     if (new_rows < 1) new_rows = 1;
 
     if (new_cols != ctx->term.cols || new_rows != ctx->term.rows) {
@@ -9667,9 +9832,9 @@ sfte_wayland_app *sfte_wayland_init(void) {
     app->running = 1;
     app->ctx = sfte_init(_sfte_wayland_write_cb, app);
 
-#if SFTE_CLIPBOARD && SFTE_CLIPBOARD_OSC52
+#if SFTE_CLIPBOARD && SFTE_INPUT_SELECTION && SFTE_CLIPBOARD_OSC52
     app->ctx->osc52_clipboard_cb = _sfte_wayland_osc52_clipboard_cb;
-#endif  // SFTE_CLIPBOARD && SFTE_CLIPBOARD_OSC52
+#endif  // SFTE_CLIPBOARD && SFTE_INPUT_SELECTION && SFTE_CLIPBOARD_OSC52
 #if SFTE_INPUT_HYPERLINKS
     app->ctx->open_link_cb = _sfte_wayland_open_link_cb;
 #endif  // SFTE_INPUT_HYPERLINKS

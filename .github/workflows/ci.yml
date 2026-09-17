@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-fuzz:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev
+
+      - name: Macro test
+        run: |
+          chmod +x fuzz_macros.sh
+          ./fuzz_macros.sh
+
+      - name: Build binary
+        run: |
+          cc nob.c -o nob
+          ./nob dev
+
+      - name: Commit and push sfte.h
+        if: github.event_name == 'push'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add sfte.h
+
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: update amalgamation sfte.h [skip ci]"
+            git push
+          else
+            echo "no changes to commit"
+          fi
