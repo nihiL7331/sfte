@@ -462,7 +462,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
     oversampling only applies horizontally, not vertically.
 */
 #ifndef SFTE_FONT_OVERSAMPLE
-#define SFTE_FONT_OVERSAMPLE 2
+#define SFTE_FONT_OVERSAMPLE 1
 #endif  // SFTE_FONT_OVERSAMPLE
 
 /*
