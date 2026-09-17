@@ -7,8 +7,8 @@
     To apply a change, you need to recompile the project using `cc nob.c -o nob && ./nob`.
 */
 
-#define SFTE_COLOR_BG_OPACITY 0xEE
-#define SFTE_CURSOR_TRAIL 10
+// #define SFTE_COLOR_BG_OPACITY 0xEE
+// #define SFTE_CURSOR_TRAIL 10
 #define SFTE_FONT_BOLD
 #define SFTE_FONT_ITALIC
 #define SFTE_FONT_BOLD_ITALIC
