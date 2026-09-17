@@ -956,8 +956,10 @@ typedef struct {
 } sfte_shortcut;
 
 #if SFTE_WAYLAND
+#if SFTE_FONT_ZOOM
 static void _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg);
 static void _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *arg);
+#endif  // SFTE_FONT_ZOOM
 #if SFTE_TERM_SCROLLBACK_CAP
 static void _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_TERM_SCROLLBACK_CAP
@@ -1024,12 +1026,6 @@ typedef enum sfte_font_style {
     SFTE_FONT_STYLE_BOLD_ITALIC = 3,
 #endif  // SFTE_FONT_BOLD_ITALIC
 } sfte_font_style;
-
-typedef enum sfte_cursor_style {
-    SFTE_CURSOR_STYLE_BLOCK,
-    SFTE_CURSOR_STYLE_UNDERLINE,
-    SFTE_CURSOR_STYLE_BAR,
-} sfte_cursor_style;
 
 typedef enum sfte_modifier {
     SFTE_MOD_NONE = 0b0000,
@@ -1466,13 +1462,6 @@ static inline uint64_t _sfte_time_ms(void) {
 // >>internal data structures
 // =================================================================================================
 #ifndef SFTE_NO_LOGGING
-typedef enum {
-    SFTE_LOG_LVL_PANIC,
-    SFTE_LOG_LVL_ERROR,
-    SFTE_LOG_LVL_WARN,
-    SFTE_LOG_LVL_INFO,
-} sfte_log_level;
-
 typedef struct sfte_logger {
     void (*func)(const char *tag,  // Always "sfte"
                  sfte_log_level log_level,
@@ -1515,9 +1504,9 @@ typedef enum {
 */
 typedef struct {
     sfte_rune rune;
-#if SFTE_FONT_WIDE_CHARS
+#if SFTE_FONT_WIDE_CHARS && SFTE_FONT_MAX_COMBINING
     sfte_rune combining_runes[SFTE_FONT_MAX_COMBINING];
-#endif  // SFTE_FONT_WIDE_CHARS
+#endif  // SFTE_FONT_WIDE_CHARS && SFTE_FONT_MAX_COMBINING
 
 #if SFTE_INPUT_HYPERLINKS
     uint16_t link_idx;  // 0=no link, >0=index to `term.link_pool`
@@ -1577,7 +1566,9 @@ typedef struct {
     int16_t y_off;
     int8_t z_idx;  // <0=below text, >=0=above text
     uint8_t is_sixel;
+#if SFTE_TERM_ALT_SCREEN
     uint8_t alt_screen;  // 0=main, 1=alt
+#endif                   // SFTE_TERM_ALT_SCREEN
 } sfte_img_placement;
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 
@@ -1726,12 +1717,12 @@ typedef struct {
     uint64_t last_move_ms;
     uint64_t last_trail_update_ms;
 #endif  // SFTE_CURSOR_TRAIL
-#if SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     uint64_t anim_start_ms;
-#endif  // SFTE_TERM_ANIMATE_SCREEN
-#if SFTE_TERM_SCROLL_SMOOTH
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#if SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
     uint64_t last_scroll_ms;
-#endif  // SFTE_TERM_SCROLL_SMOOTH
+#endif  // SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
 
     uint32_t saved_fg[2];  // 0=main, 1=alt
     uint32_t saved_bg[2];  // 0=main, 1=alt
@@ -1760,12 +1751,10 @@ typedef struct {
     uint32_t next_img_id;
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
     uint32_t cursor_color;
-#if SFTE_TERM_SCROLL_SMOOTH
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
     int32_t last_sb_offset;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
     float scroll_y_offset;
-#endif  // SFTE_TERM_SCROLL_SMOOTH
+#endif  // SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
 
     int16_t cols;
     int16_t rows;
@@ -1840,13 +1829,13 @@ typedef struct {
 #if SFTE_UNDERLINE_EXTENDED
     uint8_t cur_ul_style;
 #endif  // SFTE_UNDERLINE_EXTENDED
-#if SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     uint8_t is_animating;
     uint8_t anim_dir;  // 1=entering alt screen, -1=leaving
-#endif                 // SFTE_TERM_ANIMATE_SCREEN
-#if SFTE_TERM_SCROLL_SMOOTH
+#endif                 // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#if SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
     uint8_t is_scrolling;
-#endif  // SFTE_TERM_SCROLL_SMOOTH
+#endif  // SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
 #if SFTE_TERM_FOCUS
     uint8_t is_focused;
     uint8_t report_focus;
@@ -2116,8 +2105,10 @@ static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, uint32_t start_idx, uin
 static inline void _sfte_grid_clear_rows(sfte_ctx *ctx, int16_t start_row, int16_t cnt);
 static void _sfte_grid_scroll(sfte_ctx *ctx, int16_t lines);
 static inline void _sfte_grid_check_wrap(sfte_ctx *ctx);
+#if SFTE_TERM_ALT_SCREEN || !SFTE_TERM_REFLOW
 static sfte_cell *_sfte_grid_resize_dumb_copy(sfte_cell *old_grid, int16_t old_cols,
                                               int16_t old_rows, int16_t new_cols, int16_t new_rows);
+#endif  // SFTE_TERM_ALT_SCREEN || !SFTE_TERM_REFLOW
 static void _sfte_grid_resize_tabs(sfte_ctx *ctx, int16_t old_cols, int16_t new_cols);
 static void _sfte_grid_resize(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows);
 
@@ -2132,7 +2123,9 @@ static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id);
 // -------------------------------------------------------------------------------------------------
 // >view
 // -------------------------------------------------------------------------------------------------
+#if SFTE_WINDOW_PAD_X || SFTE_WINDOW_PAD_Y
 static void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf);
+#endif  // SFTE_WINDOW_PAD_X || SFTE_WINDOW_PAD_Y
 
 // -------------------------------------------------------------------------------------------------
 // >input
@@ -2333,9 +2326,9 @@ static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, uint8_t is_b
 #if SFTE_CURSOR_TRAIL
 static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_rect *out_dmg);
 #endif  // SFTE_CURSOR_TRAIL
-#if SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_y, int32_t *in_y);
-#endif  // SFTE_TERM_ANIMATE_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
                                                   _sfte_pass_info *passes,
                                                   sfte_damage_rect *out_dmg);
@@ -2593,10 +2586,12 @@ static void _sfte_rune_insert(sfte_ctx *ctx, sfte_rune rune) {
                 prev = &ctx->term.cells[prev_idx];
             }
 
+#if SFTE_FONT_MAX_COMBINING
             if (prev->combining_cnt < SFTE_FONT_MAX_COMBINING) {
                 prev->combining_runes[prev->combining_cnt++] = rune;
                 prev->dirty = 1;
             }
+#endif  // SFTE_FONT_MAX_COMBINING
         }
 #endif  // SFTE_FONT_WIDE_CHARS
         return;
@@ -3204,6 +3199,7 @@ static inline void _sfte_grid_check_wrap(sfte_ctx *ctx) {
 // >resize
 // -------------------------------------------------------------------------------------------------
 
+#if SFTE_TERM_ALT_SCREEN || !SFTE_TERM_REFLOW
 /*
     Performs a simple 2D truncation/padding copy of a grid.
     Used for alt-screens (which don't reflow) and as the primary resizer in non-reflow builds.
@@ -3225,6 +3221,7 @@ static sfte_cell *_sfte_grid_resize_dumb_copy(sfte_cell *old_grid, int16_t old_c
 
     return new_grid;
 }
+#endif  // SFTE_TERM_ALT_SCREEN || !SFTE_TERM_REFLOW
 
 /*
     Reallocates the tab stops array and populates new columns with default intervals.
@@ -3272,7 +3269,9 @@ static void _sfte_grid_resize(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows)
 
     int16_t grid_off_old = ctx->term.grid_off;
     int16_t old_cols = ctx->term.cols;
+#if SFTE_TERM_ALT_SCREEN || !SFTE_TERM_REFLOW
     int16_t old_rows = ctx->term.rows;
+#endif  // SFTE_TERM_ALT_SCREEN || !SFTE_TERM_REFLOW
 
 #if SFTE_TERM_ALT_SCREEN
     sfte_cell *main_old = ctx->term.alt_active ? ctx->term.alt_cells : ctx->term.cells;
@@ -3410,6 +3409,7 @@ static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id) {
 // >>view
 // =================================================================================================
 
+#if SFTE_WINDOW_PAD_X || SFTE_WINDOW_PAD_Y
 /*
     Fills the padding regions around the terminal grid with the background color.
 */
@@ -3437,6 +3437,7 @@ static void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf) {
     }
 #endif  // SFTE_WINDOW_PAD_X
 }
+#endif  // SFTE_WINDOW_PAD_X || SFTE_WINDOW_PAD_Y
 
 // =================================================================================================
 // >>input
@@ -3820,7 +3821,9 @@ static inline void _sfte_sixel_commit(sfte_ctx *ctx) {
                          .start_row = ctx->sixel.start_row,
                          .z_idx = 1,
                          .is_sixel = 1,
+#if SFTE_TERM_ALT_SCREEN
                          .alt_screen = ctx->term.alt_active,
+#endif  // SFTE_TERM_ALT_SCREEN
                      });
             if (p) {
                 img->ref_cnt++;
@@ -4086,7 +4089,10 @@ static void _sfte_sixel_deinit(sfte_ctx *ctx) {
 */
 size_t _sfte_kitty_kb_encode(sfte_ctx *ctx, sfte_key key, uint32_t codepoint, uint32_t mod_mask,
                              char *out_buf, size_t max_bytes) {
-    uint8_t s_idx = ctx->term.alt_active ? 1 : 0;
+    uint8_t s_idx = 0;
+#if SFTE_TERM_ALT_SCREEN
+    s_idx = ctx->term.alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
     uint16_t flags = ctx->term.kitty_kb_stack[s_idx][ctx->term.kitty_kb_stack_idx[s_idx]];
     if (flags == 0) return 0;
 
@@ -4409,7 +4415,9 @@ static const char *_sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img) {
                                                            .x_off = ctx->kitty.x_off,
                                                            .y_off = ctx->kitty.y_off,
                                                            .z_idx = ctx->kitty.z_idx,
+#if SFTE_TERM_ALT_SCREEN
                                                            .alt_screen = ctx->term.alt_active,
+#endif  // SFTE_TERM_ALT_SCREEN
                                                        });
 
     if (!p) return "ENOMEM: placement pool capacity reached";
@@ -4444,7 +4452,10 @@ static const char *_sfte_kitty_exec_query(sfte_ctx *ctx) {
 static const char *_sfte_kitty_exec_delete(sfte_ctx *ctx) {
     for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
         sfte_img_placement *p = &ctx->term.img_placements[i];
-        if (p->alt_screen != ctx->term.alt_active || p->is_sixel) continue;
+#if SFTE_TERM_ALT_SCREEN
+        if (p->alt_screen != ctx->term.alt_active) continue;
+#endif  // SFTE_TERM_ALT_SCREEN
+        if (p->is_sixel) continue;
 
         sfte_img *img = _sfte_img_find(ctx, p->img_id);
         if (!img) return "EINVAL: failed to find image to delete";
@@ -4775,7 +4786,9 @@ static inline void _sfte_csi_exec_ed(sfte_ctx *ctx, int16_t mode, int16_t col) {
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
         for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
             sfte_img_placement *p = &ctx->term.img_placements[i];
+#if SFTE_TERM_ALT_SCREEN
             if (p->alt_screen != ctx->term.alt_active) continue;
+#endif  // SFTE_TERM_ALT_SCREEN
 
             sfte_img *img = _sfte_img_find(ctx, p->img_id);
             if (!img) continue;
@@ -5018,7 +5031,10 @@ static inline void _sfte_csi_set_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt, 
         } else if (p[i] == 1047 || p[i] == 1048 || p[i] == 1049) {
             // 1048 / 1049 save cursor
             if (p[i] == 1048 || p[i] == 1049) {
-                int s_idx = ctx->term.alt_active ? 1 : 0;
+                uint8_t s_idx = 0;
+#if SFTE_TERM_ALT_SCREEN
+                s_idx = ctx->term.alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
                 ctx->term.saved_grid_off[s_idx] = ctx->term.grid_off;
                 ctx->term.saved_col[s_idx] = ctx->term.cursor_col;
                 ctx->term.saved_row[s_idx] = ctx->term.cursor_row;
@@ -5038,11 +5054,11 @@ static inline void _sfte_csi_set_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt, 
 #if SFTE_CURSOR_TRAIL
                 ctx->term.last_move_ms = 0;
 #endif  // SFTE_CURSOR_TRAIL
-#if SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
                 ctx->term.is_animating = 1;
                 ctx->term.anim_dir = 1;
                 ctx->term.anim_start_ms = SFTE_TIME_MS();
-#endif  // SFTE_TERM_ANIMATE_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 
                 if (!ctx->term.alt_cells)
                     ctx->term.alt_cells = (sfte_cell *)SFTE_CALLOC(ctx->term.cols * ctx->term.rows,
@@ -5084,8 +5100,9 @@ static inline void _sfte_csi_reset_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt
         if (p[i] == 25) {
             ctx->term.hide_cursor = 1;
             ctx->term.cells[_sfte_grid_get_idx(ctx, col, ctx->term.cursor_row)].dirty = 1;
+        }
 #if SFTE_TERM_FOCUS
-        } else if (p[i] == 1004)
+        else if (p[i] == 1004)
             ctx->term.report_focus = 0;
 #endif  // SFTE_TERM_FOCUS
         else if (p[i] == 2004)
@@ -5135,7 +5152,10 @@ static inline void _sfte_csi_reset_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt
 #endif  // SFTE_TERM_ALT_SCREEN
 
             if (p[i] == 1048 || p[i] == 1049) {
-                int s_idx = ctx->term.alt_active ? 1 : 0;
+                uint8_t s_idx = 0;
+#if SFTE_TERM_ALT_SCREEN
+                s_idx = ctx->term.alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
                 ctx->term.grid_off = ctx->term.saved_grid_off[s_idx];
                 ctx->term.cursor_col = _SFTE_CLAMP(ctx->term.saved_col[s_idx], 0,
                                                    ctx->term.cols - 1);
@@ -5396,7 +5416,10 @@ static inline void _sfte_csi_exec_decstbm(sfte_ctx *ctx, uint16_t *p, uint16_t c
 */
 static inline void _sfte_csi_exec_scosc(sfte_ctx *ctx, uint16_t *p) {
     if (p[0] != 0) return;  // Avoid colliding with kitty support command
-    uint8_t s_idx = ctx->term.alt_active ? 1 : 0;
+    uint8_t s_idx = 0;
+#if SFTE_TERM_ALT_SCREEN
+    s_idx = ctx->term.alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
     ctx->term.saved_col[s_idx] = ctx->term.cursor_col;
     ctx->term.saved_row[s_idx] = ctx->term.cursor_row;
     ctx->term.saved_fg[s_idx] = ctx->term.cur_fg;
@@ -5431,7 +5454,10 @@ static inline void _sfte_csi_exec_xtwinops(sfte_ctx *ctx, uint16_t *p) {
 */
 static inline void _sfte_csi_exec_scorc(sfte_ctx *ctx, uint16_t *p) {
     if (ctx->term.vt_dec_priv != 0 || p[0] != 0) return;
-    uint8_t s_idx = ctx->term.alt_active ? 1 : 0;
+    uint8_t s_idx = 0;
+#if SFTE_TERM_ALT_SCREEN
+    s_idx = ctx->term.alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
     ctx->term.cursor_col = _SFTE_CLAMP(ctx->term.saved_col[s_idx], 0, ctx->term.cols - 1);
     ctx->term.cursor_row = _SFTE_CLAMP(ctx->term.saved_row[s_idx], 0, ctx->term.rows - 1);
     ctx->term.cur_fg = ctx->term.saved_fg[s_idx];
@@ -5449,7 +5475,10 @@ static inline void _sfte_csi_exec_scorc(sfte_ctx *ctx, uint16_t *p) {
 */
 static inline void _sfte_csi_exec_kitty(sfte_ctx *ctx, uint16_t *p) {
     if (ctx->term.vt_dec_priv == 0) return;
-    uint8_t s_idx = ctx->term.alt_active ? 1 : 0;
+    uint8_t s_idx = 0;
+#if SFTE_TERM_ALT_SCREEN
+    s_idx = ctx->term.alt_active;
+#endif                                 // SFTE_TERM_ALT_SCREEN
     if (ctx->term.vt_dec_priv == 1) {  // CSI ? u (query)
         char buf[32];
         uint16_t flags = ctx->term.kitty_kb_stack[s_idx][ctx->term.kitty_kb_stack_idx[s_idx]];
@@ -5683,7 +5712,10 @@ static inline void _sfte_parser_esc_ris(sfte_ctx *ctx) {
     The terminal can store one set of data per screen (main/alt).
 */
 static inline void _sfte_parser_esc_sc(sfte_ctx *ctx) {
-    uint8_t s_idx = ctx->term.alt_active ? 1 : 0;
+    uint8_t s_idx = 0;
+#if SFTE_TERM_ALT_SCREEN
+    s_idx = ctx->term.alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
     ctx->term.saved_col[s_idx] = ctx->term.cursor_col;
     ctx->term.saved_row[s_idx] = ctx->term.cursor_row;
     ctx->term.saved_fg[s_idx] = ctx->term.cur_fg;
@@ -5700,7 +5732,10 @@ static inline void _sfte_parser_esc_sc(sfte_ctx *ctx) {
     The terminal can store one set of data per screen (main/alt).
 */
 static inline void _sfte_parser_esc_rc(sfte_ctx *ctx) {
-    uint8_t s_idx = ctx->term.alt_active ? 1 : 0;
+    uint8_t s_idx = 0;
+#if SFTE_TERM_ALT_SCREEN
+    s_idx = ctx->term.alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
     // NOTE:
     // We need to clamp here since between SC and RC a resize could've occured.
     ctx->term.cursor_col = _SFTE_CLAMP(ctx->term.saved_col[s_idx], 0, ctx->term.cols - 1);
@@ -5768,9 +5803,9 @@ static inline void _sfte_parser_osc_dispatch(sfte_ctx *ctx, uint8_t terminator) 
     ctx->term.osc_payload[ctx->term.osc_len] = '\0';
 
     if (strncmp(ctx->term.osc_payload, "10;?", 4) == 0 ||
-        strncmp(ctx->term.osc_payload, "11;?", 4) == 0 ||
+        strncmp(ctx->term.osc_payload, "11;?", 4) == 0
 #if SFTE_CURSOR_DYNAMIC
-        strncmp(ctx->term.osc_payload, "12;?", 4) == 0
+        || strncmp(ctx->term.osc_payload, "12;?", 4) == 0
 #endif  // SFTE_CURSOR_DYNAMIC
     ) {
         uint8_t code_char = ctx->term.osc_payload[1];
@@ -5922,7 +5957,7 @@ static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
             }
             _sfte_rune_insert(ctx, b);
 #else   // !SFTE_TERM_ASCII_CHARSET
-                if (_sfte_rune_utf8_decode(ctx, b)) _sfte_rune_insert(ctx, ctx->term.utf8_rune_acc);
+            if (_sfte_rune_utf8_decode(ctx, b)) _sfte_rune_insert(ctx, ctx->term.utf8_rune_acc);
 #endif  // !SFTE_TERM_ASCII_CHARSET
         }
         break;
@@ -6832,7 +6867,9 @@ static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, uint8_t is_b
                                        int32_t base_y_off, uint8_t pad_was_dirty) {
     for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
         sfte_img_placement *p = &ctx->term.img_placements[i];
+#if SFTE_TERM_ALT_SCREEN
         if (p->alt_screen != ctx->term.alt_active) continue;
+#endif  // SFTE_TERM_ALT_SCREEN
 
         uint8_t is_bg_img = (p->z_idx < 0);
         if (is_bg_img != is_bg_pass) continue;
@@ -6973,7 +7010,7 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
 }
 #endif  // SFTE_CURSOR_TRAIL
 
-#if SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 /*
     Calculates the Y offsets for the outgoing and incoming screens during an alt-screen
    transition. Returns 2 when finished animating. Returns 1 when currently animating. Returns 0
@@ -7001,7 +7038,7 @@ static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_
     }
     return 1;
 }
-#endif  // SFTE_TERM_ANIMATE_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 
 /*
     Prepares render passes.
@@ -7016,13 +7053,15 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
 
     uint8_t needs_wipe = 0;
     uint8_t passes_cnt = 1;
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     int32_t out_y = 0, in_y = 0;
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 
-#if SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     uint8_t anim_state = _sfte_render_get_anim_offsets(ctx, &out_y, &in_y);
     if (anim_state == 1 || anim_state == 2) needs_wipe = 1;
     if (anim_state == 1) passes_cnt = 2;
-#endif  // SFTE_TERM_ANIMATE_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 
 #if SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
     int32_t sb_diff = ctx->term.sb_offset - ctx->term.last_sb_offset;
@@ -7062,15 +7101,15 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
 
         for (int32_t i = 0; i < ctx->term.rows * ctx->term.cols; ++i) {
             ctx->term.cells[i].dirty = 1;
+#if SFTE_TERM_ALT_SCREEN
             if (passes_cnt == 2 && ctx->term.alt_cells) ctx->term.alt_cells[i].dirty = 1;
+#endif  // SFTE_TERM_ALT_SCREEN
         }
     }
 
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     if (passes_cnt == 2) {
         passes[0].y_off = out_y;
-#if SFTE_TERM_SCROLL_SMOOTH
-        passes[0].y_off += (int32_t)ctx->term.scroll_y_offset;
-#endif  // SFTE_TERM_SCROLL_SMOOTH
         passes[0].grid = ctx->term.alt_cells;
         passes[0].hide_cursor = 1;
 
@@ -7081,9 +7120,9 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
         passes[1].grid = ctx->term.cells;
         passes[1].hide_cursor = ctx->term.hide_cursor;
     }
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 #if SFTE_TERM_SCROLL_SMOOTH
-    else
-        passes[0].y_off = (int32_t)ctx->term.scroll_y_offset;
+    passes[0].y_off = (int32_t)ctx->term.scroll_y_offset;
 #endif  // SFTE_TERM_SCROLL_SMOOTH
 
     return passes_cnt;
@@ -7255,7 +7294,7 @@ static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_
 #if SFTE_CURSOR_DYNAMIC
     uint32_t active_cur_color = ctx->term.cursor_color;
 #else   // !SFTE_CURSOR_DYNAMIC
-        uint32_t active_cur_color = SFTE_CURSOR_COLOR;
+    uint32_t active_cur_color = SFTE_CURSOR_COLOR;
 #endif  // !SFTE_CURSOR_DYNAMIC
     uint32_t cur_col = SFTE_COLOR_ALPHA_MASK | (active_cur_color & ~SFTE_COLOR_ALPHA_MASK);
 
@@ -7585,7 +7624,7 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
 #if SFTE_CURSOR_DYNAMIC
                 _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, ctx->term.cursor_color);
 #else   // !SFTE_CURSOR_DYNAMIC
-                    _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, SFTE_CURSOR_COLOR);
+                _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, SFTE_CURSOR_COLOR);
 #endif  // !SFTE_CURSOR_DYNAMIC
             } else
                 _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, bg);
@@ -8955,9 +8994,9 @@ int32_t sfte_get_timeout_ms(sfte_ctx *ctx) {
     int32_t frame_ms = 1000 / SFTE_TERM_REFRESH_RATE;
     if (frame_ms < 1) frame_ms = 1;
 
-#if SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     if (ctx->term.is_animating) return frame_ms;
-#endif  // SFTE_TERM_ANIMATE_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 #if SFTE_TERM_SCROLL_SMOOTH
     if (ctx->term.is_scrolling) return frame_ms;
 #endif  // SFTE_TERM_SCROLL_SMOOTH
@@ -8988,9 +9027,9 @@ uint8_t sfte_tick(sfte_ctx *ctx) {
     if (!ctx) return 0;
     uint8_t needs_render = 0;
 
-#if SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     if (ctx->term.is_animating) needs_render = 1;
-#endif  // SFTE_TERM_ANIMATE_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 
 #if SFTE_TERM_SCROLL_SMOOTH
     if (ctx->term.is_scrolling) needs_render = 1;
@@ -9135,16 +9174,20 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
     int32_t base_y_off = _sfte_grid_log2vis(ctx, 0) * ctx->font.cell_height;
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 
+#if SFTE_TERM_ALT_SCREEN
     uint8_t orig_alt_active = ctx->term.alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
 
     for (uint8_t p = 0; p < num_passes; ++p) {
         ctx->term.cells = passes[p].grid;
         ctx->term.hide_cursor = passes[p].hide_cursor;
 
+#if SFTE_TERM_ALT_SCREEN
         if (num_passes == 2 && p == 0)
             ctx->term.alt_active = !orig_alt_active;
         else
             ctx->term.alt_active = orig_alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
 
         // Rendering order:
         // BG grid -> BG images -> FG grid -> FG images
@@ -9161,12 +9204,14 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
     }
 
+#if SFTE_TERM_ALT_SCREEN
     ctx->term.alt_active = orig_alt_active;
+#endif  // SFTE_TERM_ALT_SCREEN
 
 #if SFTE_CURSOR_TRAIL
-#if SFTE_TERM_SCREEN_ANIMATE
+#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     if (!ctx->term.is_animating)
-#endif  // SFTE_TERM_SCREEN_ANIMATE
+#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
         _sfte_render_trail(ctx, px_buf, out_dmg);
 #endif  // SFTE_CURSOR_TRAIL
 
@@ -9198,9 +9243,9 @@ void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
     ctx->height = h;
     ctx->padding_dirty = 1;
 
-    int16_t new_cols = (w - (2 * SFTE_WINDOW_PAD_X)) / ctx->font.cell_width;
+    int16_t new_cols = (w - (2 * SFTE_WINDOW_PAD_X)) / (int32_t)ctx->font.cell_width;
     if (new_cols < 1) new_cols = 1;
-    int16_t new_rows = (h - (2 * SFTE_WINDOW_PAD_Y)) / ctx->font.cell_height;
+    int16_t new_rows = (h - (2 * SFTE_WINDOW_PAD_Y)) / (int32_t)ctx->font.cell_height;
     if (new_rows < 1) new_rows = 1;
 
     if (new_cols != ctx->term.cols || new_rows != ctx->term.rows) {
