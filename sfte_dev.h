@@ -1836,7 +1836,7 @@ struct sfte_wayland_app {
 
     uint8_t running;
     uint8_t needs_render;
-
+    uint8_t frame_pending;
 };
 #endif  // SFTE_WAYLAND
 
@@ -7680,6 +7680,18 @@ static void _sfte_wayland_create_buffer(sfte_wayland_app *app) {
     close(fd);
 }
 
+static void _sfte_wayland_callback_listener_done(void *data, struct wl_callback *cb,
+                                                 uint32_t time) {
+    (void)time;
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+    wl_callback_destroy(cb);
+    app->frame_pending = 0;
+}
+
+static const struct wl_callback_listener _sfte_wayland_callback_listener = {
+    .done = _sfte_wayland_callback_listener_done,
+};
+
 #if SFTE_CLIPBOARD
 static void _sfte_wayland_data_offer_offer(void *data, struct wl_data_offer *offer,
                                            const char *mime_type) {
@@ -8436,7 +8448,7 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
         }
 
         // Dispatch render pass
-        if (app->needs_render) {
+        if (app->needs_render && !app->frame_pending) {
             sfte_damage_rect dmg = {0};
 
             uint32_t *target_pxs = app->shm_data;
@@ -8459,6 +8471,9 @@ static void _sfte_wayland_loop(sfte_wayland_app *app) {
 
                 wl_surface_damage_buffer(app->surface, dmg.x, dmg.y, dmg.w, dmg.h);
                 wl_surface_attach(app->surface, app->buffer, 0, 0);
+                struct wl_callback *cb = wl_surface_frame(app->surface);
+                wl_callback_add_listener(cb, &_sfte_wayland_callback_listener, app);
+                app->frame_pending = 1;
                 wl_surface_commit(app->surface);
             }
 
