@@ -8508,9 +8508,9 @@ static void _sfte_wayland_unload(sfte_wayland_app *app) {
     if (app->xdg_wm_base) xdg_wm_base_destroy(app->xdg_wm_base);
 
     if (app->keyboard) wl_keyboard_release(app->keyboard);
-#if SFTE_INPUT_MOUSE
+#if SFTE_INPUT_SELECTION
     if (app->pointer) wl_pointer_release(app->pointer);
-#endif  // SFTE_INPUT_MOUSE
+#endif  // SFTE_INPUT_SELECTION
 #if SFTE_CLIPBOARD
     if (app->data_offer) wl_data_offer_destroy(app->data_offer);
     if (app->data_source) wl_data_source_destroy(app->data_source);
