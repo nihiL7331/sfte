@@ -1971,6 +1971,8 @@ static inline uint32_t _sfte_color_from_rgb(uint32_t rgb);
 // -------------------------------------------------------------------------------------------------
 // >grid
 // -------------------------------------------------------------------------------------------------
+static inline int32_t _sfte_grid_vis2log(sfte_ctx *ctx, int16_t visual_row);
+static inline int32_t _sfte_grid_log2vis(sfte_ctx *ctx, int32_t logical_row);
 static inline uint32_t _sfte_grid_get_idx(sfte_ctx *ctx, int16_t c, int32_t logical_row);
 static inline sfte_cell *_sfte_grid_get_cell(sfte_ctx *ctx, int16_t col, int32_t logical_row);
 static inline uint32_t _sfte_grid_get_bg(sfte_cell *cell);
@@ -2635,6 +2637,32 @@ static inline uint32_t _sfte_color_from_rgb(uint32_t rgb) {
 // -------------------------------------------------------------------------------------------------
 
 /*
+    Converts a visual screen row (0 to ctx->term.rows-1) into a logical row.
+    Projects the coordinate into the scrollback history if `SFTE_TERM_SCROLLBACK_CAP` isn't 0.
+*/
+static inline int32_t _sfte_grid_vis2log(sfte_ctx *ctx, int16_t visual_row) {
+#if SFTE_TERM_SCROLLBACK_CAP
+    return (int32_t)visual_row - ctx->term.sb_offset;
+#else   // !SFTE_TERM_SCROLLBACK_CAP
+    (void)ctx;
+    return (int32_t)visual_row;
+#endif  // !SFTE_TERM_SCROLLBACK_CAP
+}
+
+/*
+    Converts a logical row (chronological) into a visual screen row.
+    Returns negative values if the row is currently hidden in the scrollback.
+ */
+static inline int32_t _sfte_grid_log2vis(sfte_ctx *ctx, int32_t logical_row) {
+#if SFTE_TERM_SCROLLBACK_CAP
+    return logical_row + ctx->term.sb_offset;
+#else   // !SFTE_TERM_SCROLLBACK_CAP
+    (void)ctx;
+    return logical_row;
+#endif  // !SFTE_TERM_SCROLLBACK_CAP
+}
+
+/*
     Converts a visual 2D coordinate into a 1D physical memory index.
 */
 static inline uint32_t _sfte_grid_get_idx(sfte_ctx *ctx, int16_t c, int32_t logical_row) {
@@ -2727,14 +2755,7 @@ static void _sfte_grid_from_px(sfte_ctx *ctx, int32_t px_x, int32_t px_y, int16_
                             ctx->term.rows - 1);
     if (out_col) *out_col = c;
     if (out_screen_row) *out_screen_row = r;
-
-    if (out_logical_row) {
-#if SFTE_TERM_SCROLLBACK_CAP
-        *out_logical_row = r - ctx->term.sb_offset;
-#else   // !SFTE_TERM_SCROLLBACK_CAP
-        *out_logical_row = r;
-#endif  // !SFTE_TERM_SCROLLBACK_CAP
-    }
+    if (out_logical_row) *out_logical_row = _sfte_grid_vis2log(ctx, r);
 }
 
 /*
@@ -6618,12 +6639,8 @@ static inline void _sfte_render_damage_add(sfte_damage_rect *dmg, int32_t x, int
    rows and columns to guarantee seamless redrawing.
 */
 static inline void _sfte_render_propagate_damage(sfte_ctx *ctx, int16_t vis_col, int16_t vis_row) {
-    int32_t logical_r_curr = vis_row;
-    int32_t logical_r_last = ctx->term.last_drawn_row;
-#if SFTE_TERM_SCROLLBACK_CAP
-    logical_r_curr -= ctx->term.sb_offset;
-    logical_r_last -= ctx->term.sb_offset;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+    int32_t logical_r_curr = _sfte_grid_vis2log(ctx, vis_row);
+    int32_t logical_r_last = _sfte_grid_vis2log(ctx, ctx->term.last_drawn_row);
 
     if (ctx->term.last_drawn_col != vis_col || ctx->term.last_drawn_row != vis_row) {
         if (ctx->term.last_drawn_col >= 0 && ctx->term.last_drawn_col < ctx->term.cols &&
@@ -6639,10 +6656,7 @@ static inline void _sfte_render_propagate_damage(sfte_ctx *ctx, int16_t vis_col,
 
 #if SFTE_FONT_BLEED
     for (int16_t r = 0; r < ctx->term.rows; ++r) {
-        int32_t logical_r = r;
-#if SFTE_TERM_SCROLLBACK_CAP
-        logical_r -= ctx->term.sb_offset;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+        int32_t logical_r = _sfte_grid_vis2log(ctx, r);
         uint8_t row_has_damage = 0;
         for (int16_t c = 0; c < ctx->term.cols; ++c)
             if (_sfte_grid_get_cell(ctx, c, logical_r)->dirty) {
@@ -6671,11 +6685,7 @@ static inline void _sfte_render_propagate_damage(sfte_ctx *ctx, int16_t vis_col,
 
     // Normalize bleed-dirty flags back to standard dirty flags
     for (int16_t r = 0; r < ctx->term.rows; ++r) {
-        int32_t logical_r = r;
-#if SFTE_TERM_SCROLLBACK_CAP
-        logical_r -= ctx->term.sb_offset;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
-
+        int32_t logical_r = _sfte_grid_vis2log(ctx, r);
         for (int16_t c = 0; c < ctx->term.cols; ++c) {
             sfte_cell *cell = _sfte_grid_get_cell(ctx, c, logical_r);
             if (cell->dirty == 2) cell->dirty = 1;
@@ -6739,11 +6749,7 @@ static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, uint8_t is_b
                     grid_c = _SFTE_CLAMP(grid_c, 0, ctx->term.cols - 1);
                     grid_r = _SFTE_CLAMP(grid_r, 0, ctx->term.rows - 1);
 
-                    int32_t logical_r = grid_r;
-#if SFTE_TERM_SCROLLBACK_CAP
-                    logical_r -= ctx->term.sb_offset;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
-
+                    int32_t logical_r = _sfte_grid_vis2log(ctx, grid_r);
                     is_dirty = _sfte_grid_get_cell(ctx, grid_c, logical_r)->dirty;
                 }
                 if (!is_dirty) continue;
@@ -7420,11 +7426,7 @@ static void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t c
 static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
                                         int16_t vis_row, int32_t y_off) {
     for (int16_t r = 0; r < ctx->term.rows; ++r) {
-        int32_t logical_r = r;
-#if SFTE_TERM_SCROLLBACK_CAP
-        logical_r -= ctx->term.sb_offset;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
-
+        int32_t logical_r = _sfte_grid_vis2log(ctx, r);
         for (int16_t c = 0; c < ctx->term.cols; ++c) {
             sfte_cell *vcell = _sfte_grid_get_cell(ctx, c, logical_r);
             if (!vcell->dirty) continue;
@@ -7658,11 +7660,7 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
 static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
                                         int16_t vis_row, int32_t y_off, sfte_damage_rect *out_dmg) {
     for (int16_t r = 0; r < ctx->term.rows; ++r) {
-        int32_t logical_r = r;
-#if SFTE_TERM_SCROLLBACK_CAP
-        logical_r -= ctx->term.sb_offset;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
-
+        int32_t logical_r = _sfte_grid_vis2log(ctx, r);
         _sfte_render_extract_fg_row(ctx, logical_r, r, vis_col, vis_row);
 
 #if SFTE_FONT_LIGATURES
@@ -9003,10 +9001,7 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
         _sfte_grid_resize(ctx, new_cols, new_rows);
 
     int16_t vis_col = _SFTE_CLAMP(ctx->term.cursor_col, 0, ctx->term.cols - 1);
-    int32_t vis_row = ctx->term.cursor_row;
-#if SFTE_TERM_SCROLLBACK_CAP
-    vis_row += ctx->term.sb_offset;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+    int32_t vis_row = _sfte_grid_log2vis(ctx, ctx->term.cursor_row);
 #if SFTE_FONT_WIDE_CHARS
     uint8_t cursor_is_visible = (vis_row >= 0 && vis_row < ctx->term.rows);
     if (cursor_is_visible && vis_col > 0 &&
@@ -9022,10 +9017,7 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
 
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
     _sfte_render_sort_images(ctx);
-    int32_t base_y_off = 0;
-#if SFTE_TERM_SCROLLBACK_CAP
-    base_y_off = ctx->term.sb_offset * ctx->font.cell_height;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+    int32_t base_y_off = _sfte_grid_log2vis(ctx, 0) * ctx->font.cell_height;
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 
     uint8_t orig_alt_active = ctx->term.alt_active;
@@ -9075,10 +9067,7 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
         out_dmg->w = _SFTE_CLAMP(out_dmg->w, 0, w);
         out_dmg->h = _SFTE_CLAMP(out_dmg->h, 0, h);
         for (int32_t r = 0; r < ctx->term.rows; ++r) {
-            int32_t logical_r = r;
-#if SFTE_TERM_SCROLLBACK_CAP
-            logical_r -= ctx->term.sb_offset;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+            int32_t logical_r = _sfte_grid_vis2log(ctx, r);
             if (logical_r >= 0 && logical_r < ctx->term.rows)
                 for (int16_t c = 0; c < ctx->term.cols; ++c)
                     _sfte_grid_get_cell(ctx, c, logical_r)->dirty = 0;
@@ -9496,11 +9485,7 @@ size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes) {
     for (int16_t r = sr; r <= er; ++r) {
         int16_t row_start = (r == sr) ? sc : 0;
         int16_t row_end = (r == er) ? ec : ctx->term.cols - 1;
-
-        int32_t logical_r = r;
-#if SFTE_TERM_SCROLLBACK_CAP
-        logical_r -= ctx->term.sb_offset;
-#endif
+        int32_t logical_r = _sfte_grid_vis2log(ctx, r);
 
         // Trim trailing spaces if the user selected past the end of text
         int16_t actual_end = row_end;
