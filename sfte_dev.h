@@ -1824,6 +1824,8 @@ struct sfte_wayland_app {
     uint32_t *back_buffer;
 #endif  // SFTE_TERM_DOUBLE_BUFFER
 
+    int32_t width, height;
+    int32_t pending_width, pending_height;
     int32_t pty_fd;  // Master file descriptor to read/write from
     pid_t pty_pid;   // PID of shell
 
@@ -1835,8 +1837,6 @@ struct sfte_wayland_app {
     uint8_t running;
     uint8_t needs_render;
 
-    int32_t width, height;
-    int32_t pending_width, pending_height;
 };
 #endif  // SFTE_WAYLAND
 
