@@ -455,20 +455,12 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #endif  // SFTE_FONT_CUSTOM_BACKEND
 
 /*
-    Starting font size in pixels.
-*/
-#ifndef SFTE_FONT_DEFAULT_SIZE
-#define SFTE_FONT_DEFAULT_SIZE 12.0f
-#endif  // SFTE_FONT_DEFAULT_SIZE
-_SFTE_ENSURE_RANGE(SFTE_FONT_DEFAULT_SIZE, 1.0f, FLT_MAX);
-
-/*
     Minimum size of the font in pixels.
 */
 #ifndef SFTE_FONT_MIN_SIZE
 #define SFTE_FONT_MIN_SIZE 1.0f
 #endif  // SFTE_FONT_MIN_SIZE
-_SFTE_ENSURE_RANGE(SFTE_FONT_MIN_SIZE, 0.1f, SFTE_FONT_DEFAULT_SIZE);
+_SFTE_ENSURE_RANGE(SFTE_FONT_MIN_SIZE, 0.1f, FLT_MAX);
 
 /*
     Maximum size of the font in pixels.
@@ -476,7 +468,15 @@ _SFTE_ENSURE_RANGE(SFTE_FONT_MIN_SIZE, 0.1f, SFTE_FONT_DEFAULT_SIZE);
 #ifndef SFTE_FONT_MAX_SIZE
 #define SFTE_FONT_MAX_SIZE 96.0f
 #endif  // SFTE_FONT_MAX_SIZE
-_SFTE_ENSURE_RANGE(SFTE_FONT_MAX_SIZE, SFTE_FONT_DEFAULT_SIZE, FLT_MAX);
+_SFTE_ENSURE_RANGE(SFTE_FONT_MAX_SIZE, SFTE_FONT_MIN_SIZE, FLT_MAX);
+
+/*
+    Starting font size in pixels.
+*/
+#ifndef SFTE_FONT_DEFAULT_SIZE
+#define SFTE_FONT_DEFAULT_SIZE 12.0f
+#endif  // SFTE_FONT_DEFAULT_SIZE
+_SFTE_ENSURE_RANGE(SFTE_FONT_DEFAULT_SIZE, SFTE_FONT_MIN_SIZE, SFTE_FONT_MAX_SIZE);
 
 /*
     Enables font ligatures support.
