@@ -4261,7 +4261,7 @@ static uint32_t *_sfte_kitty_decode_payload(sfte_ctx *ctx, uint8_t *raw_data, si
                 pixel_len = ftell(f);
                 fseek(f, 0, SEEK_SET);
                 pixel_src = (uint8_t *)SFTE_MALLOC(pixel_len);
-                fread(pixel_src, 1, pixel_len, f);
+                (void)fread(pixel_src, 1, pixel_len, f);
                 fclose(f);
             } else
                 pixel_src = NULL;
@@ -6398,14 +6398,14 @@ static inline uint8_t _sfte_shaper_eval_format1(sfte_shaper_ctx *ctx, const uint
 
     uint32_t c_off = sub_off + _sfte_shaper_consume16(ttf_data, &s_off);
     int32_t c_idx = _sfte_shaper_get_coverage_index(ttf_data, c_off, cur_glyph);
-    if (c_idx < 0) return false;
+    if (c_idx < 0) return 0;
 
     uint16_t rs_cnt = _sfte_shaper_consume16(ttf_data, &s_off);
-    if (c_idx >= rs_cnt) return false;
+    if (c_idx >= rs_cnt) return 0;
 
     uint32_t rs_off = sub_off + 3 * sizeof(uint16_t) + (c_idx * sizeof(uint16_t));
     uint16_t rs_rel_off = _SFTE_R16BE(ttf_data, rs_off);
-    if (!rs_rel_off) return false;
+    if (!rs_rel_off) return 0;
 
     uint32_t rs_base_off = sub_off + rs_rel_off;
     rs_off = rs_base_off;
@@ -7843,7 +7843,7 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
 */
 static void _sfte_wayland_write_cb(void *user_data, const char *data, size_t len) {
     sfte_wayland_app *app = (sfte_wayland_app *)user_data;
-    if (app->pty_fd > 0) write(app->pty_fd, data, len);
+    if (app->pty_fd) (void)write(app->pty_fd, data, len);
 }
 
 /*
@@ -8014,7 +8014,7 @@ static void _sfte_wayland_data_source_send(void *data, struct wl_data_source *sr
                                            const char *mime_type, int32_t fd) {
     (void)src, (void)mime_type;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
-    if (app->selection_text) write(fd, app->selection_text, strlen(app->selection_text));
+    if (app->selection_text) (void)write(fd, app->selection_text, strlen(app->selection_text));
 
     close(fd);
 }
@@ -8159,8 +8159,8 @@ static void _sfte_wayland_open_link_cb(void *user_data, const char *uri) {
     pid_t pid = fork();
     if (pid == 0) {
         if (fork() == 0) {
-            freopen("/dev/null", "w", stdout);
-            freopen("/dev/null", "w", stderr);
+            (void)freopen("/dev/null", "w", stdout);
+            (void)freopen("/dev/null", "w", stderr);
             execlp("xdg-open", "xdg-open", uri, NULL);
             exit(1);
         }
