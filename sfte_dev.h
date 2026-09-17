@@ -43,6 +43,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #include "vendor/stb_image.h"
 #endif  // !defined(SFTE_IMG_KITTY) || SFTE_IMG_KITTY
 
+#include <float.h>   // FLT_MAX
 #include <stddef.h>  // size_t
 #include <stdint.h>
 
@@ -91,7 +92,33 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_ASSERT
 #include <assert.h>
 #define SFTE_ASSERT(c, m) assert((c) && (m))
+#define SFTE_STATIC_ASSERT(c, m) _Static_assert(c, m)
 #endif  // !SFTE_ASSERT
+
+/*
+    Internal helper macro used to ensure the value set
+    for a macro is within predefined bounds [min;max].
+*/
+#define _SFTE_ENSURE_RANGE(val, min, max)                                                          \
+    SFTE_STATIC_ASSERT((val) >= (min) && (val) <= (max),                                           \
+                       #val " must be strictly between " #min " and " #max)
+
+/*
+    Internal helper macro used to ensure the dependencies
+    for a macro value were met.
+    Usage:
+
+    _SFTE_ENSURE_DEPS(dependent_macro, dependency1 && dependency2);
+*/
+#define _SFTE_ENSURE_DEPS(macro, dep)                                                              \
+    SFTE_STATIC_ASSERT(!(macro) || (dep), #macro " unmet dependencies: " #dep)
+
+typedef enum {
+    SFTE_LOG_LVL_PANIC,
+    SFTE_LOG_LVL_ERROR,
+    SFTE_LOG_LVL_WARN,
+    SFTE_LOG_LVL_INFO,
+} sfte_log_level;
 
 /*
     Available levels of severity:
@@ -103,6 +130,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_LOG_LEVEL
 #define SFTE_LOG_LEVEL SFTE_LOG_LVL_ERROR
 #endif  // SFTE_LOG_LEVEL
+_SFTE_ENSURE_RANGE(SFTE_LOG_LEVEL, SFTE_LOG_LVL_PANIC, SFTE_LOG_LVL_INFO);
 
 /*
     String prefixed to every log output.
@@ -119,8 +147,8 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 
 */
 #ifndef SFTE_LOG_FUNC
-#define SFTE_LOG_FUNC _sfte_log_default_func
-#endif  // SFTE_LOG_FUNC
+#define SFTE_LOG_FUNC _sfte_log_default_func /* fuzz skip */
+#endif                                       // SFTE_LOG_FUNC
 
 // =================================================================================================
 // >>term macros
@@ -139,6 +167,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_FOCUS
 #define SFTE_TERM_FOCUS 1
 #endif  // SFTE_TERM_FOCUS
+_SFTE_ENSURE_RANGE(SFTE_TERM_FOCUS, 0, 1);
 
 /*
     Initial terminal grid column size.
@@ -146,6 +175,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_INIT_COLS
 #define SFTE_TERM_INIT_COLS 80
 #endif  // SFTE_TERM_INIT_COLS
+_SFTE_ENSURE_RANGE(SFTE_TERM_INIT_COLS, 1, INT16_MAX);
 
 /*
     Initial terminal grid row size.
@@ -153,6 +183,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_INIT_ROWS
 #define SFTE_TERM_INIT_ROWS 24
 #endif  // SFTE_TERM_INIT_ROWS
+_SFTE_ENSURE_RANGE(SFTE_TERM_INIT_ROWS, 1, INT16_MAX);
 
 /*
     Number of bytes read from the PTY per poll event.
@@ -160,6 +191,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_PTY_BUF_SIZE
 #define SFTE_TERM_PTY_BUF_SIZE 4096
 #endif  // SFTE_TERM_PTY_BUF_SIZE
+_SFTE_ENSURE_RANGE(SFTE_TERM_PTY_BUF_SIZE, 1, UINT16_MAX);
 
 /*
     Tab stop interval in grid cells.
@@ -167,6 +199,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_TAB_WIDTH
 #define SFTE_TERM_TAB_WIDTH 8
 #endif  // SFTE_TERM_TAB_WIDTH
+_SFTE_ENSURE_RANGE(SFTE_TERM_TAB_WIDTH, 1, INT16_MAX);
 
 /*
     Enables procedural rendering for box drawing characters (U+2500 - U+257F).
@@ -175,6 +208,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_CUSTOM_BOXES
 #define SFTE_TERM_CUSTOM_BOXES 1
 #endif  // SFTE_TERM_CUSTOM_BOXES
+_SFTE_ENSURE_RANGE(SFTE_TERM_CUSTOM_BOXES, 0, 1);
 
 /*
     Enables standard terminal alternate screen buffer (used by TUIs extensively).
@@ -182,8 +216,9 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
     but CAN and WILL break TUIs rendering.
 */
 #ifndef SFTE_TERM_ALT_SCREEN
-#define SFTE_TERM_ALT_SCREEN 1
+#define SFTE_TERM_ALT_SCREEN 0
 #endif  // SFTE_TERM_ALT_SCREEN
+_SFTE_ENSURE_RANGE(SFTE_TERM_ALT_SCREEN, 0, 1);
 
 /*
     Defines frame rate during rendering (in frames per second).
@@ -192,18 +227,35 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_REFRESH_RATE
 #define SFTE_TERM_REFRESH_RATE 60
 #endif  // SFTE_TERM_REFRESH_RATE
+_SFTE_ENSURE_RANGE(SFTE_TERM_REFRESH_RATE, 1, 720);
+
+/*
+    Maintains a secondary pixel buffer to prevent tearing.
+    Can be disabled without any noticeable changes on minimal setups,
+    lowering the memory usage (and requiring one less memcpy in hot path).
+    NOTE:
+    Needs to be enabled for cursor trails and screen buffer transitions.
+*/
+#ifndef SFTE_TERM_DOUBLE_BUFFER
+#define SFTE_TERM_DOUBLE_BUFFER 1
+#endif  // SFTE_TERM_DOUBLE_BUFFER
+_SFTE_ENSURE_RANGE(SFTE_TERM_DOUBLE_BUFFER, 0, 1);
 
 /*
     Enables scrolling animation on TUI open/close (alt screen toggle).
+    Obviously requires `SFTE_TERM_ALT_SCREEN` to be enabled to work.
 
     NOTE:
     This is an experimental feature.
     It makes the animation toggle on EVERY alt screen switch.
     It's purely sugar candy, might slightly affect the CPU usage.
+    It also doesn't work if inside tmux.
 */
 #ifndef SFTE_TERM_ANIMATE_SCREEN
 #define SFTE_TERM_ANIMATE_SCREEN 0
 #endif  // SFTE_TERM_ANIMATE_SCREEN
+_SFTE_ENSURE_RANGE(SFTE_TERM_ANIMATE_SCREEN, 0, 1);
+_SFTE_ENSURE_DEPS(SFTE_TERM_ANIMATE_SCREEN, SFTE_TERM_ALT_SCREEN &&SFTE_TERM_DOUBLE_BUFFER);
 
 /*
     Duration of the scrolling animation on TUI open/close (alt screen toggle).
@@ -211,6 +263,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_ANIM_DUR_MS
 #define SFTE_TERM_ANIM_DUR_MS 250.0f
 #endif  // SFTE_TERM_ANIM_DUR_MS
+_SFTE_ENSURE_RANGE(SFTE_TERM_ANIM_DUR_MS, 0.0f, FLT_MAX);
 
 /*
     Enables text reflow when resizing the terminal window.
@@ -219,25 +272,17 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_REFLOW
 #define SFTE_TERM_REFLOW 1
 #endif  // SFTE_TERM_REFLOW
-
-/*
-    Maintains a secondary pixel buffer to prevent tearing.
-    Can be disabled without any noticeable changes on minimal setups,
-    lowering the memory usage (and requiring one less memcpy in hot path).
-    NOTE:
-    Needs to be enabled for cursor trails and (WIP) screen buffer transitions.
-*/
-#ifndef SFTE_TERM_DOUBLE_BUFFER
-#define SFTE_TERM_DOUBLE_BUFFER 1
-#endif  // SFTE_TERM_DOUBLE_BUFFER
+_SFTE_ENSURE_RANGE(SFTE_TERM_REFLOW, 0, 1);
 
 /*
     Maximum lines of scrollback history kept in memory.
     Increasing it WILL affect the memory footprint size.
+    Setting it to 0 disables scrollback logic entirely.
 */
 #ifndef SFTE_TERM_SCROLLBACK_CAP
 #define SFTE_TERM_SCROLLBACK_CAP 2000
 #endif  // SFTE_TERM_SCROLLBACK_CAP
+_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLLBACK_CAP, 0, INT32_MAX);
 
 /*
     Determines if `clear` commands (CSI 3 J) actually wipe the scrollback buffer.
@@ -246,6 +291,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_SCROLLBACK_CLEAR
 #define SFTE_TERM_SCROLLBACK_CLEAR 1
 #endif  // SFTE_TERM_SCROLLBACK_CLEAR
+_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLLBACK_CLEAR, 0, 1);
 
 /*
     Number of lines to shift per mouse wheel / trackpad scroll tick.
@@ -256,6 +302,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_SCROLL_STEP
 #define SFTE_TERM_SCROLL_STEP 3
 #endif  // SFTE_TERM_SCROLL_STEP
+_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLL_STEP, 0, INT32_MAX);
 
 /*
     Enables smooth text scrolling.
@@ -265,6 +312,8 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_SCROLL_SMOOTH
 #define SFTE_TERM_SCROLL_SMOOTH 1
 #endif  // SFTE_TERM_SCROLL_SMOOTH
+_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLL_SMOOTH, 0, 1);
+_SFTE_ENSURE_DEPS(SFTE_TERM_SCROLL_SMOOTH, SFTE_TERM_SCROLLBACK_CAP);
 
 /*
     Affects how fast the scroll smooths to its target position.
@@ -272,6 +321,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_SCROLL_DECAY
 #define SFTE_TERM_SCROLL_DECAY 0.05f
 #endif  // SFTE_TERM_SCROLL_DECAY
+_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLL_DECAY, 0.0f, FLT_MAX);
 
 /*
     Narrows the allowed characters range to ASCII, lowering the memory usage.
@@ -280,6 +330,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_TERM_ASCII_CHARSET
 #define SFTE_TERM_ASCII_CHARSET 0
 #endif  // SFTE_TERM_ASCII_CHARSET
+_SFTE_ENSURE_RANGE(SFTE_TERM_ASCII_CHARSET, 0, 1);
 
 // =================================================================================================
 // >>window macros
@@ -291,6 +342,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_WINDOW_PAD_X
 #define SFTE_WINDOW_PAD_X 8
 #endif  // SFTE_WINDOW_PAD_X
+_SFTE_ENSURE_RANGE(SFTE_WINDOW_PAD_X, 0, INT32_MAX);
 
 /*
     Vertical padding around the terminal grid in pixels.
@@ -298,6 +350,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_WINDOW_PAD_Y
 #define SFTE_WINDOW_PAD_Y 8
 #endif  // SFTE_WINDOW_PAD_Y
+_SFTE_ENSURE_RANGE(SFTE_WINDOW_PAD_Y, 0, INT32_MAX);
 
 // =================================================================================================
 // >>color macros
@@ -309,6 +362,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_COLOR_TRUECOLOR
 #define SFTE_COLOR_TRUECOLOR 1
 #endif  // SFTE_COLOR_TRUECOLOR
+_SFTE_ENSURE_RANGE(SFTE_COLOR_TRUECOLOR, 0, 1);
 
 /*
     Default background color (RGB888).
@@ -316,6 +370,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_COLOR_BG
 #define SFTE_COLOR_BG 0x000000
 #endif  // SFTE_COLOR_BG
+_SFTE_ENSURE_RANGE(SFTE_COLOR_BG, 0x000000, 0xFFFFFF);
 
 /*
     Default text foreground color (text and underlines, if applicable).
@@ -324,6 +379,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_COLOR_FG
 #define SFTE_COLOR_FG 0xFFFFFF
 #endif  // SFTE_COLOR_FG
+_SFTE_ENSURE_RANGE(SFTE_COLOR_FG, 0x000000, 0xFFFFFF);
 
 /*
     Background opacity (0x00 transparent to 0xFF opaque).
@@ -331,6 +387,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 #ifndef SFTE_COLOR_BG_OPACITY
 #define SFTE_COLOR_BG_OPACITY 0xFF
 #endif  // SFTE_COLOR_BG_OPACITY
+_SFTE_ENSURE_RANGE(SFTE_COLOR_BG_OPACITY, 0x00, 0xFF);
 
 /*
     16-color ANSI fallback palette.
@@ -390,7 +447,7 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
 static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #else  // SFTE_FONT_CUSTOM_BACKEND
 #if !defined(SFTE_FONT_INIT) || !defined(SFTE_FONT_GET_SCALE) || !defined(SFTE_FONT_VMETRICS) ||   \
-    !defined(SFTE_FONT_BOUNDS) || !defined(SFTE_FONT_BAKE) || !define(SFTE_FONT_GET_ID)
+    !defined(SFTE_FONT_BOUNDS) || !defined(SFTE_FONT_BAKE) || !defined(SFTE_FONT_GET_ID)
 #error                                                                                             \
     "SFTE_FONT_CUSTOM_BACKEND requires defining all 6 macro hooks: INIT, GET_SCALE, VMETRICS, BOUNDS, BAKE and GET_ID."
 #endif  // !defined(SFTE_FONT_INIT) || !defined(SFTE_FONT_GET_SCALE) || !defined(SFTE_FONT_VMETRICS)
@@ -403,13 +460,15 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_DEFAULT_SIZE
 #define SFTE_FONT_DEFAULT_SIZE 12.0f
 #endif  // SFTE_FONT_DEFAULT_SIZE
+_SFTE_ENSURE_RANGE(SFTE_FONT_DEFAULT_SIZE, 1.0f, FLT_MAX);
 
 /*
     Minimum size of the font in pixels.
 */
 #ifndef SFTE_FONT_MIN_SIZE
-#define SFTE_FONT_MIN_SIZE 4.0f
+#define SFTE_FONT_MIN_SIZE 1.0f
 #endif  // SFTE_FONT_MIN_SIZE
+_SFTE_ENSURE_RANGE(SFTE_FONT_MIN_SIZE, 0.1f, SFTE_FONT_DEFAULT_SIZE);
 
 /*
     Maximum size of the font in pixels.
@@ -417,6 +476,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_MAX_SIZE
 #define SFTE_FONT_MAX_SIZE 96.0f
 #endif  // SFTE_FONT_MAX_SIZE
+_SFTE_ENSURE_RANGE(SFTE_FONT_MAX_SIZE, SFTE_FONT_DEFAULT_SIZE, FLT_MAX);
 
 /*
     Enables font ligatures support.
@@ -424,6 +484,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_LIGATURES
 #define SFTE_FONT_LIGATURES 1
 #endif  // SFTE_FONT_LIGATURES
+_SFTE_ENSURE_RANGE(SFTE_FONT_LIGATURES, 0, 1);
 
 /*
     Maximum amount of lookup indices for a ligature shaper feature.
@@ -431,6 +492,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_MAX_LIGATURE_LOOKUPS
 #define SFTE_FONT_MAX_LIGATURE_LOOKUPS 256
 #endif  // SFTE_FONT_MAX_LIGATURE_LOOKUPS
+_SFTE_ENSURE_RANGE(SFTE_FONT_MAX_LIGATURE_LOOKUPS, 1, UINT16_MAX);
 
 /*
     Maximum amount of subtables per lookup for ligatures.
@@ -438,6 +500,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_MAX_LIGATURE_SUBTABLES
 #define SFTE_FONT_MAX_LIGATURE_SUBTABLES 16
 #endif  // SFTE_FONT_MAX_LIGATURE_SUBTABLES
+_SFTE_ENSURE_RANGE(SFTE_FONT_MAX_LIGATURE_SUBTABLES, 1, UINT16_MAX);
 
 /*
     Maximum amount of records for ligatures.
@@ -445,6 +508,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_MAX_LIGATURE_RECORDS
 #define SFTE_FONT_MAX_LIGATURE_RECORDS 8
 #endif  // SFTE_FONT_MAX_LIGATURE_RECORDS
+_SFTE_ENSURE_RANGE(SFTE_FONT_MAX_LIGATURE_RECORDS, 1, UINT16_MAX);
 
 /*
     Max number of fallback fonts (primary + fallbacks).
@@ -452,10 +516,11 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_MAX_COUNT
 #define SFTE_FONT_MAX_COUNT 4
 #endif  // SFTE_FONT_MAX_COUNT
+_SFTE_ENSURE_RANGE(SFTE_FONT_MAX_COUNT, 1, INT8_MAX);
 
 /*
     Font oversample scale.
-    If <= 1, no oversampling occurs.
+    If set to 1, no oversampling occurs.
 
     NOTE:
     To avoid jagged baseline issues, blurring of horizontal stems
@@ -464,6 +529,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_OVERSAMPLE
 #define SFTE_FONT_OVERSAMPLE 1
 #endif  // SFTE_FONT_OVERSAMPLE
+_SFTE_ENSURE_RANGE(SFTE_FONT_OVERSAMPLE, 1, 16);
 
 /*
     Tweaks scaling per-font to match baseline heights.
@@ -481,6 +547,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_ZOOM
 #define SFTE_FONT_ZOOM 1
 #endif  // SFTE_FONT_ZOOM
+_SFTE_ENSURE_RANGE(SFTE_FONT_ZOOM, 0, 1);
 
 /*
     Enables double-width characters rendering (useful e.g. for Chinese symbols).
@@ -488,6 +555,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_WIDE_CHARS
 #define SFTE_FONT_WIDE_CHARS 1
 #endif  // SFTE_FONT_WIDE_CHARS
+_SFTE_ENSURE_RANGE(SFTE_FONT_WIDE_CHARS, 0, 1);
 
 /*
     Fixes clipping issues on symbols bigger than their cell by expanding the dirty render box.
@@ -498,6 +566,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_BLEED
 #define SFTE_FONT_BLEED 1
 #endif  // SFTE_FONT_BLEED
+_SFTE_ENSURE_RANGE(SFTE_FONT_BLEED, 0, 1);
 
 /*
     Dimensions for the 2D texture atlas caching rendered glyphs.
@@ -506,6 +575,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_ATLAS_SIZE
 #define SFTE_FONT_ATLAS_SIZE 1024
 #endif  // SFTE_FONT_ATLAS_SIZE
+_SFTE_ENSURE_RANGE(SFTE_FONT_ATLAS_SIZE, (int32_t)SFTE_FONT_MAX_SIZE, INT32_MAX);
 
 /*
     Maximum number of distinct characters cached in memory at once.
@@ -514,6 +584,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_GLYPH_CAP
 #define SFTE_FONT_GLYPH_CAP 4096
 #endif  // SFTE_FONT_GLYPH_CAP
+_SFTE_ENSURE_RANGE(SFTE_FONT_GLYPH_CAP, 1, UINT16_MAX);
 
 /*
     Maximum amount of combining (width = 0) glyphs on one cell.
@@ -521,10 +592,17 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_FONT_MAX_COMBINING
 #define SFTE_FONT_MAX_COMBINING 2
 #endif  // SFTE_FONT_MAX_COMBINING
+_SFTE_ENSURE_RANGE(SFTE_FONT_MAX_COMBINING, 0, 16);
 
 // =================================================================================================
 // >>cursor macros
 // =================================================================================================
+
+typedef enum sfte_cursor_style {
+    SFTE_CURSOR_STYLE_BLOCK,
+    SFTE_CURSOR_STYLE_UNDERLINE,
+    SFTE_CURSOR_STYLE_BAR,
+} sfte_cursor_style;
 
 /*
     Sets the default terminal cursor style.
@@ -541,6 +619,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CURSOR_STYLE
 #define SFTE_CURSOR_STYLE SFTE_CURSOR_STYLE_BLOCK
 #endif  // SFTE_CURSOR_STYLE
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_STYLE, SFTE_CURSOR_STYLE_BLOCK, SFTE_CURSOR_STYLE_BAR);
 
 /*
     Allows programs to dynamically change the cursor shape via escape sequences.
@@ -549,6 +628,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CURSOR_DYNAMIC
 #define SFTE_CURSOR_DYNAMIC 1
 #endif  // SFTE_CURSOR_DYNAMIC
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_DYNAMIC, 0, 1);
 
 /*
     Default cursor color (RGB888).
@@ -556,6 +636,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CURSOR_COLOR
 #define SFTE_CURSOR_COLOR 0xFFFFFF
 #endif  // SFTE_CURSOR_COLOR
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_COLOR, 0x000000, 0xFFFFFF);
 
 /*
     Determines the width of bar cursors and height of underline cursors relative to font size.
@@ -563,6 +644,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CURSOR_THICK_RATIO
 #define SFTE_CURSOR_THICK_RATIO 0.1f
 #endif  // SFTE_CURSOR_THICK_RATIO
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_THICK_RATIO, 0.0f, 1.0f);
 
 /*
     Enables cursor blinking.
@@ -571,10 +653,12 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CURSOR_BLINK
 #define SFTE_CURSOR_BLINK 1
 #endif  // SFTE_CURSOR_BLINK
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_BLINK, 0, 1);
 
 #ifndef SFTE_CURSOR_BLINK_RATE_MS
 #define SFTE_CURSOR_BLINK_RATE_MS 500
 #endif  // SFTE_CURSOR_BLINK_RATE_MS
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_BLINK_RATE_MS, 0, UINT32_MAX);
 
 /*
     Renders an animated smooth-scrolling ghost trail behind the cursor,
@@ -591,6 +675,8 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CURSOR_TRAIL
 #define SFTE_CURSOR_TRAIL 0
 #endif  // SFTE_CURSOR_TRAIL
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_TRAIL, 0, 1024);
+_SFTE_ENSURE_DEPS(SFTE_CURSOR_TRAIL, SFTE_TERM_DOUBLE_BUFFER);
 
 /*
     Affects how fast the trail disappears.
@@ -598,6 +684,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CURSOR_TRAIL_DECAY
 #define SFTE_CURSOR_TRAIL_DECAY 0.01f
 #endif  // SFTE_CURSOR_TRAIL_DECAY
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_TRAIL_DECAY, 0.01f, FLT_MAX);
 
 // =================================================================================================
 // >>underline macros
@@ -610,6 +697,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_UNDERLINE_EXTENDED
 #define SFTE_UNDERLINE_EXTENDED 1
 #endif  // SFTE_UNDERLINE_EXTENDED
+_SFTE_ENSURE_RANGE(SFTE_UNDERLINE_EXTENDED, 0, 1);
 
 /*
     Enables underlines with custom true-colors distint from the text (CSI 58:2::R:G:B m).
@@ -618,6 +706,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_UNDERLINE_COLORED
 #define SFTE_UNDERLINE_COLORED 1
 #endif  // SFTE_UNDERLINE_COLORED
+_SFTE_ENSURE_RANGE(SFTE_UNDERLINE_COLORED, 0, 1);
 
 /*
     Line thickness relative to font cell height.
@@ -625,6 +714,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_UNDERLINE_THICK_RATIO
 #define SFTE_UNDERLINE_THICK_RATIO 0.1f
 #endif  // SFTE_UNDERLINE_THICK_RATIO
+_SFTE_ENSURE_RANGE(SFTE_UNDERLINE_THICK_RATIO, 0.0f, 1.0f);
 
 /*
     Gap between text baseline and the underline relative to cell height.
@@ -632,6 +722,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_UNDERLINE_OFFSET_RATIO
 #define SFTE_UNDERLINE_OFFSET_RATIO 0.12f
 #endif  // SFTE_UNDERLINE_OFFSET_RATIO
+_SFTE_ENSURE_RANGE(SFTE_UNDERLINE_OFFSET_RATIO, -1.0f, 1.0f);
 
 // =================================================================================================
 // >>img macros
@@ -643,6 +734,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_IMG_SIXEL
 #define SFTE_IMG_SIXEL 1
 #endif  // SFTE_IMG_SIXEL
+_SFTE_ENSURE_RANGE(SFTE_IMG_SIXEL, 0, 1);
 
 /*
     Enables kitty image protocol support.
@@ -650,15 +742,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_IMG_KITTY
 #define SFTE_IMG_KITTY 1
 #endif  // SFTE_IMG_KITTY
-
-/*
-    Smallest allocated dimension size for a temporary pixel buffer
-    used while creating a sixel image from escape sequences.
-    Initial allocation is SFTE_IMG_SIXEL_INIT_SIZE x SFTE_IMG_SIXEL_INIT_SIZE.
-*/
-#ifndef SFTE_IMG_SIXEL_INIT_SIZE
-#define SFTE_IMG_SIXEL_INIT_SIZE 256
-#endif  // SFTE_IMG_SIXEL_INIT_SIZE
+_SFTE_ENSURE_RANGE(SFTE_IMG_KITTY, 0, 1);
 
 /*
     Maximum allocated dimension size for a temporary pixel buffer
@@ -669,15 +753,17 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_IMG_SIXEL_MAX_SIZE
 #define SFTE_IMG_SIXEL_MAX_SIZE 4096
 #endif  // SFTE_IMG_SIXEL_MAX_SIZE
+_SFTE_ENSURE_RANGE(SFTE_IMG_SIXEL_MAX_SIZE, 64, INT32_MAX);
 
 /*
-    Initial capacity of the base64 kitty encoding temporary buffer.
-    Due to how kitty sequences are structured, it can grow (gets doubled on OOM)
-    while reading the image data, since size is unknown during the read.
+    Smallest allocated dimension size for a temporary pixel buffer
+    used while creating a sixel image from escape sequences.
+    Initial allocation is SFTE_IMG_SIXEL_INIT_SIZE x SFTE_IMG_SIXEL_INIT_SIZE.
 */
-#ifndef SFTE_KITTY_B64_INIT_CAP
-#define SFTE_KITTY_B64_INIT_CAP 4096
-#endif  // SFTE_KITTY_B64_INIT_CAP
+#ifndef SFTE_IMG_SIXEL_INIT_SIZE
+#define SFTE_IMG_SIXEL_INIT_SIZE 64
+#endif  // SFTE_IMG_SIXEL_INIT_SIZE
+_SFTE_ENSURE_RANGE(SFTE_IMG_SIXEL_INIT_SIZE, 1, SFTE_IMG_SIXEL_MAX_SIZE);
 
 /*
     Maximum capacity of the base64 kitty encoding temporary buffer.
@@ -692,13 +778,17 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_KITTY_B64_MAX_CAP
 #define SFTE_KITTY_B64_MAX_CAP (16 * 1024 * 1024)
 #endif  // SFTE_KITTY_B64_MAX_CAP
+_SFTE_ENSURE_RANGE(SFTE_KITTY_B64_MAX_CAP, 128, SIZE_MAX);
 
 /*
-    Initial capacity of the shared image reference pool.
+    Initial capacity of the base64 kitty encoding temporary buffer.
+    Due to how kitty sequences are structured, it can grow (gets doubled on OOM)
+    while reading the image data, since size is unknown during the read.
 */
-#ifndef SFTE_IMG_POOL_INIT_CAP
-#define SFTE_IMG_POOL_INIT_CAP 16
-#endif  // SFTE_IMG_POOL_INIT_CAP
+#ifndef SFTE_KITTY_B64_INIT_CAP
+#define SFTE_KITTY_B64_INIT_CAP 128
+#endif  // SFTE_KITTY_B64_INIT_CAP
+_SFTE_ENSURE_RANGE(SFTE_KITTY_B64_INIT_CAP, 1, SFTE_KITTY_B64_MAX_CAP);
 
 /*
     Maximum capacity of the shared image reference pool.
@@ -707,13 +797,15 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_IMG_POOL_MAX_CAP
 #define SFTE_IMG_POOL_MAX_CAP 1024
 #endif  // SFTE_IMG_POOL_MAX_CAP
+_SFTE_ENSURE_RANGE(SFTE_IMG_POOL_MAX_CAP, 8, UINT32_MAX);
 
 /*
-    Initial capacity of active viewport placements.
+    Initial capacity of the shared image reference pool.
 */
-#ifndef SFTE_IMG_PLACEMENT_INIT_CAP
-#define SFTE_IMG_PLACEMENT_INIT_CAP 32
-#endif  // SFTE_IMG_PLACEMENT_INIT_CAP
+#ifndef SFTE_IMG_POOL_INIT_CAP
+#define SFTE_IMG_POOL_INIT_CAP 8
+#endif  // SFTE_IMG_POOL_INIT_CAP
+_SFTE_ENSURE_RANGE(SFTE_IMG_POOL_INIT_CAP, 1, SFTE_IMG_POOL_MAX_CAP);
 
 /*
     Maximum capacity of active viewport placements.
@@ -722,6 +814,15 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_IMG_PLACEMENT_MAX_CAP
 #define SFTE_IMG_PLACEMENT_MAX_CAP 4096
 #endif  // SFTE_IMG_PLACEMENT_MAX_CAP
+_SFTE_ENSURE_RANGE(SFTE_IMG_PLACEMENT_MAX_CAP, 16, UINT32_MAX);
+
+/*
+    Initial capacity of active viewport placements.
+*/
+#ifndef SFTE_IMG_PLACEMENT_INIT_CAP
+#define SFTE_IMG_PLACEMENT_INIT_CAP 16
+#endif  // SFTE_IMG_PLACEMENT_INIT_CAP
+_SFTE_ENSURE_RANGE(SFTE_IMG_PLACEMENT_INIT_CAP, 1, SFTE_IMG_PLACEMENT_MAX_CAP);
 
 // =================================================================================================
 // >>input macros
@@ -734,6 +835,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_INPUT_MOUSE
 #define SFTE_INPUT_MOUSE 1
 #endif  // SFTE_INPUT_MOUSE
+_SFTE_ENSURE_RANGE(SFTE_INPUT_MOUSE, 0, 1);
 
 /*
     Enables text selection.
@@ -745,6 +847,8 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_INPUT_SELECTION
 #define SFTE_INPUT_SELECTION 1
 #endif  // SFTE_INPUT_SELECTION
+_SFTE_ENSURE_RANGE(SFTE_INPUT_SELECTION, 0, 1);
+_SFTE_ENSURE_DEPS(SFTE_INPUT_SELECTION, SFTE_INPUT_MOUSE);
 
 /*
     Enables kitty extended keyboard protocol.
@@ -753,6 +857,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_INPUT_KITTY
 #define SFTE_INPUT_KITTY 1
 #endif  // SFTE_INPUT_KITTY
+_SFTE_ENSURE_RANGE(SFTE_INPUT_KITTY, 0, 1);
 
 /*
     Enables OSC 8 clickable terminal hyperlinks.
@@ -760,13 +865,8 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_INPUT_HYPERLINKS
 #define SFTE_INPUT_HYPERLINKS 1
 #endif  // SFTE_INPUT_HYPERLINKS
-
-/*
-    Initial dynamic buffer count for hyperlinks.
-*/
-#ifndef SFTE_INPUT_HYPERLINKS_INIT_CAP
-#define SFTE_INPUT_HYPERLINKS_INIT_CAP 128
-#endif  // SFTE_INPUT_HYPERLINKS_POOL_INIT_CAP
+_SFTE_ENSURE_RANGE(SFTE_INPUT_HYPERLINKS, 0, 1);
+_SFTE_ENSURE_DEPS(SFTE_INPUT_HYPERLINKS, SFTE_INPUT_MOUSE);
 
 /*
     Maximum dynamic buffer count for hyperlinks.
@@ -775,6 +875,15 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_INPUT_HYPERLINKS_MAX_CAP
 #define SFTE_INPUT_HYPERLINKS_MAX_CAP 65535
 #endif  // SFTE_INPUT_HYPERLINKS_MAX_CAP
+_SFTE_ENSURE_RANGE(SFTE_INPUT_HYPERLINKS_MAX_CAP, 1, UINT32_MAX);
+
+/*
+    Initial dynamic buffer count for hyperlinks.
+*/
+#ifndef SFTE_INPUT_HYPERLINKS_INIT_CAP
+#define SFTE_INPUT_HYPERLINKS_INIT_CAP 128
+#endif  // SFTE_INPUT_HYPERLINKS_POOL_INIT_CAP
+_SFTE_ENSURE_RANGE(SFTE_INPUT_HYPERLINKS_INIT_CAP, 1, SFTE_INPUT_HYPERLINKS_MAX_CAP);
 
 // =================================================================================================
 // >>clipboard macros
@@ -786,6 +895,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CLIPBOARD
 #define SFTE_CLIPBOARD 1
 #endif  // SFTE_CLIPBOARD
+_SFTE_ENSURE_RANGE(SFTE_CLIPBOARD, 0, 1);
 
 /*
     Maximum buffer size to copy at once.
@@ -793,6 +903,7 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CLIPBOARD_BUF_SIZE
 #define SFTE_CLIPBOARD_BUF_SIZE 4096
 #endif  // SFTE_CLIPBOARD_BUF_SIZE
+_SFTE_ENSURE_RANGE(SFTE_CLIPBOARD_BUF_SIZE, 1, SIZE_MAX);
 
 /*
     Allows host applications to read/write the clipboard via OSC 52.
@@ -801,17 +912,12 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_CLIPBOARD_OSC52
 #define SFTE_CLIPBOARD_OSC52 1
 #endif  // SFTE_CLIPBOARD_OSC52
+_SFTE_ENSURE_RANGE(SFTE_CLIPBOARD_OSC52, 0, 1);
+_SFTE_ENSURE_DEPS(SFTE_CLIPBOARD_OSC52, SFTE_CLIPBOARD);
 
 // =================================================================================================
 // >>osc macros
 // =================================================================================================
-
-/*
-    Initial size of OSC payload buffer.
-*/
-#ifndef SFTE_OSC_INIT_CAP
-#define SFTE_OSC_INIT_CAP 1024
-#endif  // SFTE_OSC_INIT_CAP
 
 /*
     Maximum size of OSC payload buffer.
@@ -820,6 +926,15 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #ifndef SFTE_OSC_MAX_CAP
 #define SFTE_OSC_MAX_CAP (16 * 1024 * 1024)
 #endif  // SFTE_OSC_MAX_CAP
+_SFTE_ENSURE_RANGE(SFTE_OSC_MAX_CAP, 1, SIZE_MAX);
+
+/*
+    Initial size of OSC payload buffer.
+*/
+#ifndef SFTE_OSC_INIT_CAP
+#define SFTE_OSC_INIT_CAP 1024
+#endif  // SFTE_OSC_INIT_CAP
+_SFTE_ENSURE_RANGE(SFTE_OSC_INIT_CAP, 1, SFTE_OSC_MAX_CAP);
 
 // =================================================================================================
 // >>modifiers and shortcuts macros
