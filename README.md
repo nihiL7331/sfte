@@ -6,7 +6,84 @@
 
 ---
 
-<div align="center">single-file terminal emulator written in C11.</div>
+<div align="center">single-file terminal emulator (library) written in C11.</div>
+
+## Features
+
+- **Lightweight** - as low as 60KB binary size with <10MB RAM usage
+- **Customizable** - over 80 configurable macros that actually affect performance
+- **One-size-fits-all** - can be used on everything from microcontrollers to daily-driven machines
+- ***(Almost)* dependency-free** - dependencies are minimized with crucial ones being inlined.
+- **Capable** - supports Kitty graphics, Sixel images, True Color, font fallbacks, styled and colored underlines.
+- **Smooth** - supports multiple 'eye-candy' features: buffer transitions, cursor trail, etc.
+
+## Platforms
+
+Currently, **sfte** only supports Wayland as a native experience.
+That being said, custom backends are supported, allowing it to be ported to anything as easily as possible.
+
+Planned supported platforms are:
+
+- macOS,
+- X11 for legacy support,
+- [sokol](https://github.com/floooh/sokol) for easy game engine embedding.
+
+## Installing
+
+### Prerequisites
+
+- Any C compiler supporting C11+ standard
+- Development headers for `wayland-client` and `xkbcommon`
+
+### Getting started
+
+1. Clone the repository.
+
+```sh
+git clone https://github.com/nihiL7331/sfte.git --depth=1
+cd sfte
+```
+
+2. Compile the build binary (nob).
+
+```sh
+cc nob.c -o nob
+```
+
+3. Run the build binary with the `install` argument.
+
+```sh
+./nob install
+```
+
+## Customization
+
+**sfte** relies heavily on customization.
+By default, it comes with minimal, sensible configuration.
+
+It is configured by defining macros inside `config.c`, taking inspiration from `st`.
+When you build the project for the first time, a `config.c` is generated.
+A complete description of all override macros can be found directly inside `sfte.h`.
+
+When any changes are done, **sfte** needs to be recompiled for it to apply.
+
+### Why handle the customization this way?
+
+It's extremely simple. No parsing is needed, and everything is handled during the compilation time.
+It allows the compiler to strip away any disabled portions of code, maximizing the performance.
+The terminal only does what it has to do, nothing more.
+
+It also fits the single-file premise of this project, to compile and run **sfte** all that is needed
+are the prerequisites, `nob` binary, `sfte.h` and `config.c`. There's no massive 100MB artifact,
+so everything e.g. can be stored in a dotfiles repository.
+
+## Dependencies
+
+**sfte** tries to use as few dependencies as possible.
+There are still a couple of mandatory ones, which were hard to get rid of, hence they got inlined.
+
+- [`stb_truetype.h`](https://github.com/nothings/stb/blob/master/stb_truetype.h)
+- [`stb_image.h`](https://github.com/nothings/stb/blob/master/stb_image.h)
 
 ## License
 
