@@ -78,6 +78,8 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 // >>system/memory macros
 // =================================================================================================
 
+typedef struct sfte_ctx sfte_ctx;
+
 /*
     Memory allocation macro hooks.
 */
@@ -957,8 +959,6 @@ typedef union {
     float f;
     const void *v;
 } sfte_arg;
-
-typedef struct sfte_ctx sfte_ctx;
 
 typedef struct {
     uint32_t mod_mask;
@@ -8829,6 +8829,9 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
     sfte_ctx *ctx = (sfte_ctx *)SFTE_CALLOC(1, sizeof(sfte_ctx));
     SFTE_ASSERT(ctx, "failed to allocate core context");
 
+    void *stack_back_buf = SFTE_MALLOC(SFTE_MEM_STACK_SIZE);
+    _sfte_mem_stack_init(&ctx->stack, stack_back_buf, SFTE_MEM_STACK_SIZE);
+
     ctx->write_cb = write_fn;
     ctx->user_data = user_data;
 
@@ -8927,6 +8930,7 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
 void sfte_free(sfte_ctx *ctx) {
     if (!ctx) return;
 
+    SFTE_FREE(ctx->stack.buf);
     SFTE_FREE(ctx->term.tab_stops);
 
 #define FREE_CACHE(type)                                                                           \
