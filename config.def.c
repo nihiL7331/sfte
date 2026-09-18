@@ -4,7 +4,7 @@
     NOTE:
     This file is automatically copied to config.c on first build.
     Edit config.c to customize your terminal settings and font paths.
-    To apply a change, you need to recompile the project using `cc nob.c -o nob && ./nob`.
+    To apply a change, you need to recompile the project using `cc nob.c -o nob && ./nob install`.
 */
 
 // #define SFTE_COLOR_BG_OPACITY 0xEE
@@ -15,7 +15,11 @@
 // ... other options
 
 #define SFTE_IMPL
+#ifdef SFTE_DEV_ENV
+#include "sfte_dev.h"
+#else  // !SFTE_DEV_ENV
 #include "sfte.h"
+#endif  // !SFTE_DEV_ENV
 
 int main(void) {
     sfte_wayland_app *app = sfte_wayland_init();
