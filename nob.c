@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
 
     nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-O3", "-flto=auto", "-march=native", "config.c",
                    "-o", "sfte", "-lwayland-client", "-lrt", "-lm", "-D_GNU_SOURCE", "-lutil",
-                   "-lxkbcommon");
+                   "-lxkbcommon", "-std=c11");
 
     if (!nob_cmd_run_sync(cmd)) return 1;
 
