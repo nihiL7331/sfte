@@ -150,6 +150,18 @@ _SFTE_ENSURE_RANGE(SFTE_LOG_LEVEL, SFTE_LOG_LVL_PANIC, SFTE_LOG_LVL_INFO);
 #define SFTE_LOG_FUNC _sfte_log_default_func /* fuzz skip */
 #endif                                       // SFTE_LOG_FUNC
 
+/*
+    Maximum size of the global scratch stack in bytes.
+    Used for temporary allocations during OSC parsing, Sixel and Kitty image processing.
+
+    WARN:
+    Setting this value too low might cause unexpected issues.
+*/
+#ifndef SFTE_MEM_STACK_SIZE
+#define SFTE_MEM_STACK_SIZE (1024 * 1024 * 4)
+#endif  // SFTE_MEM_STACK_SIZE
+_SFTE_ENSURE_RANGE(SFTE_MEM_STACK_SIZE, 1024, INT32_MAX);
+
 // =================================================================================================
 // >>term macros
 // =================================================================================================
@@ -216,7 +228,7 @@ _SFTE_ENSURE_RANGE(SFTE_TERM_CUSTOM_BOXES, 0, 1);
     but CAN and WILL break TUIs rendering.
 */
 #ifndef SFTE_TERM_ALT_SCREEN
-#define SFTE_TERM_ALT_SCREEN 0
+#define SFTE_TERM_ALT_SCREEN 1
 #endif  // SFTE_TERM_ALT_SCREEN
 _SFTE_ENSURE_RANGE(SFTE_TERM_ALT_SCREEN, 0, 1);
 
@@ -1462,6 +1474,12 @@ static inline uint64_t _sfte_time_ms(void) {
 // =================================================================================================
 // >>internal data structures
 // =================================================================================================
+typedef struct sfte_stack {
+    uint8_t *buf;
+    size_t cap;
+    size_t off;
+} sfte_stack;
+
 #ifndef SFTE_NO_LOGGING
 typedef struct sfte_logger {
     void (*func)(const char *tag,  // Always "sfte"
@@ -1871,6 +1889,7 @@ typedef struct {
 */
 struct sfte_ctx {
     sfte_term term;
+    sfte_stack stack;
     sfte_font font;
 #ifndef SFTE_NO_LOGGING
     sfte_logger logger;
@@ -2040,6 +2059,14 @@ typedef enum sfte_underline_style {
 } _sfte_underline_style;
 
 // -------------------------------------------------------------------------------------------------
+// >mem
+// -------------------------------------------------------------------------------------------------
+static inline void _sfte_mem_stack_init(sfte_stack *stack, void *back_buf, size_t cap);
+static inline void *_sfte_mem_stack_alloc(sfte_stack *stack, size_t size, size_t align);
+static inline void _sfte_mem_stack_rewind(sfte_stack *stack, size_t off);
+static inline size_t _sfte_mem_stack_save(sfte_stack *stack);
+
+// -------------------------------------------------------------------------------------------------
 // >log
 // -------------------------------------------------------------------------------------------------
 #ifndef SFTE_NO_LOGGING
@@ -2096,7 +2123,7 @@ static inline void _sfte_grid_dirty_trail(sfte_ctx *ctx);
 #endif  // SFTE_CURSOR_TRAIL
 static inline int16_t _sfte_grid_span(int32_t px_len, int32_t px_off, int32_t cell_px);
 #if SFTE_IMG_SIXEL
-static void _sfte_grid_clear_sixel(sfte_ctx *ctx, int32_t start_idx, int32_t cnt);
+static inline void _sfte_grid_clear_sixel(sfte_ctx *ctx, int32_t start_idx, int32_t cnt);
 #endif  // SFTE_IMG_SIXEL
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 static void _sfte_grid_scroll_images(sfte_ctx *ctx, int16_t lines, int16_t top, int16_t bot);
@@ -2404,7 +2431,7 @@ static void _sfte_wayland_loop(sfte_wayland_app *app);
 // #################################################################################################
 
 // =================================================================================================
-// >>memory
+// >>mem
 // =================================================================================================
 
 /*
@@ -2428,6 +2455,49 @@ static void _sfte_wayland_loop(sfte_wayland_app *app);
             }                                                                                      \
         }                                                                                          \
     } while (0)
+
+/*
+    Initializes the stack allocator with a pre-allocated `back_buf`.
+*/
+static inline void _sfte_mem_stack_init(sfte_stack *stack, void *back_buf, size_t cap) {
+    stack->buf = (uint8_t *)back_buf;
+    stack->cap = cap;
+    stack->off = 0;
+}
+
+/*
+    Allocates `size` bytes of memory in `stack`, aligned to `align` bytes.
+    `align` must be a power of 2.
+*/
+static inline void *_sfte_mem_stack_alloc(sfte_stack *stack, size_t size, size_t align) {
+    uintptr_t cur_ptr = (uintptr_t)stack->buf + stack->off;  // Current (unaligned) memory address
+    // `align` is a power of 2, in binary represented as 10...0.
+    // `align - 1` hence is represented in binary as     01...1.
+    // `(ptr + align - 1) & ~(align - 1)` ceils `ptr` to the closest multiple of `align`.
+    // ` ... + align - 1) ...` ensures that it will ceil instead of flooring
+    // `              ... & ~(align - 1)` floors `ptr` to the closest multiple of `align`.
+    uintptr_t off_pad = (align - 1);
+    uintptr_t align_ptr = (cur_ptr + off_pad) & ~off_pad;
+    size_t new_off = (align_ptr - (uintptr_t)stack->buf) + size;
+    if (new_off > stack->cap) return NULL;  // OOM
+    stack->off = new_off;
+    return (void *)align_ptr;
+}
+
+/*
+    Rewinds the stack offset to `off`.
+    If called with `off` = 0, resets the entire arena.
+*/
+static inline void _sfte_mem_stack_rewind(sfte_stack *stack, size_t off) {
+    stack->off = off;
+}
+
+/*
+    Returns the current offset of `stack`.
+*/
+static inline size_t _sfte_mem_stack_save(sfte_stack *stack) {
+    return stack->off;
+}
 
 // =================================================================================================
 // >>log
