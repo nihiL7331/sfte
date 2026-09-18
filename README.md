@@ -1,6 +1,6 @@
 # sfte
 
-Single-File Terminal Emulator written in C99.
+Single-File Terminal Emulator written in C11.
 
 ## Compilation
 
