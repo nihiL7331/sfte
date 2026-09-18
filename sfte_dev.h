@@ -969,14 +969,14 @@ typedef struct {
 
 #if SFTE_WAYLAND
 #if SFTE_FONT_ZOOM
-static void _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg);
-static void _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *arg);
+static inline void _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg);
+static inline void _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_FONT_ZOOM
 #if SFTE_TERM_SCROLLBACK_CAP
-static void _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg);
+static inline void _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_TERM_SCROLLBACK_CAP
-static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg);
-static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg);
+static inline void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg);
+static inline void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_WAYLAND
 
 #if SFTE_FONT_ZOOM && SFTE_WAYLAND
@@ -2070,10 +2070,10 @@ static inline size_t _sfte_mem_stack_save(sfte_stack *stack);
 // >log
 // -------------------------------------------------------------------------------------------------
 #ifndef SFTE_NO_LOGGING
-static void _sfte_log_default_func(const char *tag, sfte_log_level log_level, const char *msg,
-                                   uint32_t line_nr);
-static void _sfte_log(sfte_ctx *ctx, _sfte_log_item log_item, sfte_log_level log_level,
-                      uint32_t line_nr, ...);
+static inline void _sfte_log_default_func(const char *tag, sfte_log_level log_level,
+                                          const char *msg, uint32_t line_nr);
+static inline void _sfte_log(sfte_ctx *ctx, _sfte_log_item log_item, sfte_log_level log_level,
+                             uint32_t line_nr, ...);
 #endif  // !SFTE_NO_LOGGING
 
 // -------------------------------------------------------------------------------------------------
@@ -2088,8 +2088,8 @@ static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len
 // -------------------------------------------------------------------------------------------------
 static inline void _sfte_rune_stamp_cell(sfte_ctx *ctx, uint32_t idx, sfte_rune rune,
                                          uint8_t extra_attr);
-static void _sfte_rune_insert(sfte_ctx *ctx, sfte_rune rune);
-static uint8_t _sfte_rune_utf8_decode(sfte_ctx *ctx, uint8_t b);
+static inline void _sfte_rune_insert(sfte_ctx *ctx, sfte_rune rune);
+static inline uint8_t _sfte_rune_utf8_decode(sfte_ctx *ctx, uint8_t b);
 
 // -------------------------------------------------------------------------------------------------
 // >color
@@ -2111,8 +2111,8 @@ static inline uint32_t _sfte_grid_get_bg(sfte_cell *cell);
 static inline uint32_t _sfte_grid_get_fg(sfte_cell *cell);
 static inline uint32_t _sfte_grid_get_ul(sfte_cell *cell);
 #if SFTE_CURSOR_TRAIL || SFTE_INPUT_MOUSE
-static void _sfte_grid_from_px(sfte_ctx *ctx, int32_t px_x, int32_t px_y, int16_t *out_col,
-                               int32_t *out_logical_row, int16_t *out_screen_row);
+static inline void _sfte_grid_from_px(sfte_ctx *ctx, int32_t px_x, int32_t px_y, int16_t *out_col,
+                                      int32_t *out_logical_row, int16_t *out_screen_row);
 #endif  // SFTE_CURSOR_TRAIL || SFTE_INPUT_MOUSE
 static inline void _sfte_grid_dirty_rows(sfte_ctx *ctx, int32_t logical_row1, int32_t logical_row2);
 static inline void _sfte_grid_dirty_rect(sfte_ctx *ctx, int16_t start_col,
@@ -2126,21 +2126,21 @@ static inline int16_t _sfte_grid_span(int32_t px_len, int32_t px_off, int32_t ce
 static inline void _sfte_grid_clear_sixel(sfte_ctx *ctx, int32_t start_idx, int32_t cnt);
 #endif  // SFTE_IMG_SIXEL
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
-static void _sfte_grid_scroll_images(sfte_ctx *ctx, int16_t lines, int16_t top, int16_t bot);
+static inline void _sfte_grid_scroll_images(sfte_ctx *ctx, int16_t lines, int16_t top, int16_t bot);
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 #if SFTE_TERM_SCROLLBACK_CAP
-static void _sfte_grid_push_scrollback(sfte_ctx *ctx, int16_t lines);
+static inline void _sfte_grid_push_scrollback(sfte_ctx *ctx, int16_t lines);
 #endif  // SFTE_TERM_SCROLLBACK_CAP
 static inline void _sfte_grid_clear_cells(sfte_ctx *ctx, uint32_t start_idx, uint32_t cnt);
 static inline void _sfte_grid_clear_rows(sfte_ctx *ctx, int16_t start_row, int16_t cnt);
-static void _sfte_grid_scroll(sfte_ctx *ctx, int16_t lines);
+static inline void _sfte_grid_scroll(sfte_ctx *ctx, int16_t lines);
 static inline void _sfte_grid_check_wrap(sfte_ctx *ctx);
 #if SFTE_TERM_ALT_SCREEN || !SFTE_TERM_REFLOW
 static sfte_cell *_sfte_grid_resize_dumb_copy(sfte_cell *old_grid, int16_t old_cols,
                                               int16_t old_rows, int16_t new_cols, int16_t new_rows);
 #endif  // SFTE_TERM_ALT_SCREEN || !SFTE_TERM_REFLOW
-static void _sfte_grid_resize_tabs(sfte_ctx *ctx, int16_t old_cols, int16_t new_cols);
-static void _sfte_grid_resize(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows);
+static inline void _sfte_grid_resize_tabs(sfte_ctx *ctx, int16_t old_cols, int16_t new_cols);
+static inline void _sfte_grid_resize(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows);
 
 // -------------------------------------------------------------------------------------------------
 // >img
@@ -2154,7 +2154,7 @@ static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id);
 // >view
 // -------------------------------------------------------------------------------------------------
 #if SFTE_WINDOW_PAD_X || SFTE_WINDOW_PAD_Y
-static void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf);
+static inline void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf);
 #endif  // SFTE_WINDOW_PAD_X || SFTE_WINDOW_PAD_Y
 
 // -------------------------------------------------------------------------------------------------
@@ -2164,30 +2164,31 @@ static void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf);
 static inline uint8_t _sfte_input_is_selected(sfte_ctx *ctx, int16_t col, int16_t row);
 #endif  // SFTE_INPUT_SELECTION
 #if SFTE_INPUT_MOUSE
-static void _sfte_input_send_mouse_event(sfte_ctx *ctx, uint8_t btn, uint8_t is_release,
-                                         int16_t col, int16_t row, uint8_t is_motion);
+static inline void _sfte_input_send_mouse_event(sfte_ctx *ctx, uint8_t btn, uint8_t is_release,
+                                                int16_t col, int16_t row, uint8_t is_motion);
 #endif  // SFTE_INPUT_MOUSE
 
 // -------------------------------------------------------------------------------------------------
 // >reflow
 // -------------------------------------------------------------------------------------------------
 #if SFTE_TERM_REFLOW
-static void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell cell, uint8_t is_cursor);
+static inline void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell cell, uint8_t is_cursor);
 static inline int16_t _sfte_reflow_get_len(sfte_cell *row, int16_t cols, int16_t cursor_cx);
-static void _sfte_reflow_process_row(sfte_cell *row, int16_t cols, int16_t cursor_cx,
-                                     _sfte_reflow_state *st);
-static void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old, int16_t grid_off_old,
-                                          _sfte_reflow_state *st);
-static sfte_cell *_sfte_reflow_linearize(sfte_ctx *ctx, sfte_cell *main_old, int16_t grid_off_old,
-                                         int16_t new_cols, int16_t new_rows,
-                                         _sfte_reflow_state *st);
-static void _sfte_reflow_extract_view(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows,
-                                      int16_t target_cy, _sfte_reflow_state *st,
-                                      _sfte_resize_buffers *out);
-static _sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_ctx *ctx, sfte_cell *main_old,
-                                                          int16_t grid_off_old, int16_t new_cols,
-                                                          int16_t new_rows, int16_t target_cx,
-                                                          int16_t target_cy);
+static inline void _sfte_reflow_process_row(sfte_cell *row, int16_t cols, int16_t cursor_cx,
+                                            _sfte_reflow_state *st);
+static inline void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old,
+                                                 int16_t grid_off_old, _sfte_reflow_state *st);
+static inline sfte_cell *_sfte_reflow_linearize(sfte_ctx *ctx, sfte_cell *main_old,
+                                                int16_t grid_off_old, int16_t new_cols,
+                                                int16_t new_rows, _sfte_reflow_state *st);
+static inline void _sfte_reflow_extract_view(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows,
+                                             int16_t target_cy, _sfte_reflow_state *st,
+                                             _sfte_resize_buffers *out);
+static inline _sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_ctx *ctx, sfte_cell *main_old,
+                                                                 int16_t grid_off_old,
+                                                                 int16_t new_cols, int16_t new_rows,
+                                                                 int16_t target_cx,
+                                                                 int16_t target_cy);
 #endif  // SFTE_TERM_REFLOW
 
 // -------------------------------------------------------------------------------------------------
@@ -2195,21 +2196,21 @@ static _sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_ctx *ctx, sfte_ce
 // -------------------------------------------------------------------------------------------------
 #if SFTE_IMG_SIXEL
 static inline void _sfte_sixel_commit(sfte_ctx *ctx);
-static void _sfte_sixel_ensure_cap(sfte_ctx *ctx, int32_t req_w, int32_t req_h);
-static void _sfte_sixel_draw_pattern(sfte_ctx *ctx, uint8_t pattern, int32_t repeats);
+static inline void _sfte_sixel_ensure_cap(sfte_ctx *ctx, int32_t req_w, int32_t req_h);
+static inline void _sfte_sixel_draw_pattern(sfte_ctx *ctx, uint8_t pattern, int32_t repeats);
 static inline float _sfte_sixel_hue_to_rgb(float p, float q, float t);
 static inline uint32_t _sfte_sixel_hls_to_rgb(uint16_t h_deg, uint16_t l_pct, uint16_t s_pct);
-static void _sfte_sixel_apply_color(sfte_ctx *ctx);
-static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b);
-static void _sfte_sixel_deinit(sfte_ctx *ctx);
+static inline void _sfte_sixel_apply_color(sfte_ctx *ctx);
+static inline void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b);
+static inline void _sfte_sixel_deinit(sfte_ctx *ctx);
 #endif  // SFTE_IMG_SIXEL
 
 // -------------------------------------------------------------------------------------------------
 // >kitty
 // -------------------------------------------------------------------------------------------------
 #if SFTE_INPUT_KITTY
-size_t _sfte_kitty_kb_encode(sfte_ctx *ctx, sfte_key key, uint32_t codepoint, uint32_t mod_mask,
-                             char *out_buf, size_t max_bytes);
+static inline size_t _sfte_kitty_kb_encode(sfte_ctx *ctx, sfte_key key, uint32_t codepoint,
+                                           uint32_t mod_mask, char *out_buf, size_t max_bytes);
 #endif  // SFTE_INPUT_KITTY
 #if SFTE_IMG_KITTY
 static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int32_t src_wid, int32_t src_hei,
@@ -2261,7 +2262,7 @@ static inline void _sfte_csi_exec_scorc(sfte_ctx *ctx, uint16_t *p);
 #if SFTE_INPUT_KITTY
 static inline void _sfte_csi_exec_kitty(sfte_ctx *ctx, uint16_t *p);
 #endif  // SFTE_INPUT_KITTY
-static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd);
+static inline void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd);
 
 // -------------------------------------------------------------------------------------------------
 // >parser
@@ -2281,7 +2282,7 @@ static inline void _sfte_parser_esc_nel(sfte_ctx *ctx);
 static inline void _sfte_parser_hash_decaln(sfte_ctx *ctx);
 static inline void _sfte_parser_osc_dispatch(sfte_ctx *ctx, uint8_t terminator);
 static inline void _sfte_parser_dcs_dispatch(sfte_ctx *ctx, uint8_t terminator);
-static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b);
+static inline void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b);
 
 // -------------------------------------------------------------------------------------------------
 // >shaper
@@ -2363,11 +2364,12 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
                                                   _sfte_pass_info *passes,
                                                   sfte_damage_rect *out_dmg);
 static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, uint8_t src_a);
-static void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
-                                 int32_t y_off, uint32_t bg);
-static void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
-                                 int32_t y_off, sfte_rune rune, uint16_t glyph_id, uint8_t font_idx,
-                                 uint32_t fg, sfte_font_cache *target_cache);
+static inline void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
+                                        int32_t y_off, uint32_t bg);
+static inline void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
+                                        int32_t y_off, sfte_rune rune, uint16_t glyph_id,
+                                        uint8_t font_idx, uint32_t fg,
+                                        sfte_font_cache *target_cache);
 static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
                                                int32_t render_w, sfte_cell *vcell);
 static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
@@ -2378,8 +2380,9 @@ static inline void _sfte_render_line(sfte_ctx *ctx, void *px_buf, int32_t x0, in
 static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
                                             uint32_t col, uint32_t rune, int32_t y_off);
 #endif  // SFTE_TERM_CUSTOM_BOXES && !SFTE_TERM_ASCII_CHARSET
-static void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
-                                          int32_t y_off, sfte_cell *vcell, uint8_t is_cursor);
+static inline void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t col,
+                                                 int16_t row, int32_t y_off, sfte_cell *vcell,
+                                                 uint8_t is_cursor);
 static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
                                         int16_t vis_row, int32_t y_off);
 #if SFTE_FONT_LIGATURES
@@ -2398,32 +2401,32 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
 // >wayland
 // -------------------------------------------------------------------------------------------------
 #if SFTE_WAYLAND
-static void _sfte_wayland_write_cb(void *user_data, const char *data, size_t len);
-static void _sfte_wayland_pty_spawn(sfte_wayland_app *app);
-static void _sfte_wayland_pty_update(sfte_wayland_app *app);
+static inline void _sfte_wayland_write_cb(void *user_data, const char *data, size_t len);
+static inline void _sfte_wayland_pty_spawn(sfte_wayland_app *app);
+static inline void _sfte_wayland_pty_update(sfte_wayland_app *app);
 #if SFTE_FONT_ZOOM
-static void _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg);
-static void _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *dummy);
+static inline void _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg);
+static inline void _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *dummy);
 #endif  // SFTE_FONT_ZOOM
 #if SFTE_TERM_SCROLLBACK_CAP
-static void _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg);
+static inline void _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_TERM_SCROLLBACK_CAP
-static void _sfte_wayland_create_buffer(sfte_wayland_app *app);
+static inline void _sfte_wayland_create_buffer(sfte_wayland_app *app);
 #if SFTE_INPUT_HYPERLINKS
-static void _sfte_wayland_open_link_cb(void *user_data, const char *uri);
+static inline void _sfte_wayland_open_link_cb(void *user_data, const char *uri);
 #endif  // SFTE_INPUT_HYPERLINKS
-static void _sfte_wayland_load(sfte_wayland_app *app);
-static void _sfte_wayland_unload(sfte_wayland_app *app);
+static inline void _sfte_wayland_load(sfte_wayland_app *app);
+static inline void _sfte_wayland_unload(sfte_wayland_app *app);
 #if SFTE_CLIPBOARD
 #if SFTE_INPUT_SELECTION
 #if SFTE_CLIPBOARD_OSC52
-static void _sfte_wayland_osc52_clipboard_cb(void *user_data, char target, const char *data);
+static inline void _sfte_wayland_osc52_clipboard_cb(void *user_data, char target, const char *data);
 #endif  // SFTE_CLIPBOARD_OSC52
-static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg);
+static inline void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_INPUT_SELECTION
-static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg);
+static inline void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_CLIPBOARD
-static void _sfte_wayland_loop(sfte_wayland_app *app);
+static inline void _sfte_wayland_loop(sfte_wayland_app *app);
 #endif  // SFTE_WAYLAND
 
 // #################################################################################################
@@ -2510,8 +2513,8 @@ static inline size_t _sfte_mem_stack_save(sfte_stack *stack) {
     Default standard error logging sink.
     Outputs logs in format: ['tag':'line_nr']('log_level') 'msg'
 */
-static void _sfte_log_default_func(const char *tag, sfte_log_level log_level, const char *msg,
-                                   uint32_t line_nr) {
+static inline void _sfte_log_default_func(const char *tag, sfte_log_level log_level,
+                                          const char *msg, uint32_t line_nr) {
     const char *level_str = "???";
     switch (log_level) {
     case SFTE_LOG_LVL_PANIC: level_str = "PANIC"; break;
@@ -2532,8 +2535,8 @@ static void _sfte_log_default_func(const char *tag, sfte_log_level log_level, co
     This function is not called directly, instead its used by macros
    (`_SFTE_PANIC/ERROR/WARN/INFO`)
 */
-static void _sfte_log(sfte_ctx *ctx, _sfte_log_item log_item, sfte_log_level log_level,
-                      uint32_t line_nr, ...) {
+static inline void _sfte_log(sfte_ctx *ctx, _sfte_log_item log_item, sfte_log_level log_level,
+                             uint32_t line_nr, ...) {
     if (log_level > SFTE_LOG_LEVEL) return;
 
     char buf[_SFTE_LOG_MAX_MSG_LEN];
@@ -2643,7 +2646,7 @@ static inline void _sfte_rune_stamp_cell(sfte_ctx *ctx, uint32_t idx, sfte_rune 
     Double-width characters (these of width 2) if placed on the last column, the column
     is left blank, the line wraps early, and the character is placed on the next line.
 */
-static void _sfte_rune_insert(sfte_ctx *ctx, sfte_rune rune) {
+static inline void _sfte_rune_insert(sfte_ctx *ctx, sfte_rune rune) {
     int8_t w = _SFTE_CHAR_WIDTH(rune);
     if (w < 0) w = 1;
 
@@ -2719,7 +2722,7 @@ static void _sfte_rune_insert(sfte_ctx *ctx, sfte_rune rune) {
 
     If `SFTE_TERM_ASCII_CHARSET` is 1, skips UTF8 bytes to ensure they don't break the layout.
 */
-static uint8_t _sfte_rune_utf8_decode(sfte_ctx *ctx, uint8_t b) {
+static inline uint8_t _sfte_rune_utf8_decode(sfte_ctx *ctx, uint8_t b) {
     if (ctx->term.utf8_bytes_left > 0) {
         if ((b & 0xC0) == 0x80) {  // Continuation byte
 #if !SFTE_TERM_ASCII_CHARSET
@@ -2930,8 +2933,8 @@ static inline uint32_t _sfte_grid_get_ul(sfte_cell *cell) {
     `out_logical_row` includes scrollback offset (can be negative).
     `out_screen_row` is strictly clamped to the physical screen (0 to rows-1).
 */
-static void _sfte_grid_from_px(sfte_ctx *ctx, int32_t px_x, int32_t px_y, int16_t *out_col,
-                               int32_t *out_logical_row, int16_t *out_screen_row) {
+static inline void _sfte_grid_from_px(sfte_ctx *ctx, int32_t px_x, int32_t px_y, int16_t *out_col,
+                                      int32_t *out_logical_row, int16_t *out_screen_row) {
     int16_t c = _SFTE_CLAMP((px_x - SFTE_WINDOW_PAD_X) / ctx->font.cell_width, 0,
                             ctx->term.cols - 1);
     int16_t r = _SFTE_CLAMP((px_y - SFTE_WINDOW_PAD_Y) / ctx->font.cell_height, 0,
@@ -3031,7 +3034,7 @@ static inline int16_t _sfte_grid_span(int32_t px_len, int32_t px_off, int32_t ce
     Automatically frees Sixel image data if the reference count drops to 0.
     Kitty images are ignored as they require explicit terminal delete commands.
 */
-static void _sfte_grid_clear_sixel(sfte_ctx *ctx, int32_t start_idx, int32_t cnt) {
+static inline void _sfte_grid_clear_sixel(sfte_ctx *ctx, int32_t start_idx, int32_t cnt) {
     for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
         sfte_img_placement *p = &ctx->term.img_placements[i];
         if (!p->is_sixel) continue;
@@ -3076,7 +3079,8 @@ static void _sfte_grid_clear_sixel(sfte_ctx *ctx, int32_t start_idx, int32_t cnt
     Translates image placements up/down during screen scroll.
     Deletes images that scroll entirely out of the scrollback buffer.
 */
-static void _sfte_grid_scroll_images(sfte_ctx *ctx, int16_t lines, int16_t top, int16_t bot) {
+static inline void _sfte_grid_scroll_images(sfte_ctx *ctx, int16_t lines, int16_t top,
+                                            int16_t bot) {
     for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
         sfte_img_placement *p = &ctx->term.img_placements[i];
 #if SFTE_TERM_ALT_SCREEN
@@ -3107,7 +3111,7 @@ static void _sfte_grid_scroll_images(sfte_ctx *ctx, int16_t lines, int16_t top, 
 /*
     Pushes lines scrolling off the top of the screen into the ring buffer.
 */
-static void _sfte_grid_push_scrollback(sfte_ctx *ctx, int16_t lines) {
+static inline void _sfte_grid_push_scrollback(sfte_ctx *ctx, int16_t lines) {
 #if SFTE_TERM_ALT_SCREEN
     if (ctx->term.alt_active) return;
 #endif  // SFTE_TERM_ALT_SCREEN
@@ -3184,7 +3188,7 @@ static inline void _sfte_grid_clear_rows(sfte_ctx *ctx, int16_t start_row, int16
 
     Synchronizes image placements to scroll with the text.
 */
-static void _sfte_grid_scroll(sfte_ctx *ctx, int16_t lines) {
+static inline void _sfte_grid_scroll(sfte_ctx *ctx, int16_t lines) {
     int16_t top = ctx->term.scroll_top;
     int16_t bot = ctx->term.scroll_bot;
     int16_t height = bot - top + 1;
@@ -3299,7 +3303,7 @@ static sfte_cell *_sfte_grid_resize_dumb_copy(sfte_cell *old_grid, int16_t old_c
 /*
     Reallocates the tab stops array and populates new columns with default intervals.
 */
-static void _sfte_grid_resize_tabs(sfte_ctx *ctx, int16_t old_cols, int16_t new_cols) {
+static inline void _sfte_grid_resize_tabs(sfte_ctx *ctx, int16_t old_cols, int16_t new_cols) {
     uint8_t *new_tabs = (uint8_t *)SFTE_MALLOC(new_cols);
     SFTE_ASSERT(new_tabs, "failed to allocate new tab stops");
     for (int16_t i = 0; i < new_cols; ++i) {
@@ -3320,7 +3324,7 @@ static void _sfte_grid_resize_tabs(sfte_ctx *ctx, int16_t old_cols, int16_t new_
     If SFTE_TERM_REFLOW is disabled, performs a simple 2D truncation/padding copy.
     Alt-screen grids are always dumb-copied and never reflowed.
 */
-static void _sfte_grid_resize(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows) {
+static inline void _sfte_grid_resize(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows) {
     if (new_cols < 1 || new_rows < 1) return;
 
 #if SFTE_FONT_LIGATURES
@@ -3486,7 +3490,7 @@ static inline sfte_img *_sfte_img_find(sfte_ctx *ctx, uint32_t id) {
 /*
     Fills the padding regions around the terminal grid with the background color.
 */
-static void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf) {
+static inline void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf) {
     int32_t w = ctx->width;
     int32_t h = ctx->height;
     int32_t grid_w = ctx->term.cols * ctx->font.cell_width;
@@ -3566,8 +3570,8 @@ static inline uint8_t _sfte_input_is_selected(sfte_ctx *ctx, int16_t col, int16_
     Supports both legacy X10 (max coords 223) and modern SGR 1006 formats.
     Must be fed `screen_r` coordinates, never `logical_r` coordinates.
 */
-static void _sfte_input_send_mouse_event(sfte_ctx *ctx, uint8_t btn, uint8_t is_release,
-                                         int16_t col, int16_t row, uint8_t is_motion) {
+static inline void _sfte_input_send_mouse_event(sfte_ctx *ctx, uint8_t btn, uint8_t is_release,
+                                                int16_t col, int16_t row, uint8_t is_motion) {
     if (!ctx->term.mouse_mode) return;
 
     uint8_t encoded_btn = btn;
@@ -3617,7 +3621,7 @@ static void _sfte_input_send_mouse_event(sfte_ctx *ctx, uint8_t btn, uint8_t is_
 /*
     Pushes a single cell into the temporary linear buffer.
 */
-static void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell cell, uint8_t is_cursor) {
+static inline void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell cell, uint8_t is_cursor) {
 #if SFTE_FONT_WIDE_CHARS
     // If we're pushing a double-width character and we're at last column, wrap early.
     if ((cell.attr & _SFTE_ATTR_WIDE) && st->reflow_col == st->new_cols - 1) {
@@ -3681,8 +3685,8 @@ static inline int16_t _sfte_reflow_get_len(sfte_cell *row, int16_t cols, int16_t
 /*
     Processes a single row, extracting length, pushing cells, and handling cursor edge cases.
 */
-static void _sfte_reflow_process_row(sfte_cell *row, int16_t cols, int16_t cursor_col,
-                                     _sfte_reflow_state *st) {
+static inline void _sfte_reflow_process_row(sfte_cell *row, int16_t cols, int16_t cursor_col,
+                                            _sfte_reflow_state *st) {
     int16_t len = _sfte_reflow_get_len(row, cols, cursor_col);
 
     for (int16_t c = 0; c < len; ++c) _sfte_reflow_push(st, row[c], c == cursor_col);
@@ -3714,8 +3718,8 @@ static void _sfte_reflow_process_row(sfte_cell *row, int16_t cols, int16_t curso
     The active cursor can only exist on the live screen, so we pass `-1`
     during scrollback iteration to explicitly trim trailing whitespace on all historical lines.
 */
-static void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old, int16_t grid_off_old,
-                                          _sfte_reflow_state *st) {
+static inline void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old,
+                                                 int16_t grid_off_old, _sfte_reflow_state *st) {
 #if SFTE_TERM_SCROLLBACK_CAP
     for (int32_t i = 0; i < ctx->term.sb_len; ++i) {
         uint32_t ring_idx = (ctx->term.sb_head - ctx->term.sb_len + i + ctx->term.sb_cap) %
@@ -3776,9 +3780,9 @@ static sfte_cell *_sfte_reflow_linearize(sfte_ctx *ctx, sfte_cell *main_old, int
     Maps the linearized reflow buffer back into distinct 2D main and scrollback grids.
     Modifies `st->new_cy` to reflect its clamped viewport position.
 */
-static void _sfte_reflow_extract_view(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows,
-                                      int16_t target_row, _sfte_reflow_state *st,
-                                      _sfte_resize_buffers *out) {
+static inline void _sfte_reflow_extract_view(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows,
+                                             int16_t target_row, _sfte_reflow_state *st,
+                                             _sfte_resize_buffers *out) {
     (void)ctx;
     int32_t total_lines = st->reflow_row + (st->reflow_col > 0 ? 1 : 0);
 
@@ -3969,7 +3973,7 @@ static void _sfte_sixel_ensure_cap(sfte_ctx *ctx, int32_t req_w, int32_t req_h) 
     ASCII '?' (value 63) minus offset 63 = 000000 (all blank).
     ASCII '~' (value 126) minus offset 63 = 111111 (all solid).
 */
-static void _sfte_sixel_draw_pattern(sfte_ctx *ctx, uint8_t pattern, int32_t repeats) {
+static inline void _sfte_sixel_draw_pattern(sfte_ctx *ctx, uint8_t pattern, int32_t repeats) {
     int32_t max_x = ctx->sixel.x + repeats - 1;
     int32_t max_y = ctx->sixel.y + _SFTE_IMG_SIXEL_BAND_HEIGHT - 1;
 
@@ -4040,7 +4044,7 @@ static inline uint32_t _sfte_sixel_hls_to_rgb(uint16_t h_deg, uint16_t l_pct, ui
    parameter. If five parameters are provided, it defines a new color. Parameter values are as
    follows: #<idx>;<space>;<c1>;<c2>;<c3>. Color space is 1 for HLS, 2 for RGB.
 */
-static void _sfte_sixel_apply_color(sfte_ctx *ctx) {
+static inline void _sfte_sixel_apply_color(sfte_ctx *ctx) {
     if (ctx->sixel.param_idx == 0 && ctx->sixel.params[0] < 256)
         ctx->sixel.col_idx = ctx->sixel.params[0];
     else if (ctx->sixel.param_idx == 4) {
@@ -4075,7 +4079,7 @@ static void _sfte_sixel_apply_color(sfte_ctx *ctx) {
     needs to hand a byte back to SIXEL_GROUND, it uses a while-loop based on the `cont`
    variable.
 */
-static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b) {
+static inline void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b) {
     uint8_t cont = 1;
     while (cont) {
         cont = 0;
@@ -4132,7 +4136,7 @@ static void _sfte_sixel_parse_byte(sfte_ctx *ctx, uint8_t b) {
 /*
     Frees all sixel memory allocations.
 */
-static void _sfte_sixel_deinit(sfte_ctx *ctx) {
+static inline void _sfte_sixel_deinit(sfte_ctx *ctx) {
     if (ctx->term.img_pool) {
         for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i)
             if (ctx->term.img_pool[i].pixels) SFTE_FREE(ctx->term.img_pool[i].pixels);
@@ -4160,8 +4164,8 @@ static void _sfte_sixel_deinit(sfte_ctx *ctx) {
     `codepoint` is the raw UTF-32 character value of the key (if applicable).
     `mod_mask` is a bitmask of the active modifiers using SFTE_MOD_* definitions.
 */
-size_t _sfte_kitty_kb_encode(sfte_ctx *ctx, sfte_key key, uint32_t codepoint, uint32_t mod_mask,
-                             char *out_buf, size_t max_bytes) {
+static inline size_t _sfte_kitty_kb_encode(sfte_ctx *ctx, sfte_key key, uint32_t codepoint,
+                                           uint32_t mod_mask, char *out_buf, size_t max_bytes) {
     uint8_t s_idx = 0;
 #if SFTE_TERM_ALT_SCREEN
     s_idx = ctx->term.alt_active;
@@ -4383,7 +4387,8 @@ static uint32_t *_sfte_kitty_apply_crop(sfte_ctx *ctx, uint32_t *pxs, int32_t *w
     Translates terminal cell bounds (columns/rows) into physical
     pixel dimensions, and scales the raster to match.
 */
-static uint32_t *_sfte_kitty_apply_scale(sfte_ctx *ctx, uint32_t *pxs, int32_t *w, int32_t *h) {
+static inline uint32_t *_sfte_kitty_apply_scale(sfte_ctx *ctx, uint32_t *pxs, int32_t *w,
+                                                int32_t *h) {
     if (ctx->kitty.cols <= 0 && ctx->kitty.rows <= 0) return pxs;
     int32_t target_w = *w;
     int32_t target_h = *h;
@@ -4420,7 +4425,8 @@ static uint32_t *_sfte_kitty_apply_scale(sfte_ctx *ctx, uint32_t *pxs, int32_t *
     - viewport intersection,
     - specific cursor locations.
 */
-static uint8_t _sfte_kitty_should_delete(sfte_ctx *ctx, sfte_img_placement *p, sfte_img *img) {
+static inline uint8_t _sfte_kitty_should_delete(sfte_ctx *ctx, sfte_img_placement *p,
+                                                sfte_img *img) {
     uint8_t matches_id = (!ctx->kitty.id || ctx->kitty.id == p->img_id);
     if (!matches_id) return 0;
     int16_t cols = _sfte_grid_span(img->width, p->x_off, ctx->font.cell_width);
@@ -4457,7 +4463,7 @@ static uint8_t _sfte_kitty_should_delete(sfte_ctx *ctx, sfte_img_placement *p, s
     The image data is separated from image placements, we only free the image data
     when its `ref_cnt` drops to 0 (no placements are actively displaying it).
 */
-static void _sfte_kitty_gc_pool(sfte_ctx *ctx) {
+static inline void _sfte_kitty_gc_pool(sfte_ctx *ctx) {
     for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i) {
         sfte_img *img = &ctx->term.img_pool[i];
         if (img->is_sixel || img->ref_cnt) continue;  // Skip active and sixel
@@ -4477,7 +4483,7 @@ static void _sfte_kitty_gc_pool(sfte_ctx *ctx) {
     Returns a error message used for acknowledgements if 'img' is NULL or placement pool is OOM.
     Returns NULL on success.
 */
-static const char *_sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img) {
+static inline const char *_sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img) {
     if (!img) return "EINVAL: cannot apply placement to NULL image";
     sfte_img_placement *p = _sfte_img_placement_insert(ctx,
                                                        (sfte_img_placement){
@@ -4508,7 +4514,7 @@ static const char *_sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img) {
 
     Always returns NULL.
 */
-static const char *_sfte_kitty_exec_query(sfte_ctx *ctx) {
+static inline const char *_sfte_kitty_exec_query(sfte_ctx *ctx) {
     char reply[64];
     size_t len = snprintf(reply, sizeof(reply), "\033_Gi=%u;OK\033\\", ctx->kitty.id);
     if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
@@ -4522,7 +4528,7 @@ static const char *_sfte_kitty_exec_query(sfte_ctx *ctx) {
     Returns a error message used for acknowledgements if no image is found to delete.
     Returns NULL on success.
 */
-static const char *_sfte_kitty_exec_delete(sfte_ctx *ctx) {
+static inline const char *_sfte_kitty_exec_delete(sfte_ctx *ctx) {
     for (uint32_t i = 0; i < ctx->term.img_placements_len; ++i) {
         sfte_img_placement *p = &ctx->term.img_placements[i];
 #if SFTE_TERM_ALT_SCREEN
@@ -4559,7 +4565,7 @@ static const char *_sfte_kitty_exec_delete(sfte_ctx *ctx) {
     Returns a error message used for acknowledgements if the base64 decode fails.
     Returns NULL on success.
 */
-static const char *_sfte_kitty_exec_transmit(sfte_ctx *ctx, sfte_img **out_img) {
+static inline const char *_sfte_kitty_exec_transmit(sfte_ctx *ctx, sfte_img **out_img) {
     size_t raw_len = 0;
     uint8_t *raw_data = _sfte_b64_decode((uint8_t *)ctx->kitty.b64_buf, ctx->kitty.b64_len,
                                          &raw_len);
@@ -4608,7 +4614,7 @@ static const char *_sfte_kitty_exec_transmit(sfte_ctx *ctx, sfte_img **out_img) 
     was never transmitted or has been garbage collected, OR if `_sfte_kitty_apply_placement`
    fails. Returns NULL on success.
 */
-static const char *_sfte_kitty_exec_place(sfte_ctx *ctx) {
+static inline const char *_sfte_kitty_exec_place(sfte_ctx *ctx) {
     for (uint32_t j = 0; j < ctx->term.img_pool_len; ++j)
         if (ctx->term.img_pool[j].id == ctx->kitty.id)
             return _sfte_kitty_apply_placement(ctx, &ctx->term.img_pool[j]);
@@ -4622,7 +4628,7 @@ static const char *_sfte_kitty_exec_place(sfte_ctx *ctx) {
     - q=1: Send a response ONLY on failure (defalut).
     - q=2: Silent.
 */
-static void _sfte_kitty_send_ack(sfte_ctx *ctx, const char *err_msg) {
+static inline void _sfte_kitty_send_ack(sfte_ctx *ctx, const char *err_msg) {
     if (err_msg && (ctx->kitty.quiet == 0 || ctx->kitty.quiet == 1)) {
         char reply[256];
         size_t len = ctx->kitty.id > 0 ? snprintf(reply, sizeof(reply), "\033_Gi=%u;%s\033\\",
@@ -4647,7 +4653,7 @@ static void _sfte_kitty_send_ack(sfte_ctx *ctx, const char *err_msg) {
     The base64 string is accumulated in `ctx->kitty.b64_buf` across multiple calls,
     and the evalutaion is triggered the moment a sequence with `m=0` is received.
 */
-static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
+static inline void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
     const char *semi = strchr(payload, ';');
     // if there's no semicolon, the dictionary spans the entire payload
     const char *dict_end = semi ? semi : payload + strlen(payload);
@@ -4753,7 +4759,7 @@ static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload) {
     ctx->kitty.b64_len = 0;
 }
 
-static void _sfte_kitty_deinit(sfte_ctx *ctx) {
+static inline void _sfte_kitty_deinit(sfte_ctx *ctx) {
     if (ctx->term.img_pool) {
         for (uint32_t i = 0; i < ctx->term.img_pool_len; ++i)
             if (ctx->term.img_pool[i].pixels) SFTE_FREE(ctx->term.img_pool[i].pixels);
@@ -5570,7 +5576,7 @@ static inline void _sfte_csi_exec_kitty(sfte_ctx *ctx, uint16_t *p) {
 /*
     The main routing switch for Control Sequence Introducer events.
 */
-static void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
+static inline void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
     uint16_t *p = ctx->term.vt_params;
     int16_t cnt = ctx->term.vt_param_idx + 1;
     int16_t col = ctx->term.cursor_col >= ctx->term.cols ? ctx->term.cols - 1
@@ -5999,7 +6005,7 @@ static inline void _sfte_parser_dcs_dispatch(sfte_ctx *ctx, uint8_t terminator) 
     TODO:
     In-depth documentation of how this function behaves and why
 */
-static void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
+static inline void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
     switch (b) {
     case '\n':
     case '\x0B':
@@ -7225,8 +7231,8 @@ static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, u
 /*
     Paints the solid background color for a terminal cell.
 */
-static void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
-                                 int32_t y_off, uint32_t bg) {
+static inline void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
+                                        int32_t y_off, uint32_t bg) {
     int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
     int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
     uint32_t final_bg = (SFTE_COLOR_BG_OPACITY << 24) | (bg & ~SFTE_COLOR_ALPHA_MASK);
@@ -7242,9 +7248,10 @@ static void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16
     The texture atlas only stores alpha values.
     It blends the requested foreground color into the existing background using this alpha mask.
 */
-static void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
-                                 int32_t y_off, sfte_rune rune, uint16_t glyph_id, uint8_t font_idx,
-                                 uint32_t fg, sfte_font_cache *target_cache) {
+static inline void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
+                                        int32_t y_off, sfte_rune rune, uint16_t glyph_id,
+                                        uint8_t font_idx, uint32_t fg,
+                                        sfte_font_cache *target_cache) {
     if (rune == ' ') return;
 
     int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
@@ -7255,7 +7262,7 @@ static void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16
         if (_sfte_render_box_char(ctx, px_buf, cx, cy, fg, rune, y_off)) return;
 #endif  // SFTE_TERM_CUSTOM_BOXES
 
-    sfte_glyph *g = _sfte_font_get_glyph(target_cache, glyph_id, font_idx);
+    sfte_glyph *g = _sfte_font_get_glyph(ctx, target_cache, glyph_id, font_idx);
     if (!g) return;
 
     int32_t glyph_width = g->x1 - g->x0;
@@ -7625,8 +7632,9 @@ static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t
 /*
     Dispatcher for terminal text decorations (underlines, cursor).
 */
-static void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
-                                          int32_t y_off, sfte_cell *vcell, uint8_t is_cursor) {
+static inline void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t col,
+                                                 int16_t row, int32_t y_off, sfte_cell *vcell,
+                                                 uint8_t is_cursor) {
     int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
     int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
 
@@ -7914,7 +7922,7 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
 /*
     Callback triggered by the emulator core to send bytes back to the shell (PTY).
 */
-static void _sfte_wayland_write_cb(void *user_data, const char *data, size_t len) {
+static inline void _sfte_wayland_write_cb(void *user_data, const char *data, size_t len) {
     sfte_wayland_app *app = (sfte_wayland_app *)user_data;
     if (app->pty_fd) (void)write(app->pty_fd, data, len);
 }
@@ -7922,33 +7930,33 @@ static void _sfte_wayland_write_cb(void *user_data, const char *data, size_t len
 /*
     Callback triggered by the emulator core to change the window title.
 */
-static void _sfte_wayland_title_cb(void *user_data, const char *title) {
+static inline void _sfte_wayland_title_cb(void *user_data, const char *title) {
     sfte_wayland_app *app = (sfte_wayland_app *)user_data;
     if (app->xdg_toplevel && title) xdg_toplevel_set_title(app->xdg_toplevel, title);
 }
 
-static void _sfte_wayland_pty_spawn(sfte_wayland_app *app) {
+static inline void _sfte_wayland_pty_spawn(sfte_wayland_app *app) {
 #ifndef SFTE_NO_POSIX
     app->pty_pid = sfte_posix_pty_spawn(app->ctx, &app->pty_fd, app->width, app->height);
     SFTE_ASSERT(app->pty_pid != -1, "failed to forkpty");
 #endif  // !SFTE_NO_POSIX
 }
 
-static void _sfte_wayland_pty_update(sfte_wayland_app *app) {
+static inline void _sfte_wayland_pty_update(sfte_wayland_app *app) {
 #ifndef SFTE_NO_POSIX
     sfte_posix_pty_resize(app->ctx, app->pty_fd, app->width, app->height);
 #endif  // !SFTE_NO_POSIX
 }
 
 #if SFTE_FONT_ZOOM
-static void _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg) {
+static inline void _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg) {
     sfte_zoom(ctx, arg->f);
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
     _sfte_wayland_pty_update(app);
     app->needs_render = 1;
 }
 
-static void _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *dummy) {
+static inline void _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *dummy) {
     (void)dummy;
     const sfte_arg arg = {.f = SFTE_FONT_DEFAULT_SIZE - ctx->font.cur_size};
     _sfte_wayland_font_resize(ctx, &arg);
@@ -7956,7 +7964,7 @@ static void _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *dummy) {
 #endif  // SFTE_FONT_ZOOM
 
 #if SFTE_TERM_SCROLLBACK_CAP
-static void _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg) {
+static inline void _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg) {
     sfte_view_scroll(ctx, arg->i);
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
     app->needs_render = 1;
@@ -7967,7 +7975,7 @@ static void _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg) {
     Allocates a SHared Memory (SHM) buffer that both the emulator and
     the Wayland compositor can access simultaneously.
 */
-static void _sfte_wayland_create_buffer(sfte_wayland_app *app) {
+static inline void _sfte_wayland_create_buffer(sfte_wayland_app *app) {
     int32_t stride = app->width * 4;  // 4 bytes per pixel (ARGB8888)
     app->shm_size = stride * app->height;
 
@@ -7997,8 +8005,8 @@ static void _sfte_wayland_create_buffer(sfte_wayland_app *app) {
     close(fd);
 }
 
-static void _sfte_wayland_callback_listener_done(void *data, struct wl_callback *cb,
-                                                 uint32_t time) {
+static inline void _sfte_wayland_callback_listener_done(void *data, struct wl_callback *cb,
+                                                        uint32_t time) {
     (void)time;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     wl_callback_destroy(cb);
@@ -8010,8 +8018,8 @@ static const struct wl_callback_listener _sfte_wayland_callback_listener = {
 };
 
 #if SFTE_CLIPBOARD
-static void _sfte_wayland_data_offer_offer(void *data, struct wl_data_offer *offer,
-                                           const char *mime_type) {
+static inline void _sfte_wayland_data_offer_offer(void *data, struct wl_data_offer *offer,
+                                                  const char *mime_type) {
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     if (strcmp(mime_type, "text/plain;charset=utf-8") == 0 ||
         strcmp(mime_type, "text/plain") == 0) {
@@ -8019,13 +8027,13 @@ static void _sfte_wayland_data_offer_offer(void *data, struct wl_data_offer *off
     }
 }
 
-static void _sfte_wayland_data_offer_source_actions(void *data, struct wl_data_offer *offer,
-                                                    uint32_t actions) {
+static inline void _sfte_wayland_data_offer_source_actions(void *data, struct wl_data_offer *offer,
+                                                           uint32_t actions) {
     (void)data, (void)offer, (void)actions;
 }
 
-static void _sfte_wayland_data_offer_action(void *data, struct wl_data_offer *offer,
-                                            uint32_t action) {
+static inline void _sfte_wayland_data_offer_action(void *data, struct wl_data_offer *offer,
+                                                   uint32_t action) {
     (void)data, (void)offer, (void)action;
 }
 
@@ -8035,34 +8043,34 @@ static const struct wl_data_offer_listener _sfte_wayland_data_offer_listener = {
     .action = _sfte_wayland_data_offer_action,
 };
 
-static void _sfte_wayland_data_device_data_offer(void *data, struct wl_data_device *device,
-                                                 struct wl_data_offer *offer) {
+static inline void _sfte_wayland_data_device_data_offer(void *data, struct wl_data_device *device,
+                                                        struct wl_data_offer *offer) {
     (void)device;
     wl_data_offer_add_listener(offer, &_sfte_wayland_data_offer_listener, data);
 }
 
-static void _sfte_wayland_data_device_enter(void *data, struct wl_data_device *device,
-                                            uint32_t serial, struct wl_surface *surface,
-                                            wl_fixed_t x, wl_fixed_t y,
-                                            struct wl_data_offer *offer) {
+static inline void _sfte_wayland_data_device_enter(void *data, struct wl_data_device *device,
+                                                   uint32_t serial, struct wl_surface *surface,
+                                                   wl_fixed_t x, wl_fixed_t y,
+                                                   struct wl_data_offer *offer) {
     (void)data, (void)device, (void)serial, (void)surface, (void)x, (void)y, (void)offer;
 }
 
-static void _sfte_wayland_data_device_leave(void *data, struct wl_data_device *device) {
+static inline void _sfte_wayland_data_device_leave(void *data, struct wl_data_device *device) {
     (void)data, (void)device;
 }
 
-static void _sfte_wayland_data_device_motion(void *data, struct wl_data_device *device,
-                                             uint32_t time, wl_fixed_t x, wl_fixed_t y) {
+static inline void _sfte_wayland_data_device_motion(void *data, struct wl_data_device *device,
+                                                    uint32_t time, wl_fixed_t x, wl_fixed_t y) {
     (void)data, (void)device, (void)time, (void)x, (void)y;
 }
 
-static void _sfte_wayland_data_device_drop(void *data, struct wl_data_device *device) {
+static inline void _sfte_wayland_data_device_drop(void *data, struct wl_data_device *device) {
     (void)data, (void)device;
 }
 
-static void _sfte_wayland_data_device_selection(void *data, struct wl_data_device *device,
-                                                struct wl_data_offer *offer) {
+static inline void _sfte_wayland_data_device_selection(void *data, struct wl_data_device *device,
+                                                       struct wl_data_offer *offer) {
     (void)device;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     if (app->data_offer && app->data_offer != offer) wl_data_offer_destroy(app->data_offer);
@@ -8078,13 +8086,13 @@ static const struct wl_data_device_listener _sfte_wayland_data_device_listener =
     .selection = _sfte_wayland_data_device_selection,
 };
 
-static void _sfte_wayland_data_source_target(void *data, struct wl_data_source *src,
-                                             const char *mime_type) {
+static inline void _sfte_wayland_data_source_target(void *data, struct wl_data_source *src,
+                                                    const char *mime_type) {
     (void)data, (void)src, (void)mime_type;
 }
 
-static void _sfte_wayland_data_source_send(void *data, struct wl_data_source *src,
-                                           const char *mime_type, int32_t fd) {
+static inline void _sfte_wayland_data_source_send(void *data, struct wl_data_source *src,
+                                                  const char *mime_type, int32_t fd) {
     (void)src, (void)mime_type;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     if (app->selection_text) (void)write(fd, app->selection_text, strlen(app->selection_text));
@@ -8092,7 +8100,7 @@ static void _sfte_wayland_data_source_send(void *data, struct wl_data_source *sr
     close(fd);
 }
 
-static void _sfte_wayland_data_source_cancelled(void *data, struct wl_data_source *src) {
+static inline void _sfte_wayland_data_source_cancelled(void *data, struct wl_data_source *src) {
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     wl_data_source_destroy(src);
     if (app->selection_text) {
@@ -8102,16 +8110,17 @@ static void _sfte_wayland_data_source_cancelled(void *data, struct wl_data_sourc
     app->data_source = NULL;
 }
 
-static void _sfte_wayland_data_source_dnd_drop_performed(void *data, struct wl_data_source *src) {
+static inline void _sfte_wayland_data_source_dnd_drop_performed(void *data,
+                                                                struct wl_data_source *src) {
     (void)data, (void)src;
 }
 
-static void _sfte_wayland_data_source_dnd_finished(void *data, struct wl_data_source *src) {
+static inline void _sfte_wayland_data_source_dnd_finished(void *data, struct wl_data_source *src) {
     (void)data, (void)src;
 }
 
-static void _sfte_wayland_data_source_action(void *data, struct wl_data_source *src,
-                                             uint32_t action) {
+static inline void _sfte_wayland_data_source_action(void *data, struct wl_data_source *src,
+                                                    uint32_t action) {
     (void)data, (void)src, (void)action;
 }
 
@@ -8126,9 +8135,9 @@ static const struct wl_data_source_listener _sfte_wayland_data_source_listener =
 #endif  // SFTE_CLIPBOARD
 
 #if SFTE_INPUT_SELECTION
-static void _sfte_wayland_pointer_enter(void *data, struct wl_pointer *pointer, uint32_t serial,
-                                        struct wl_surface *surface, wl_fixed_t surface_x,
-                                        wl_fixed_t surface_y) {
+static inline void _sfte_wayland_pointer_enter(void *data, struct wl_pointer *pointer,
+                                               uint32_t serial, struct wl_surface *surface,
+                                               wl_fixed_t surface_x, wl_fixed_t surface_y) {
     (void)data, (void)pointer, (void)serial, (void)surface, (void)surface_x, (void)surface_y;
 #if SFTE_INPUT_MOUSE
     sfte_wayland_app *app = (sfte_wayland_app *)data;
@@ -8137,13 +8146,14 @@ static void _sfte_wayland_pointer_enter(void *data, struct wl_pointer *pointer, 
 #endif  // SFTE_INPUT_MOUSE
 }
 
-static void _sfte_wayland_pointer_leave(void *data, struct wl_pointer *pointer, uint32_t serial,
-                                        struct wl_surface *surface) {
+static inline void _sfte_wayland_pointer_leave(void *data, struct wl_pointer *pointer,
+                                               uint32_t serial, struct wl_surface *surface) {
     (void)data, (void)pointer, (void)serial, (void)surface;
 }
 
-static void _sfte_wayland_pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time,
-                                         wl_fixed_t surface_x, wl_fixed_t surface_y) {
+static inline void _sfte_wayland_pointer_motion(void *data, struct wl_pointer *pointer,
+                                                uint32_t time, wl_fixed_t surface_x,
+                                                wl_fixed_t surface_y) {
     (void)data, (void)pointer, (void)time, (void)surface_x, (void)surface_y;
 #if SFTE_INPUT_MOUSE
     sfte_wayland_app *app = (sfte_wayland_app *)data;
@@ -8152,8 +8162,9 @@ static void _sfte_wayland_pointer_motion(void *data, struct wl_pointer *pointer,
 #endif  // SFTE_INPUT_MOUSE
 }
 
-static void _sfte_wayland_pointer_button(void *data, struct wl_pointer *pointer, uint32_t serial,
-                                         uint32_t time, uint32_t button, uint32_t state) {
+static inline void _sfte_wayland_pointer_button(void *data, struct wl_pointer *pointer,
+                                                uint32_t serial, uint32_t time, uint32_t button,
+                                                uint32_t state) {
     (void)data, (void)pointer, (void)serial, (void)time, (void)button, (void)state;
 #if SFTE_INPUT_MOUSE
     if (button != 0x110 /* Wayland LMB */) return;
@@ -8176,8 +8187,8 @@ static void _sfte_wayland_pointer_button(void *data, struct wl_pointer *pointer,
 #endif  // SFTE_INPUT_MOUSE
 }
 
-static void _sfte_wayland_pointer_axis(void *data, struct wl_pointer *pointer, uint32_t time,
-                                       uint32_t axis, wl_fixed_t value) {
+static inline void _sfte_wayland_pointer_axis(void *data, struct wl_pointer *pointer, uint32_t time,
+                                              uint32_t axis, wl_fixed_t value) {
     (void)data, (void)pointer, (void)time, (void)axis, (void)value;
 #if SFTE_INPUT_MOUSE
     if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL) return;
@@ -8192,22 +8203,22 @@ static void _sfte_wayland_pointer_axis(void *data, struct wl_pointer *pointer, u
 #endif  // SFTE_INPUT_MOUSE
 }
 
-static void _sfte_wayland_pointer_frame(void *data, struct wl_pointer *pointer) {
+static inline void _sfte_wayland_pointer_frame(void *data, struct wl_pointer *pointer) {
     (void)data, (void)pointer;
 }
 
-static void _sfte_wayland_pointer_axis_source(void *data, struct wl_pointer *pointer,
-                                              uint32_t axis_source) {
+static inline void _sfte_wayland_pointer_axis_source(void *data, struct wl_pointer *pointer,
+                                                     uint32_t axis_source) {
     (void)data, (void)pointer, (void)axis_source;
 }
 
-static void _sfte_wayland_pointer_axis_stop(void *data, struct wl_pointer *pointer, uint32_t time,
-                                            uint32_t axis) {
+static inline void _sfte_wayland_pointer_axis_stop(void *data, struct wl_pointer *pointer,
+                                                   uint32_t time, uint32_t axis) {
     (void)data, (void)pointer, (void)time, (void)axis;
 }
 
-static void _sfte_wayland_pointer_axis_discrete(void *data, struct wl_pointer *pointer,
-                                                uint32_t axis, int32_t discrete) {
+static inline void _sfte_wayland_pointer_axis_discrete(void *data, struct wl_pointer *pointer,
+                                                       uint32_t axis, int32_t discrete) {
     (void)data, (void)pointer, (void)axis, (void)discrete;
 }
 
@@ -8225,7 +8236,7 @@ static const struct wl_pointer_listener _sfte_wayland_pointer_listener = {
 #endif  // SFTE_INPUT_SELECTION
 
 #if SFTE_INPUT_HYPERLINKS
-static void _sfte_wayland_open_link_cb(void *user_data, const char *uri) {
+static inline void _sfte_wayland_open_link_cb(void *user_data, const char *uri) {
     (void)user_data;
     if (!uri) return;
 
@@ -8243,8 +8254,8 @@ static void _sfte_wayland_open_link_cb(void *user_data, const char *uri) {
 }
 #endif  // SFTE_INPUT_HYPERLINKS
 
-static void _sfte_wayland_keyboard_keymap(void *data, struct wl_keyboard *keyboard, uint32_t format,
-                                          int32_t fd, uint32_t size) {
+static inline void _sfte_wayland_keyboard_keymap(void *data, struct wl_keyboard *keyboard,
+                                                 uint32_t format, int32_t fd, uint32_t size) {
     (void)keyboard;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     SFTE_ASSERT(format == WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, "unsupported keymap format");
@@ -8264,18 +8275,20 @@ static void _sfte_wayland_keyboard_keymap(void *data, struct wl_keyboard *keyboa
     close(fd);  // close the fd to avoid leak
 }
 
-static void _sfte_wayland_keyboard_enter(void *data, struct wl_keyboard *keyboard, uint32_t serial,
-                                         struct wl_surface *surface, struct wl_array *keys) {
+static inline void _sfte_wayland_keyboard_enter(void *data, struct wl_keyboard *keyboard,
+                                                uint32_t serial, struct wl_surface *surface,
+                                                struct wl_array *keys) {
     (void)data, (void)keyboard, (void)serial, (void)surface, (void)keys;
 }
 
-static void _sfte_wayland_keyboard_leave(void *data, struct wl_keyboard *keyboard, uint32_t serial,
-                                         struct wl_surface *surface) {
+static inline void _sfte_wayland_keyboard_leave(void *data, struct wl_keyboard *keyboard,
+                                                uint32_t serial, struct wl_surface *surface) {
     (void)data, (void)keyboard, (void)serial, (void)surface;
 }
 
-static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard, uint32_t serial,
-                                       uint32_t time, uint32_t key, uint32_t state) {
+static inline void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
+                                              uint32_t serial, uint32_t time, uint32_t key,
+                                              uint32_t state) {
     (void)data, (void)keyboard, (void)time;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
 #if SFTE_CLIPBOARD
@@ -8342,10 +8355,10 @@ static void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
     sfte_xkb_process_key(app->ctx, app->xkb_state, keycode);
 }
 
-static void _sfte_wayland_keyboard_modifiers(void *data, struct wl_keyboard *keyboard,
-                                             uint32_t serial, uint32_t mods_depressed,
-                                             uint32_t mods_latched, uint32_t mods_locked,
-                                             uint32_t group) {
+static inline void _sfte_wayland_keyboard_modifiers(void *data, struct wl_keyboard *keyboard,
+                                                    uint32_t serial, uint32_t mods_depressed,
+                                                    uint32_t mods_latched, uint32_t mods_locked,
+                                                    uint32_t group) {
     (void)keyboard, (void)serial;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     if (!app->xkb_state) return;
@@ -8353,8 +8366,8 @@ static void _sfte_wayland_keyboard_modifiers(void *data, struct wl_keyboard *key
     xkb_state_update_mask(app->xkb_state, mods_depressed, mods_latched, mods_locked, 0, 0, group);
 }
 
-static void _sfte_wayland_keyboard_repeat_info(void *data, struct wl_keyboard *keyboard,
-                                               int32_t rate, int32_t delay) {
+static inline void _sfte_wayland_keyboard_repeat_info(void *data, struct wl_keyboard *keyboard,
+                                                      int32_t rate, int32_t delay) {
     (void)keyboard;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
 
@@ -8371,8 +8384,8 @@ static const struct wl_keyboard_listener _sfte_wayland_keyboard_listener = {
     .repeat_info = _sfte_wayland_keyboard_repeat_info,
 };
 
-static void _sfte_wayland_seat_capabilities(void *data, struct wl_seat *seat,
-                                            uint32_t capabilities) {
+static inline void _sfte_wayland_seat_capabilities(void *data, struct wl_seat *seat,
+                                                   uint32_t capabilities) {
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     // if seat has a keyboard and we haven't grabbed it yet
     if ((capabilities & WL_SEAT_CAPABILITY_KEYBOARD) && !app->keyboard) {
@@ -8405,7 +8418,7 @@ static void _sfte_wayland_seat_capabilities(void *data, struct wl_seat *seat,
 #endif  // SFTE_CLIPBOARD
 }
 
-static void _sfte_wayland_seat_name(void *data, struct wl_seat *seat, const char *name) {
+static inline void _sfte_wayland_seat_name(void *data, struct wl_seat *seat, const char *name) {
     (void)data, (void)seat, (void)name;
 }
 
@@ -8414,8 +8427,8 @@ static const struct wl_seat_listener _sfte_wayland_seat_listener = {
     .name = _sfte_wayland_seat_name,
 };
 
-static void _sfte_wayland_xdg_wm_base_ping(void *data, struct xdg_wm_base *xdg_wm_base,
-                                           uint32_t serial) {
+static inline void _sfte_wayland_xdg_wm_base_ping(void *data, struct xdg_wm_base *xdg_wm_base,
+                                                  uint32_t serial) {
     (void)data;
     xdg_wm_base_pong(xdg_wm_base, serial);  // compositor pinged, pong back with same serial
 }
@@ -8424,8 +8437,9 @@ static const struct xdg_wm_base_listener _sfte_wayland_xdg_wm_base_listener = {
     .ping = _sfte_wayland_xdg_wm_base_ping,
 };
 
-static void _sfte_wayland_registry_global(void *data, struct wl_registry *registry, uint32_t name,
-                                          const char *interface, uint32_t version) {
+static inline void _sfte_wayland_registry_global(void *data, struct wl_registry *registry,
+                                                 uint32_t name, const char *interface,
+                                                 uint32_t version) {
     (void)version;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
 
@@ -8452,8 +8466,8 @@ static void _sfte_wayland_registry_global(void *data, struct wl_registry *regist
 #endif  // SFTE_CLIPBOARD
 }
 
-static void _sfte_wayland_registry_global_remove(void *data, struct wl_registry *registry,
-                                                 uint32_t name) {
+static inline void _sfte_wayland_registry_global_remove(void *data, struct wl_registry *registry,
+                                                        uint32_t name) {
     (void)data, (void)registry, (void)name;
 }
 
@@ -8462,8 +8476,8 @@ static const struct wl_registry_listener _sfte_wayland_registry_listener = {
     .global_remove = _sfte_wayland_registry_global_remove,
 };
 
-static void _sfte_wayland_xdg_surface_configure(void *data, struct xdg_surface *xdg_surface,
-                                                uint32_t serial) {
+static inline void _sfte_wayland_xdg_surface_configure(void *data, struct xdg_surface *xdg_surface,
+                                                       uint32_t serial) {
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     xdg_surface_ack_configure(xdg_surface, serial);
 
@@ -8493,9 +8507,10 @@ static const struct xdg_surface_listener _sfte_wayland_xdg_surface_listener = {
     .configure = _sfte_wayland_xdg_surface_configure,
 };
 
-static void _sfte_wayland_xdg_toplevel_configure(void *data, struct xdg_toplevel *xdg_toplevel,
-                                                 int32_t width, int32_t height,
-                                                 struct wl_array *states) {
+static inline void _sfte_wayland_xdg_toplevel_configure(void *data,
+                                                        struct xdg_toplevel *xdg_toplevel,
+                                                        int32_t width, int32_t height,
+                                                        struct wl_array *states) {
     (void)xdg_toplevel, (void)states;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
 #if SFTE_TERM_FOCUS
@@ -8518,7 +8533,7 @@ static void _sfte_wayland_xdg_toplevel_configure(void *data, struct xdg_toplevel
     app->pending_height = height;
 }
 
-static void _sfte_wayland_xdg_toplevel_close(void *data, struct xdg_toplevel *xdg_toplevel) {
+static inline void _sfte_wayland_xdg_toplevel_close(void *data, struct xdg_toplevel *xdg_toplevel) {
     (void)xdg_toplevel;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     app->running = 0;
@@ -8532,7 +8547,7 @@ static const struct xdg_toplevel_listener _sfte_wayland_xdg_toplevel_listener = 
 /*
     Initializes the Wayland connection and binds global registry interfaces.
 */
-static void _sfte_wayland_load(sfte_wayland_app *app) {
+static inline void _sfte_wayland_load(sfte_wayland_app *app) {
     app->xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     SFTE_ASSERT(app->xkb_context, "failed to create xkb context");
 
@@ -8565,7 +8580,7 @@ static void _sfte_wayland_load(sfte_wayland_app *app) {
 /*
     Cleans up all Wayland objects and memory mappings.
 */
-static void _sfte_wayland_unload(sfte_wayland_app *app) {
+static inline void _sfte_wayland_unload(sfte_wayland_app *app) {
 #if SFTE_TERM_DOUBLE_BUFFER
     SFTE_FREE(app->back_buffer);
 #endif  // SFTE_TERM_DOUBLE_BUFFER
@@ -8605,7 +8620,8 @@ static void _sfte_wayland_unload(sfte_wayland_app *app) {
 #if SFTE_CLIPBOARD
 #if SFTE_INPUT_SELECTION
 #if SFTE_CLIPBOARD_OSC52
-static void _sfte_wayland_osc52_clipboard_cb(void *user_data, char target, const char *data) {
+static inline void _sfte_wayland_osc52_clipboard_cb(void *user_data, char target,
+                                                    const char *data) {
     (void)target;  // TODO: wl primary selection protocol
     if (target != 'c') return;
     sfte_wayland_app *app = (sfte_wayland_app *)user_data;
@@ -8634,7 +8650,7 @@ static void _sfte_wayland_osc52_clipboard_cb(void *user_data, char target, const
 }
 #endif  // SFTE_CLIPBOARD_OSC52
 
-static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
+static inline void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
 
@@ -8667,7 +8683,7 @@ static void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
 }
 #endif  // SFTE_INPUT_SELECTION
 
-static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg) {
+static inline void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
 
@@ -8699,7 +8715,7 @@ static void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg) {
     Uses `poll` to simultaneously wait for Wayland compositor events,
     shell output events (PTY data), and timer expirations (on cursor blink, key repeat, trail).
 */
-static void _sfte_wayland_loop(sfte_wayland_app *app) {
+static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
     signal(SIGPIPE, SIG_IGN);
     setlocale(LC_ALL, "");
 
