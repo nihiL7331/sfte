@@ -456,8 +456,9 @@ static inline void _sfte_stb_vmetrics(sfte_font_backend_info *info, int *ascent,
                                       int *linegap);
 static inline void _sfte_stb_bounds(sfte_font_backend_info *info, int glyph_id, float scale,
                                     int *adv, int *x0, int *y0, int *x1, int *y1);
-static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, float scale,
-                                  uint8_t *atlas_ptr, int gw, int gh, int atlas_stride);
+static inline void _sfte_stb_bake(sfte_ctx *ctx, sfte_font_backend_info *info, int glyph_idx,
+                                  float scale, uint8_t *atlas_ptr, int gw, int gh,
+                                  int atlas_stride);
 static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #else  // SFTE_FONT_CUSTOM_BACKEND
 #if !defined(SFTE_FONT_INIT) || !defined(SFTE_FONT_GET_SCALE) || !defined(SFTE_FONT_VMETRICS) ||   \
@@ -2080,7 +2081,8 @@ static inline void _sfte_log(sfte_ctx *ctx, _sfte_log_item log_item, sfte_log_le
 // >b64
 // -------------------------------------------------------------------------------------------------
 #if (SFTE_CLIPBOARD && SFTE_CLIPBOARD_OSC52) || SFTE_IMG_KITTY
-static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len);
+static inline uint8_t *_sfte_b64_decode(sfte_stack *stack, uint8_t *src, size_t len,
+                                        size_t *out_len);
 #endif  // (SFTE_CLIPBOARD && SFTE_CLIPBOARD_OSC52) || SFTE_IMG_KITTY
 
 // -------------------------------------------------------------------------------------------------
@@ -2213,23 +2215,27 @@ static inline size_t _sfte_kitty_kb_encode(sfte_ctx *ctx, sfte_key key, uint32_t
                                            uint32_t mod_mask, char *out_buf, size_t max_bytes);
 #endif  // SFTE_INPUT_KITTY
 #if SFTE_IMG_KITTY
-static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int32_t src_wid, int32_t src_hei,
-                                                  int32_t dst_wid, int32_t dst_hei);
-static uint32_t *_sfte_kitty_decode_payload(sfte_ctx *ctx, uint8_t *raw_data, size_t raw_len,
-                                            uint8_t is_file, const char *file_path, int32_t *w,
-                                            int32_t *h);
-static uint32_t *_sfte_kitty_apply_crop(sfte_ctx *ctx, uint32_t *pxs, int32_t *w, int32_t *h);
-static uint32_t *_sfte_kitty_apply_scale(sfte_ctx *ctx, uint32_t *pxs, int32_t *w, int32_t *h);
-static uint8_t _sfte_kitty_should_delete(sfte_ctx *ctx, sfte_img_placement *p, sfte_img *img);
-static void _sfte_kitty_gc_pool(sfte_ctx *ctx);
-static const char *_sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img);
-static const char *_sfte_kitty_exec_query(sfte_ctx *ctx);
-static const char *_sfte_kitty_exec_delete(sfte_ctx *ctx);
-static const char *_sfte_kitty_exec_transmit(sfte_ctx *ctx, sfte_img **out_img);
-static const char *_sfte_kitty_exec_place(sfte_ctx *ctx);
-static void _sfte_kitty_send_ack(sfte_ctx *ctx, const char *err_msg);
-static void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload);
-static void _sfte_kitty_deinit(sfte_ctx *ctx);
+static inline uint32_t *_sfte_kitty_scale_image_bilinear(sfte_stack *stack, uint32_t *src,
+                                                         int32_t src_wid, int32_t src_hei,
+                                                         int32_t dst_wid, int32_t dst_hei);
+static inline uint32_t *_sfte_kitty_decode_payload(sfte_ctx *ctx, uint8_t *raw_data, size_t raw_len,
+                                                   uint8_t is_file, const char *file_path,
+                                                   int32_t *w, int32_t *h);
+static inline uint32_t *_sfte_kitty_apply_crop(sfte_ctx *ctx, size_t pre_pxs_off, uint32_t *pxs,
+                                               int32_t *w, int32_t *h);
+static inline uint32_t *_sfte_kitty_apply_scale(sfte_ctx *ctx, uint32_t *pxs, int32_t *w,
+                                                int32_t *h);
+static inline uint8_t _sfte_kitty_should_delete(sfte_ctx *ctx, sfte_img_placement *p,
+                                                sfte_img *img);
+static inline void _sfte_kitty_gc_pool(sfte_ctx *ctx);
+static inline const char *_sfte_kitty_apply_placement(sfte_ctx *ctx, sfte_img *img);
+static inline const char *_sfte_kitty_exec_query(sfte_ctx *ctx);
+static inline const char *_sfte_kitty_exec_delete(sfte_ctx *ctx);
+static inline const char *_sfte_kitty_exec_transmit(sfte_ctx *ctx, sfte_img **out_img);
+static inline const char *_sfte_kitty_exec_place(sfte_ctx *ctx);
+static inline void _sfte_kitty_send_ack(sfte_ctx *ctx, const char *err_msg);
+static inline void _sfte_kitty_parse_graphics(sfte_ctx *ctx, const char *payload);
+static inline void _sfte_kitty_deinit(sfte_ctx *ctx);
 #endif  // SFTE_IMG_KITTY
 
 // -------------------------------------------------------------------------------------------------
@@ -2335,10 +2341,11 @@ static inline void _sfte_shaper_shape_row(sfte_shaper_ctx *ctx, const uint8_t *t
 static inline sfte_font_cache *_sfte_font_get_cache(sfte_ctx *ctx, sfte_font_style style);
 static inline void _sfte_font_clear_cache(sfte_font_cache *cache);
 static inline void _sfte_font_update_scales(sfte_ctx *ctx, sfte_font_cache *cache);
-static inline void _sfte_font_pack_and_bake(sfte_font_cache *cache, sfte_glyph *g, int32_t font_idx,
-                                            int32_t glyph_id, int32_t gw, int32_t gh);
-static inline sfte_glyph *_sfte_font_get_glyph(sfte_font_cache *cache, uint16_t glyph_id,
-                                               uint8_t font_idx);
+static inline void _sfte_font_pack_and_bake(sfte_ctx *ctx, sfte_font_cache *cache, sfte_glyph *g,
+                                            int32_t font_idx, int32_t glyph_id, int32_t gw,
+                                            int32_t gh);
+static inline sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache *cache,
+                                               uint16_t glyph_id, uint8_t font_idx);
 static inline void _sfte_font_resolve_rune(sfte_font_cache *cache, sfte_rune rune,
                                            uint8_t *out_font_idx, uint16_t *out_glyph_id);
 static inline void _sfte_font_reset_cache(sfte_ctx *ctx);
@@ -2575,20 +2582,25 @@ static const int8_t _sfte_b64_table[256] = {
 };
 
 /*
-    Decodes a Base64 payload into a newly allocated binary buffer.
+    Decodes a Base64 payload into a stack-allocated binary buffer.
     Ignores invalid characters (spaces, newlines).
     The caller assumes ownership of the returned pointer and MUST free it.
     Returns NULL if input is empty or if memory allocation fails.
 */
-static uint8_t *_sfte_b64_decode(const uint8_t *src, size_t len, size_t *out_len) {
+static inline uint8_t *_sfte_b64_decode(sfte_stack *stack, uint8_t *src, size_t len,
+                                        size_t *out_len) {
     SFTE_ASSERT(src && out_len, "b64_decode requires valid pointers");
 
     // Strip trailing padding
     while (len > 0 && src[len - 1] == '=') len--;
 
     *out_len = (len * 3) / 4;
-    uint8_t *dst = (uint8_t *)SFTE_MALLOC(*out_len);
-    if (!dst) return NULL;
+    size_t pre_off = _sfte_mem_stack_save(stack);
+    uint8_t *dst = (uint8_t *)_sfte_mem_stack_alloc(stack, *out_len, _Alignof(uint8_t));
+    if (!dst) {
+        _sfte_mem_stack_rewind(stack, pre_off);
+        return NULL;
+    }
 
     size_t i = 0, j = 0;
     uint32_t acc = 0;
@@ -3876,15 +3888,17 @@ static _sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_ctx *ctx, sfte_ce
 */
 static inline void _sfte_sixel_commit(sfte_ctx *ctx) {
     if (ctx->sixel.width > 0 && ctx->sixel.height > 0) {
-        uint32_t *final_pixels = (uint32_t *)SFTE_MALLOC(ctx->sixel.width * ctx->sixel.height *
-                                                         sizeof(uint32_t));
+        // Slide each row backward to eliminate empty capacity gaps
         for (int32_t y = 0; y < ctx->sixel.height; ++y)
-            memcpy(&final_pixels[y * ctx->sixel.width], &ctx->sixel.pixels[y * ctx->sixel.cap_w],
-                   ctx->sixel.width * sizeof(uint32_t));
-        SFTE_FREE(ctx->sixel.pixels);
+            memmove(&ctx->sixel.pixels[y * ctx->sixel.width],
+                    &ctx->sixel.pixels[y * ctx->sixel.cap_w], ctx->sixel.width * sizeof(uint32_t));
+
+        size_t final_bytes = ctx->sixel.width * ctx->sixel.height * sizeof(uint32_t);
+        uint32_t *packed_pixels = (uint32_t *)SFTE_REALLOC(ctx->sixel.pixels, final_bytes);
+        if (!packed_pixels) packed_pixels = ctx->sixel.pixels;
 
         sfte_img *img = _sfte_img_pool_insert(ctx, (sfte_img){
-                                                       .pixels = final_pixels,
+                                                       .pixels = packed_pixels,
                                                        .id = ++ctx->term.next_img_id,
                                                        .width = ctx->sixel.width,
                                                        .height = ctx->sixel.height,
@@ -3918,10 +3932,11 @@ static inline void _sfte_sixel_commit(sfte_ctx *ctx) {
                     ctx->term.cursor_row--;
                 }
             } else
-                SFTE_FREE(final_pixels);
+                SFTE_FREE(packed_pixels);
         } else
-            SFTE_FREE(final_pixels);
-    }
+            SFTE_FREE(packed_pixels);
+    } else if (ctx->sixel.pixels)
+        SFTE_FREE(ctx->sixel.pixels);
 
     ctx->sixel.pixels = NULL;
     ctx->sixel.cap_w = 0;
@@ -3935,7 +3950,7 @@ static inline void _sfte_sixel_commit(sfte_ctx *ctx) {
     Size gets doubled on each dimension when the buffer is not big enough.
     Maxes out at `SFTE_IMG_SIXEL_MAX_SIZE` x `SFTE_IMG_SIXEL_MAX_SIZE`.
 */
-static void _sfte_sixel_ensure_cap(sfte_ctx *ctx, int32_t req_w, int32_t req_h) {
+static inline void _sfte_sixel_ensure_cap(sfte_ctx *ctx, int32_t req_w, int32_t req_h) {
     if (req_w < ctx->sixel.cap_w && req_h < ctx->sixel.cap_h) return;
 
     int32_t new_w = ctx->sixel.cap_w == 0 ? SFTE_IMG_SIXEL_INIT_SIZE : ctx->sixel.cap_w;
@@ -4257,11 +4272,19 @@ static inline size_t _sfte_kitty_kb_encode(sfte_ctx *ctx, sfte_key key, uint32_t
     Performs bilinear interpolation for image scaling.
     Kitty allows the terminal to dictate the final render size in rows/columns,
     this is the main purpose for this function.
+    Uses the stack allocator to safely allocate the destination buffer,
+    then slides it back over the source buffer to reclaim the memory.
 */
-static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int32_t src_wid, int32_t src_hei,
-                                                  int32_t dst_wid, int32_t dst_hei) {
-    uint32_t *dst = (uint32_t *)SFTE_MALLOC(dst_wid * dst_hei * sizeof(uint32_t));
-    if (!dst) return NULL;
+static inline uint32_t *_sfte_kitty_scale_image_bilinear(sfte_stack *stack, uint32_t *src,
+                                                         int32_t src_wid, int32_t src_hei,
+                                                         int32_t dst_wid, int32_t dst_hei) {
+    size_t dst_bytes = dst_wid * dst_hei * sizeof(uint32_t);
+    size_t pre_off = _sfte_mem_stack_save(stack);
+    uint32_t *dst = (uint32_t *)_sfte_mem_stack_alloc(stack, dst_bytes, _Alignof(uint32_t));
+    if (!dst) {
+        _sfte_mem_stack_rewind(stack, pre_off);
+        return NULL;
+    }
 
     float x_ratio = ((float)(src_wid - 1)) / dst_wid;
     float y_ratio = ((float)(src_hei - 1)) / dst_hei;
@@ -4272,18 +4295,18 @@ static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int32_t src_wid
             int32_t y = (int32_t)(y_ratio * i);
             float x_diff = (x_ratio * j) - x;
             float y_diff = (y_ratio * i) - y;
-            // 4 nearest pxs
+            // 4 nearest pixels
             size_t idx = y * src_wid + x;
             uint32_t p1 = src[idx];
             uint32_t p2 = (x + 1 < src_wid) ? src[idx + 1] : p1;
             uint32_t p3 = (y + 1 < src_hei) ? src[idx + src_wid] : p1;
             uint32_t p4 = (x + 1 < src_wid && y + 1 < src_hei) ? src[idx + src_wid + 1] : p1;
-            // weights
+            // Calculate weights
             float w1 = (1.0f - x_diff) * (1.0f - y_diff);
             float w2 = x_diff * (1.0f - y_diff);
             float w3 = (1.0f - x_diff) * y_diff;
             float w4 = x_diff * y_diff;
-            // interpolate
+            // Interpolate
             uint32_t r = (uint32_t)(((p1 >> 16) & 0xFF) * w1 + ((p2 >> 16) & 0xFF) * w2 +
                                     ((p3 >> 16) & 0xFF) * w3 + ((p4 >> 16) & 0xFF) * w4);
             uint32_t g = (uint32_t)(((p1 >> 8) & 0xFF) * w1 + ((p2 >> 8) & 0xFF) * w2 +
@@ -4292,11 +4315,20 @@ static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int32_t src_wid
                                     (p4 & 0xFF) * w4);
             uint32_t a = (uint32_t)(((p1 >> 24) & 0xFF) * w1 + ((p2 >> 24) & 0xFF) * w2 +
                                     ((p3 >> 24) & 0xFF) * w3 + ((p4 >> 24) & 0xFF) * w4);
-            // store
+            // Store temporarily in destination
             dst[i * dst_wid + j] = (a << 24) | (r << 16) | (g << 8) | b;
         }
 
-    return dst;
+    // Since the source image isn't needed anymore,
+    // the scaled image can be moved to original image memory address.
+    memmove(src, dst, dst_bytes);
+
+    // Now we can reclaim the stack memory
+    // that was used for scaled image before `memmove`.
+    size_t src_off = (size_t)((uint8_t *)src - stack->buf);
+    _sfte_mem_stack_rewind(stack, src_off + dst_bytes);
+
+    return src;
 }
 
 /*
@@ -4307,9 +4339,10 @@ static uint32_t *_sfte_kitty_scale_image_bilinear(uint32_t *src, int32_t src_wid
     - reading from a temporary file that the terminal is expected to delete after reading (via
    't').
 */
-static uint32_t *_sfte_kitty_decode_payload(sfte_ctx *ctx, uint8_t *raw_data, size_t raw_len,
-                                            uint8_t is_file, const char *file_path, int32_t *w,
-                                            int32_t *h) {
+static inline uint32_t *_sfte_kitty_decode_payload(sfte_ctx *ctx, uint8_t *raw_data, size_t raw_len,
+                                                   uint8_t is_file, const char *file_path,
+                                                   int32_t *w, int32_t *h) {
+    size_t pre_off = _sfte_mem_stack_save(&ctx->stack);
     uint32_t *pxs = NULL;
 
     if (ctx->kitty.format == _SFTE_KITTY_FMT_PNG_JPEG) {
@@ -4318,7 +4351,14 @@ static uint32_t *_sfte_kitty_decode_payload(sfte_ctx *ctx, uint8_t *raw_data, si
                                    : stbi_load_from_memory(raw_data, raw_len, w, h, &channels, 4);
 
         if (stb_pxs && *w && *h) {
-            pxs = (uint32_t *)SFTE_MALLOC(*w * *h * sizeof(uint32_t));
+            pxs = (uint32_t *)_sfte_mem_stack_alloc(&ctx->stack, *w * *h * sizeof(uint32_t),
+                                                    _Alignof(uint32_t));
+            if (!pxs) {
+                _sfte_mem_stack_rewind(&ctx->stack, pre_off);
+                stbi_image_free(stb_pxs);
+                return NULL;
+            }
+
             for (int64_t i = 0; i < *w * *h; ++i)
                 pxs[i] = (stb_pxs[i * 4 + 3] << 24) | (stb_pxs[i * 4 + 0] << 16) |
                          (stb_pxs[i * 4 + 1] << 8) | stb_pxs[i * 4 + 2];
@@ -4328,6 +4368,14 @@ static uint32_t *_sfte_kitty_decode_payload(sfte_ctx *ctx, uint8_t *raw_data, si
                 ctx->kitty.format == _SFTE_KITTY_FMT_RGBA) &&
                *w && *h) {
         uint8_t bpp = (ctx->kitty.format == _SFTE_KITTY_FMT_RGB) ? 3 : 4;
+        pxs = (uint32_t *)_sfte_mem_stack_alloc(&ctx->stack, *w * *h * sizeof(uint32_t),
+                                                _Alignof(uint32_t));
+        if (!pxs) {
+            _sfte_mem_stack_rewind(&ctx->stack, pre_off);
+            return NULL;
+        }
+        size_t post_pxs_off = _sfte_mem_stack_save(&ctx->stack);
+
         uint8_t *pixel_src = raw_data;
         size_t pixel_len = raw_len;
 
@@ -4337,22 +4385,35 @@ static uint32_t *_sfte_kitty_decode_payload(sfte_ctx *ctx, uint8_t *raw_data, si
                 fseek(f, 0, SEEK_END);
                 pixel_len = ftell(f);
                 fseek(f, 0, SEEK_SET);
-                pixel_src = (uint8_t *)SFTE_MALLOC(pixel_len);
-                (void)fread(pixel_src, 1, pixel_len, f);
+
+                if (pixel_len >= (size_t)(*w * *h * bpp)) {
+                    pixel_src = (uint8_t *)_sfte_mem_stack_alloc(&ctx->stack, pixel_len,
+                                                                 _Alignof(uint8_t));
+                    if (!pixel_src) {
+                        _sfte_mem_stack_rewind(&ctx->stack, pre_off);
+                        fclose(f);
+                        return NULL;
+                    }
+                    (void)fread(pixel_src, 1, pixel_len, f);
+                } else
+                    pixel_src = NULL;
                 fclose(f);
             } else
                 pixel_src = NULL;
         }
 
-        if (pixel_src && raw_len >= (size_t)(*w * *h * bpp)) {
-            pxs = (uint32_t *)SFTE_MALLOC(*w * *h * sizeof(uint32_t));
+        if (pixel_src && pixel_len >= (size_t)(*w * *h * bpp)) {
             for (int64_t i = 0; i < *w * *h; ++i) {
                 uint8_t a = (bpp == 4) ? pixel_src[i * bpp + 3] : 255;
                 pxs[i] = (a << 24) | (pixel_src[i * bpp + 0] << 16) |
                          (pixel_src[i * bpp + 1] << 8) | pixel_src[i * bpp + 2];
             }
+
+            _sfte_mem_stack_rewind(&ctx->stack, post_pxs_off);
+        } else {
+            _sfte_mem_stack_rewind(&ctx->stack, pre_off);
+            pxs = NULL;
         }
-        if (is_file && pixel_src) SFTE_FREE(pixel_src);
     }
     return pxs;
 }
@@ -4360,27 +4421,44 @@ static uint32_t *_sfte_kitty_decode_payload(sfte_ctx *ctx, uint8_t *raw_data, si
 /*
     Applies requested croppping limits before placing the image.
 */
-static uint32_t *_sfte_kitty_apply_crop(sfte_ctx *ctx, uint32_t *pxs, int32_t *w, int32_t *h) {
+static inline uint32_t *_sfte_kitty_apply_crop(sfte_ctx *ctx, size_t pre_pxs_off, uint32_t *pxs,
+                                               int32_t *w, int32_t *h) {
     int32_t cx = _SFTE_CLAMP(ctx->kitty.crop_x, 0, *w);
     int32_t cy = _SFTE_CLAMP(ctx->kitty.crop_y, 0, *h);
     int32_t cw = ctx->kitty.crop_w ? ctx->kitty.crop_w : (*w - cx);
     int32_t ch = ctx->kitty.crop_h ? ctx->kitty.crop_h : (*h - cy);
     if (cx + cw > *w) cw = *w - cx;
     if (cy + ch > *h) ch = *h - cy;
-    if (cw == *w && ch == *h && !cx && !cy) return pxs;
     if (cw <= 0 || ch <= 0) {
-        SFTE_FREE(pxs);
+        _sfte_mem_stack_rewind(&ctx->stack, pre_pxs_off);
         return NULL;
     }
-    uint32_t *cropped = (uint32_t *)SFTE_MALLOC(cw * ch * sizeof(uint32_t));
-    if (cropped) {
-        for (int32_t y = 0; y < ch; ++y)
-            memcpy(&cropped[y * cw], &pxs[(cy + y) * *w + cx], cw * sizeof(uint32_t));
-        *w = cw;
+    // If only cropped from bottom, the pointer doesn't change
+    // so we can return immediately without any `memmove` calls.
+    if (cx == 0 && cy == 0 && cw == *w) {
         *h = ch;
+        return pxs;
     }
-    SFTE_FREE(pxs);
-    return cropped;
+
+    if (cw == *w && ch == *h && !cx && !cy) return pxs;
+
+    // Since for a pixel at coordinates (x,y) in cropped image:
+    // crop_idx = (y * crop_w) + x
+    // orig_idx = ((crop_y + y) * orig_w) + crop_x + x
+    // where:
+    // crop_x, crop_y >= 0
+    // crop_w <= orig_w
+    // we know that:
+    // crop_idx <= orig_idx
+    // so we can crop in place iterating over original image memory.
+    // The original image index "outruns" the cropped image index.
+    for (int32_t y = 0; y < ch; ++y)
+        memmove(&pxs[y * cw], &pxs[(cy + y) * *w + cx], cw * sizeof(uint32_t));
+
+    *w = cw;
+    *h = ch;
+    _sfte_mem_stack_rewind(&ctx->stack, pre_pxs_off + (cw * ch * sizeof(uint32_t)));
+    return pxs;
 }
 
 /*
@@ -4405,15 +4483,12 @@ static inline uint32_t *_sfte_kitty_apply_scale(sfte_ctx *ctx, uint32_t *pxs, in
 
     if (target_w <= 0 || target_h <= 0 || (target_w == *w && target_h == *h)) return pxs;
 
-    uint32_t *scaled = _sfte_kitty_scale_image_bilinear(pxs, *w, *h, target_w, target_h);
-    if (scaled) {
-        SFTE_FREE(pxs);
-        *w = target_w;
-        *h = target_h;
-        return scaled;
-    }
+    uint32_t *scaled = _sfte_kitty_scale_image_bilinear(&ctx->stack, pxs, *w, *h, target_w,
+                                                        target_h);
+    if (!scaled) return NULL;
 
-    // Fall back to returning the unscaled image on 'scaled' allocation fail
+    *w = target_w;
+    *h = target_h;
     return pxs;
 }
 
@@ -4567,42 +4642,67 @@ static inline const char *_sfte_kitty_exec_delete(sfte_ctx *ctx) {
 */
 static inline const char *_sfte_kitty_exec_transmit(sfte_ctx *ctx, sfte_img **out_img) {
     size_t raw_len = 0;
-    uint8_t *raw_data = _sfte_b64_decode((uint8_t *)ctx->kitty.b64_buf, ctx->kitty.b64_len,
-                                         &raw_len);
+    size_t pre_b64_off = _sfte_mem_stack_save(&ctx->stack);
+    uint8_t *raw_data = _sfte_b64_decode(&ctx->stack, (uint8_t *)ctx->kitty.b64_buf,
+                                         ctx->kitty.b64_len, &raw_len);
     if (!raw_data) return "ENOMEM: base64 decode failed";
 
     uint8_t is_file = (ctx->kitty.t_medium == 'f' || ctx->kitty.t_medium == 't');
     char *file_path = NULL;
     if (is_file) {
-        file_path = (char *)SFTE_MALLOC(raw_len + 1);
+        file_path = (char *)_sfte_mem_stack_alloc(&ctx->stack, raw_len + 1, _Alignof(char));
+        if (!file_path) {
+            _sfte_mem_stack_rewind(&ctx->stack, pre_b64_off);
+            return "ENOMEM: file path allocation failed";
+        }
+
         memcpy(file_path, raw_data, raw_len);
         file_path[raw_len] = '\0';
     }
 
     int32_t w = ctx->kitty.width;
     int32_t h = ctx->kitty.height;
+    size_t pre_pxs_off = _sfte_mem_stack_save(&ctx->stack);
     uint32_t *pixels = _sfte_kitty_decode_payload(ctx, raw_data, raw_len, is_file, file_path, &w,
                                                   &h);
 
     if (ctx->kitty.t_medium == 't' && is_file) remove(file_path);
-    if (is_file) SFTE_FREE(file_path);
-    SFTE_FREE(raw_data);
     if (!pixels) return "EBADFMT: failed to decode image data";
 
-    pixels = _sfte_kitty_apply_crop(ctx, pixels, &w, &h);
-    if (!pixels) return "EINVAL: invalid crop dimensions";
+    pixels = _sfte_kitty_apply_crop(ctx, pre_pxs_off, pixels, &w, &h);
+    if (!pixels) {
+        _sfte_mem_stack_rewind(&ctx->stack, pre_b64_off);
+        return "EINVAL: invalid crop dimensions";
+    }
 
     pixels = _sfte_kitty_apply_scale(ctx, pixels, &w, &h);
+    if (!pixels) {
+        _sfte_mem_stack_rewind(&ctx->stack, pre_b64_off);
+        return "ENOMEM: scaling failed";
+    }
+
+    uint32_t *final_pixels = (uint32_t *)SFTE_MALLOC(w * h * sizeof(uint32_t));
+    if (!final_pixels) {
+        _sfte_mem_stack_rewind(&ctx->stack, pre_b64_off);
+        return "ENOMEM: failed to allocate presistent image buffer";
+    }
+
+    memcpy(final_pixels, pixels, w * h * sizeof(uint32_t));
+    _sfte_mem_stack_rewind(&ctx->stack, pre_b64_off);
 
     if (!ctx->kitty.id) ctx->kitty.id = ++ctx->term.next_img_id;
     sfte_img *new_img = _sfte_img_pool_insert(ctx, (sfte_img){
-                                                       .pixels = pixels,
+                                                       .pixels = final_pixels,
                                                        .id = ctx->kitty.id,
                                                        .width = w,
                                                        .height = h,
                                                    });
 
-    if (!new_img) return "ENOMEM: image pool capacity reached";
+    if (!new_img) {
+        SFTE_FREE(final_pixels);
+        return "ENOMEM: image pool capacity reached";
+    }
+
     if (out_img) *out_img = new_img;
     return NULL;
 }
@@ -5915,14 +6015,20 @@ static inline void _sfte_parser_osc_dispatch(sfte_ctx *ctx, uint8_t terminator) 
         if (*p == ';' && *++p != '?' /* Skips read requests */) {
             size_t b64_len = ctx->term.osc_len - (p - ctx->term.osc_payload);
             size_t raw_len = 0;
-            uint8_t *raw_data = _sfte_b64_decode((uint8_t *)p, b64_len, &raw_len);
+            uint8_t *raw_data = _sfte_b64_decode(&ctx->stack, (uint8_t *)p, b64_len, &raw_len);
             if (raw_data) {
-                char *data = (char *)SFTE_MALLOC(raw_len + 1);
+                size_t pre_off = _sfte_mem_stack_save(&ctx->stack);
+                char *data = (char *)_sfte_mem_stack_alloc(&ctx->stack, raw_len + 1,
+                                                           _Alignof(char));
+                if (!data) {
+                    _sfte_mem_stack_rewind(&ctx->stack, pre_off);
+                    return;
+                }
+
                 memcpy(data, raw_data, raw_len);
                 data[raw_len] = '\0';
                 if (ctx->osc52_clipboard_cb) ctx->osc52_clipboard_cb(ctx->user_data, target, data);
-                SFTE_FREE(data);
-                SFTE_FREE(raw_data);
+                _sfte_mem_stack_rewind(&ctx->stack, pre_off);
             }
         }
     }
@@ -6620,17 +6726,19 @@ static inline void _sfte_stb_bounds(sfte_font_backend_info *info, int glyph_id, 
     stbtt_GetGlyphBitmapBox(info, glyph_id, scale, scale, x0, y0, x1, y1);
 }
 
-static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, float scale,
-                                  uint8_t *atlas_ptr, int gw, int gh, int atlas_stride) {
+static inline void _sfte_stb_bake(sfte_ctx *ctx, sfte_font_backend_info *info, int glyph_idx,
+                                  float scale, uint8_t *atlas_ptr, int gw, int gh,
+                                  int atlas_stride) {
 #if SFTE_FONT_OVERSAMPLE <= 1
+    (void)ctx;
     stbtt_MakeGlyphBitmap(info, atlas_ptr, gw, gh, atlas_stride, scale, scale, glyph_idx);
 #else   // SFTE_FONT_OVERSAMPLE > 1
     int bw = gw * SFTE_FONT_OVERSAMPLE;
     int bh = gh;
 
-    uint8_t stack_buf[128 * 128];
-    uint8_t *temp_buf = stack_buf;
-    if (bw * bh > (int)sizeof(stack_buf)) temp_buf = (uint8_t *)SFTE_MALLOC(bw * bh);
+    size_t pre_off = _sfte_mem_stack_save(&ctx->stack);
+    uint8_t *temp_buf = (uint8_t *)_sfte_mem_stack_alloc(&ctx->stack, bw * bh * sizeof(uint8_t),
+                                                         _Alignof(uint8_t));
 
     stbtt_MakeGlyphBitmap(info, temp_buf, bw, bh, bw, scale * SFTE_FONT_OVERSAMPLE, scale,
                           glyph_idx);
@@ -6643,7 +6751,7 @@ static inline void _sfte_stb_bake(sfte_font_backend_info *info, int glyph_idx, f
             atlas_ptr[y * atlas_stride + x] = (uint8_t)(sum / SFTE_FONT_OVERSAMPLE);
         }
 
-    if (temp_buf != stack_buf) SFTE_FREE(temp_buf);
+    _sfte_mem_stack_rewind(&ctx->stack, pre_off);
 #endif  // SFTE_FONT_OVERSAMPLE > 1
 }
 
@@ -6701,8 +6809,9 @@ static inline void _sfte_font_update_scales(sfte_ctx *ctx, sfte_font_cache *cach
     Glyphs are packed sequentially into rows. If a row runs out of horizontal space,
     we step down by the height of the tallest glyph in that row.
 */
-static inline void _sfte_font_pack_and_bake(sfte_font_cache *cache, sfte_glyph *g, int32_t font_idx,
-                                            int32_t glyph_id, int32_t gw, int32_t gh) {
+static inline void _sfte_font_pack_and_bake(sfte_ctx *ctx, sfte_font_cache *cache, sfte_glyph *g,
+                                            int32_t font_idx, int32_t glyph_id, int32_t gw,
+                                            int32_t gh) {
     if (cache->atlas_x + gw >= SFTE_FONT_ATLAS_SIZE) {
         cache->atlas_x = 0;
         cache->atlas_y += cache->atlas_row_h + _SFTE_FONT_PADDING;
@@ -6720,7 +6829,7 @@ static inline void _sfte_font_pack_and_bake(sfte_font_cache *cache, sfte_glyph *
 
     if (gw > 0 && gh > 0) {
         int32_t atlas_idx = g->y0 * SFTE_FONT_ATLAS_SIZE + g->x0;
-        SFTE_FONT_BAKE(&cache->info[font_idx], glyph_id, cache->scales[font_idx],
+        SFTE_FONT_BAKE(ctx, &cache->info[font_idx], glyph_id, cache->scales[font_idx],
                        &cache->atlas_pxs[atlas_idx], gw, gh, SFTE_FONT_ATLAS_SIZE);
     }
 
@@ -6732,8 +6841,8 @@ static inline void _sfte_font_pack_and_bake(sfte_font_cache *cache, sfte_glyph *
     This function is blind to unicode, it expects a pre-resolved TrueType ID and font index from
    `_sfte_font_resolve_rune`.
 */
-static inline sfte_glyph *_sfte_font_get_glyph(sfte_font_cache *cache, uint16_t glyph_id,
-                                               uint8_t font_idx) {
+static inline sfte_glyph *_sfte_font_get_glyph(sfte_ctx *ctx, sfte_font_cache *cache,
+                                               uint16_t glyph_id, uint8_t font_idx) {
     if (glyph_id == 0) return NULL;
 
     uint32_t h = (glyph_id ^ (font_idx << 16)) % SFTE_FONT_GLYPH_CAP;
@@ -6758,7 +6867,7 @@ static inline sfte_glyph *_sfte_font_get_glyph(sfte_font_cache *cache, uint16_t 
         g->yoff = y0;
         g->font_idx = font_idx;
 
-        _sfte_font_pack_and_bake(cache, g, font_idx, glyph_id, x1 - x0, y1 - y0);
+        _sfte_font_pack_and_bake(ctx, cache, g, font_idx, glyph_id, x1 - x0, y1 - y0);
 
         return g;
     }
@@ -6824,7 +6933,7 @@ static inline void _sfte_font_reset_cache(sfte_ctx *ctx) {
     uint8_t m_font_idx = 0;
     uint16_t m_glyph_id = 0;
     _sfte_font_resolve_rune(&ctx->font.regular, 'M', &m_font_idx, &m_glyph_id);
-    sfte_glyph *m = _sfte_font_get_glyph(&ctx->font.regular, m_glyph_id, m_font_idx);
+    sfte_glyph *m = _sfte_font_get_glyph(ctx, &ctx->font.regular, m_glyph_id, m_font_idx);
     ctx->font.cell_width = m->xadvance;
 }
 // =================================================================================================
