@@ -1,4 +1,4 @@
-<img width="384" height="128" alt="sfte logo" src="https://github.com/user-attachments/assets/ae3e9bd8-2977-433d-bad5-afa49c2e8d70" />
+<img width="384" height="128" alt="sfte logo" src="https://github.com/user-attachments/assets/2c27c706-f455-4dd7-a7ec-172e04d4dbdd" />
 
 ---
 
