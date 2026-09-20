@@ -1,6 +1,6 @@
 /*
     sfte -- single-file terminal emulator
-    v1.01
+    v1.02
 
     Project URL: https://github.com/nihiL7331/sfte
 
@@ -235,10 +235,20 @@ typedef struct sfte_ctx sfte_ctx;
 /*
     Internal helper macro used to ensure the value set
     for a macro is within predefined bounds [min;max].
+
+    Use
+
+    #define SFTE_NO_ENSURES
+
+    to disable it, allowing to apply any value to any macro.
 */
+#ifdef SFTE_NO_ENSURES
+#define _SFTE_ENSURE_RANGE(val, min, max)
+#else  // !SFTE_NO_ENSURES
 #define _SFTE_ENSURE_RANGE(val, min, max)                                                          \
     SFTE_STATIC_ASSERT((val) >= (min) && (val) <= (max),                                           \
                        #val " must be strictly between " #min " and " #max)
+#endif  // !SFTE_NO_ENSURES
 
 /*
     Internal helper macro used to ensure the dependencies
@@ -246,9 +256,19 @@ typedef struct sfte_ctx sfte_ctx;
     Usage:
 
     _SFTE_ENSURE_DEPS(dependent_macro, dependency1 && dependency2);
+
+    Use
+
+    #define SFTE_NO_ENSURES
+
+    to disable it, allowing to apply any value to any macro.
 */
+#ifdef SFTE_NO_ENSURES
+#define _SFTE_ENSURE_DEPS(macro, dep)
+#else  // !SFTE_NO_ENSURES
 #define _SFTE_ENSURE_DEPS(macro, dep)                                                              \
     SFTE_STATIC_ASSERT(!(macro) || (dep), #macro " unmet dependencies: " #dep)
+#endif  // !SFTE_NO_ENSURES
 
 typedef enum {
     SFTE_LOG_LVL_PANIC,
