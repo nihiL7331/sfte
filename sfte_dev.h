@@ -1,6 +1,6 @@
 /*
     sfte -- single-file terminal emulator
-    v1.00
+    v1.01
 
     Project URL: https://github.com/nihiL7331/sfte
 
