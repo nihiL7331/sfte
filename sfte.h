@@ -4,7 +4,7 @@
 
 /*
     sfte -- single-file terminal emulator
-    v1.00
+    v1.01
 
     Project URL: https://github.com/nihiL7331/sfte
 
@@ -34262,7 +34262,12 @@ static inline void _sfte_csi_exec_sgr(sfte_ctx *ctx, uint16_t *p, uint16_t cnt) 
         case 3: ctx->term.cur_attr |= _SFTE_ATTR_ITALIC; break;
         case 4: ctx->term.cur_attr |= _SFTE_ATTR_UNDERLINE;
 #if SFTE_UNDERLINE_EXTENDED
+            // Default to straight if no sub-param is provided
             ctx->term.cur_ul_style = _SFTE_UNDERLINE_STYLE_STRAIGHT;
+
+            // If the sub-param exists and defines a style set it
+            if (i + 1 < cnt && p[i + 1] <= _SFTE_UNDERLINE_STYLE_DASHED)
+                ctx->term.cur_ul_style = p[++i];
 #endif  // SFTE_UNDERLINE_EXTENDED
             break;
         case 7: ctx->term.cur_attr |= _SFTE_ATTR_REVERSE; break;
