@@ -60,7 +60,9 @@ static uint8_t install_target(void) {
     if (!nob_mkdir_if_not_exists(desktop.items)) return 1;
     if (!nob_mkdir_if_not_exists(icon.items)) return 1;
 
-    if (!nob_copy_file("sfte", nob_temp_sprintf("%s/sfte", bin.items))) return 1;
+    const char *bin_path = nob_temp_sprintf("%s/sfte", bin.items);
+    remove(bin_path);  // Unlink the binary before replacing
+    if (!nob_copy_file("sfte", bin_path)) return 1;
 
     const char *desktop_content = "[Desktop Entry]\n"
                                   "Type=Application\n"
