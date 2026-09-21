@@ -36125,13 +36125,16 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
     if (anim_state == 1) passes_cnt = 2;
 #endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 
-#if SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLL_SMOOTH
     int32_t sb_diff = ctx->term.sb_offset - ctx->term.last_sb_offset;
     if (sb_diff != 0) {
         ctx->term.scroll_y_offset -= sb_diff * ctx->font.cell_height;
         ctx->term.last_sb_offset = ctx->term.sb_offset;
-        ctx->term.is_scrolling = 1;
-        ctx->term.last_scroll_ms = SFTE_TIME_MS();
+
+        if (!ctx->term.is_scrolling) {
+            ctx->term.is_scrolling = 1;
+            ctx->term.last_scroll_ms = SFTE_TIME_MS();
+        }
     }
 
     if (ctx->term.is_scrolling) {
@@ -36150,7 +36153,7 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
         }
         needs_wipe = 1;
     }
-#endif  // SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLL_SMOOTH
 
     if (needs_wipe) {
         _sfte_render_damage_add(out_dmg, 0, 0, ctx->width, ctx->height);
