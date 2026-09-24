@@ -10420,12 +10420,19 @@ void sfte_get_ideal_size(sfte_ctx *ctx, int16_t cols, int16_t rows, int32_t *out
 void sfte_parse(sfte_ctx *ctx, const uint8_t *data, size_t len) {
     if (len == 0 || !data) return;
 
+#if SFTE_SEARCH
+    // Update the search results if new output arrives
+    if (ctx->search.is_active) _sfte_search_exec(ctx, ctx->search.query);
+#endif  // SFTE_SEARCH
+#if SFTE_SEARCH && SFTE_TERM_SCROLLBACK_CAP
+    else
+#endif  // SFTE_SEARCH && SFTE_TERM_SCROLLBACK_CAP
 #if SFTE_TERM_SCROLLBACK_CAP
-    // snap view to bottom if new output arrives
-    if (ctx->term.sb_offset > 0) {
-        ctx->term.sb_offset = 0;
-        _sfte_grid_dirty_rows(ctx, 0, ctx->term.rows - 1);
-    }
+        // If not in search mode, snap the view to bottom if new output arrives
+        if (ctx->term.sb_offset > 0) {
+            ctx->term.sb_offset = 0;
+            _sfte_grid_dirty_rows(ctx, 0, ctx->term.rows - 1);
+        }
 #endif  // SFTE_TERM_SCROLLBACK_CAP
 
 #if SFTE_CURSOR_BLINK
