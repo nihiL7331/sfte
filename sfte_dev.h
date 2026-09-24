@@ -1848,7 +1848,7 @@ static const char *_sfte_log_messages[] = {_SFTE_LOG_ITEMS};
 #define _SFTE_CHAR_WIDTH(rune) 1
 #endif
 
-#if SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL || (SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP)
+#if SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL || SFTE_TERM_SCROLL_SMOOTH
 #ifndef SFTE_TIME_MS
 #include <time.h>
 static inline uint64_t _sfte_time_ms(void) {
@@ -1858,8 +1858,7 @@ static inline uint64_t _sfte_time_ms(void) {
 }
 #define SFTE_TIME_MS() _sfte_time_ms()
 #endif  // SFTE_TIME_MS
-#endif  // SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL || (SFTE_TERM_SCROLL_SMOOTH &&
-        // SFTE_TERM_SCROLLBACK_CAP)
+#endif  // SFTE_CURSOR_BLINK || SFTE_CURSOR_TRAIL || SFTE_TERM_SCROLL_SMOOTH
 // =================================================================================================
 // >>internal data structures
 // =================================================================================================
@@ -2131,12 +2130,12 @@ typedef struct {
     uint64_t last_move_ms;
     uint64_t last_trail_update_ms;
 #endif  // SFTE_CURSOR_TRAIL
-#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN
     uint64_t anim_start_ms;
-#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
-#if SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_ANIMATE_SCREEN
+#if SFTE_TERM_SCROLL_SMOOTH
     uint64_t last_scroll_ms;
-#endif  // SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLL_SMOOTH
 
     uint32_t saved_fg[2];  // 0=main, 1=alt
     uint32_t saved_bg[2];  // 0=main, 1=alt
@@ -7597,7 +7596,7 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
 }
 #endif  // SFTE_CURSOR_TRAIL
 
-#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN
 /*
     Calculates the Y offsets for the outgoing and incoming screens during an alt-screen
    transition. Returns 2 when finished animating. Returns 1 when currently animating. Returns 0
@@ -7625,7 +7624,7 @@ static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_
     }
     return 1;
 }
-#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN
 
 /*
     Prepares render passes.
@@ -7640,15 +7639,12 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
 
     uint8_t needs_wipe = 0;
     uint8_t passes_cnt = 1;
-#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN
     int32_t out_y = 0, in_y = 0;
-#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
-
-#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
     uint8_t anim_state = _sfte_render_get_anim_offsets(ctx, &out_y, &in_y);
     if (anim_state == 1 || anim_state == 2) needs_wipe = 1;
     if (anim_state == 1) passes_cnt = 2;
-#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN
 
 #if SFTE_TERM_SCROLL_SMOOTH
     int32_t sb_diff = ctx->term.sb_offset - ctx->term.last_sb_offset;
@@ -7697,7 +7693,7 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
         }
     }
 
-#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN
     if (passes_cnt == 2) {
         passes[0].y_off = out_y;
         passes[0].grid = ctx->term.alt_cells;
@@ -7710,7 +7706,7 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
         passes[1].grid = ctx->term.cells;
         passes[1].hide_cursor = ctx->term.hide_cursor;
     }
-#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN
 #if SFTE_TERM_SCROLL_SMOOTH
     passes[0].y_off = (int32_t)ctx->term.scroll_y_offset;
 #endif  // SFTE_TERM_SCROLL_SMOOTH
@@ -8350,7 +8346,7 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
             vcell->dirty = 0;
             continue;
         }
-#endif
+#endif  // SFTE_FONT_WIDE_CHARS
         sfte_rune rune = vcell->rune ? vcell->rune : ' ';
         uint32_t fg = _sfte_grid_get_fg(vcell);
         uint32_t bg = _sfte_grid_get_bg(vcell);
