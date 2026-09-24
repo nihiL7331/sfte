@@ -2070,6 +2070,32 @@ typedef struct {
 } sfte_shaper_subst_record;
 #endif  // SFTE_FONT_LIGATURES
 
+#if SFTE_SEARCH
+/*
+    Represents a single highlgihted match in the grid.
+*/
+typedef struct sfte_search_match {
+    int32_t logical_r;
+    int16_t start_c;
+    int16_t len;
+} sfte_search_match;
+
+typedef struct sfte_search_state {
+    void *compiled_re;  // Regex context from SFTE_SEARCH_RE_INIT
+    sfte_search_match *matches;
+    size_t pre_off;  // Where to rewind the arena when search is cleared
+
+    uint32_t match_cnt;         // Total # of matches found
+    uint32_t match_cap;         // Current capacity of `matches`
+    uint32_t active_match_idx;  // Currently focused match
+
+    char query[SFTE_SEARCH_MAX_QUERY];  // Raw search string typed by user
+    uint8_t is_active;                  // Is search mode currently open
+    uint8_t ignore_case;
+    uint8_t ui_dirty;
+} sfte_search_state;
+#endif  // SFTE_SEARCH
+
 /*
     Font variant texture cache.
 */
@@ -2294,6 +2320,9 @@ struct sfte_ctx {
 #if SFTE_IMG_KITTY
     sfte_kitty_state kitty;
 #endif  // SFTE_IMG_KITTY
+#if SFTE_SEARCH
+    sfte_search_state search;
+#endif  // SFTE_SEARCH
 
     sfte_write_cb write_cb;
     sfte_bell_cb bell_cb;
@@ -2364,7 +2393,7 @@ struct sfte_wayland_app {
 };
 #endif  // SFTE_WAYLAND
 
-typedef struct {
+typedef struct _sfte_resize_buffers {
     sfte_cell *main_grid;
 #if SFTE_TERM_SCROLLBACK_CAP
     sfte_cell *sb_grid;
@@ -2374,7 +2403,7 @@ typedef struct {
 } _sfte_resize_buffers;
 
 #if SFTE_TERM_REFLOW
-typedef struct {
+typedef struct _sfte_reflow_state {
     sfte_cell *temp_rows;
 
     int32_t reflow_row;
@@ -2485,6 +2514,34 @@ static inline void _sfte_rune_stamp_cell(sfte_ctx *ctx, uint32_t idx, sfte_rune 
                                          uint8_t extra_attr);
 static inline void _sfte_rune_insert(sfte_ctx *ctx, sfte_rune rune);
 static inline uint8_t _sfte_rune_utf8_decode(sfte_ctx *ctx, uint8_t b);
+
+// -------------------------------------------------------------------------------------------------
+// >search
+// -------------------------------------------------------------------------------------------------
+#if SFTE_SEARCH
+#ifndef SFTE_REGEX_CUSTOM_BACKEND
+#if SFTE_NO_POSIX
+#define SFTE_SEARCH_RE_INIT _sfte_search_tiny_re_init
+#define SFTE_SEARCH_RE_MATCH _sfte_search_tiny_re_match
+#define SFTE_SEARCH_RE_FREE _sfte_search_tiny_re_free
+#else  // !SFTE_NO_POSIX
+#define SFTE_SEARCH_RE_INIT _sfte_search_posix_re_init
+#define SFTE_SEARCH_RE_MATCH _sfte_search_posix_re_match
+#define SFTE_SEARCH_RE_FREE _sfte_search_posix_re_free
+#endif  // !SFTE_NO_POSIX
+#endif  // !SFTE_REGEX_CUSTOM_BACKEND
+static inline int16_t _sfte_search_extract_logical_line(sfte_ctx *ctx, int32_t logical_row,
+                                                        char *out_buf, size_t max_len);
+static inline void _sfte_search_map_to_coords(sfte_ctx *ctx, int32_t start_logical_row,
+                                              uint32_t match_idx, uint32_t match_len,
+                                              sfte_search_match *out_match);
+static inline uint8_t _sfte_search_is_highlighted(sfte_ctx *ctx, int16_t col, int32_t logical_row);
+static inline void _sfte_search_jump(sfte_ctx *ctx);
+static inline void _sfte_search_prev(sfte_ctx *ctx);
+static inline void _sfte_search_next(sfte_ctx *ctx);
+static inline void _sfte_search_exec(sfte_ctx *ctx, const char *query);
+static inline void _sfte_search_clear(sfte_ctx *ctx);
+#endif  // SFTE_SEARCH
 
 // -------------------------------------------------------------------------------------------------
 // >color
@@ -2754,7 +2811,12 @@ static inline void _sfte_render_sort_images(sfte_ctx *ctx);
 static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, uint8_t is_bg_pass,
                                        int32_t base_y_off, uint8_t pad_was_dirty);
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
+#if SFTE_SEARCH
+static inline void _sfte_render_search_overlay(sfte_ctx *ctx, void *px_buf,
+                                               sfte_damage_rect *out_dmg);
+#endif  // SFTE_SEARCH
 #if SFTE_CURSOR_TRAIL
+static inline void _sfte_render_update_trail(sfte_ctx *ctx);
 static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_rect *out_dmg);
 #endif  // SFTE_CURSOR_TRAIL
 #if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
@@ -2772,8 +2834,9 @@ static inline void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col
                                         sfte_font_cache *target_cache);
 static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
                                                int32_t render_w, sfte_cell *vcell);
-static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
-                                             int32_t render_w);
+static inline void _sfte_render_get_cursor_pos(sfte_ctx *ctx, int16_t *out_col, int16_t *out_row);
+static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
+                                       int32_t y_off, sfte_damage_rect *out_dmg);
 #if SFTE_TERM_CUSTOM_BOXES && !SFTE_TERM_ASCII_CHARSET
 static inline void _sfte_render_line(sfte_ctx *ctx, void *px_buf, int32_t x0, int32_t y0,
                                      int32_t x1, int32_t y1, int32_t thickness, uint32_t col);
@@ -2781,10 +2844,8 @@ static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t
                                             uint32_t col, uint32_t rune, int32_t y_off);
 #endif  // SFTE_TERM_CUSTOM_BOXES && !SFTE_TERM_ASCII_CHARSET
 static inline void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t col,
-                                                 int16_t row, int32_t y_off, sfte_cell *vcell,
-                                                 uint8_t is_cursor);
-static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
-                                        int16_t vis_row, int32_t y_off);
+                                                 int16_t row, int32_t y_off, sfte_cell *vcell);
+static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int32_t y_off);
 #if SFTE_FONT_LIGATURES
 static inline uint64_t _sfte_render_get_row_hash(sfte_ctx *ctx, int32_t logical_row);
 static inline void _sfte_render_shape_fg_row(sfte_ctx *ctx, int32_t logical_row);
@@ -2792,8 +2853,8 @@ static inline void _sfte_render_shape_fg_row(sfte_ctx *ctx, int32_t logical_row)
 static inline void _sfte_render_extract_fg_row(sfte_ctx *ctx, int32_t logical_row, int16_t row,
                                                int16_t vis_col, int16_t vis_row);
 static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
-                                       int32_t logical_row, int16_t vis_col, int16_t vis_row,
-                                       int32_t y_off, sfte_damage_rect *out_dmg);
+                                       int32_t logical_row, int32_t y_off,
+                                       sfte_damage_rect *out_dmg);
 static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
                                         int16_t vis_row, int32_t y_off, sfte_damage_rect *out_dmg);
 
@@ -3165,6 +3226,471 @@ static inline uint8_t _sfte_rune_utf8_decode(sfte_ctx *ctx, uint8_t b) {
 
     return 0;
 }
+// =================================================================================================
+// >>search
+// =================================================================================================
+#if SFTE_SEARCH
+#ifndef SFTE_REGEX_CUSTOM_BACKEND
+#if SFTE_NO_POSIX
+static inline void _sfte_search_tiny_re_init(sfte_stack *stack, const char *pattern,
+                                             uint8_t ignore_case) {
+    (void)stack, (void)ignore_case;
+    return (void *)re_compile(pattern);
+}
+
+static inline uint8_t _sfte_search_tiny_re_match(void *re_ctx, const char *text, int32_t *out_idx,
+                                                 int32_t *out_len) {
+    int32_t match_len = 0;
+    int32_t match_idx = re_matchp(re_ctx, text, &match_len);
+    if (match_idx >= 0) {
+        *out_idx = match_idx;
+        *out_len = match_len;
+        return 1;
+    }
+    return 0;
+}
+
+static inline void _sfte_search_tiny_re_free(sfte_stack *stack, void *re_ctx) {
+    (void)stack, (void)re_ctx;
+}
+#else   // !SFTE_NO_POSIX
+static inline void *_sfte_search_posix_re_init(sfte_stack *stack, const char *pattern,
+                                               uint8_t ignore_case) {
+    regex_t *re = (regex_t *)_sfte_mem_stack_alloc(stack, sizeof(regex_t), _Alignof(regex_t));
+    if (!re) return NULL;
+
+    uint8_t flags = REG_EXTENDED;
+    if (ignore_case) flags |= REG_ICASE;
+    if (regcomp(re, pattern, flags)) return NULL;
+    return (void *)re;
+}
+
+static inline uint8_t _sfte_search_posix_re_match(void *re_ctx, const char *text, int32_t *out_idx,
+                                                  int32_t *out_len) {
+    if (!re_ctx) return 0;
+    regex_t *re = (regex_t *)re_ctx;
+    regmatch_t pmatch[1];
+
+    if (!regexec(re, text, 1, pmatch, 0)) {
+        // `rm_so` and `rm_eo` are of type `off_t`, which is a signed integer
+        // For simplicitys sake and custom backends implementations they're casted
+        *out_idx = (int32_t)pmatch[0].rm_so;
+        *out_len = (int32_t)(pmatch[0].rm_eo - pmatch[0].rm_so);
+        return 1;
+    }
+    return 0;
+}
+
+static inline void _sfte_search_posix_re_free(sfte_stack *stack, void *re_ctx) {
+    (void)stack;
+    if (re_ctx) regfree((regex_t *)re_ctx);
+}
+#endif  // !SFTE_NO_POSIX
+#endif  // !SFTE_REGEX_CUSTOM_BACKEND
+
+/*
+    Used for default search shortcuts.
+*/
+static inline uint8_t _sfte_search_start_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
+    (void)arg;
+#if SFTE_TERM_ALT_SCREEN
+    if (ctx->term.alt_active) return 0;
+#endif  // SFTE_TERM_ALT_SCREEN
+    ctx->search.pre_off = 0;
+    ctx->search.is_active = 1;
+    ctx->search.query[0] = '\0';
+#if SFTE_SEARCH_PLACEMENT_TOP
+    uint16_t row = 0;
+#else   // !SFTE_SEARCH_PLACEMENT_TOP
+    uint16_t row = ctx->term.rows - 1;
+#endif  // !SFTE_SEARCH_PLACEMENT_TOP
+    _sfte_grid_dirty_rows(ctx, row, row);
+    ctx->search.ui_dirty = 1;
+    return ctx->search.is_active;
+}
+
+/*
+    Used for default search shortcuts.
+*/
+static inline uint8_t _sfte_search_prev_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
+    (void)arg;
+    _sfte_search_prev(ctx);
+    return ctx->search.is_active;
+}
+
+/*
+    Used for default search shortcuts.
+*/
+static inline uint8_t _sfte_search_next_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
+    (void)arg;
+    _sfte_search_next(ctx);
+    return ctx->search.is_active;
+}
+
+/*
+    Used for default search shortcuts.
+*/
+static inline uint8_t _sfte_search_clear_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
+    (void)arg;
+    uint8_t was_active = ctx->search.is_active;
+    _sfte_search_clear(ctx);
+    return was_active;
+}
+
+/*
+    Reads a logical row and its wrapped continuations from the grid into a flat C string.
+    Returns the number of physical rows consumed.
+*/
+static inline int16_t _sfte_search_extract_logical_line(sfte_ctx *ctx, int32_t logical_row,
+                                                        char *out_buf, size_t max_len) {
+    int16_t rows_consumed = 0;
+    size_t buf_idx = 0;
+
+    // Leave 4 bytes of room at the end to safely encode a 4-byte UTF-8 char + null terminator
+    while (buf_idx < max_len - 5) {
+        int32_t cur_r = logical_row + rows_consumed;
+        uint8_t is_wrapped = _sfte_grid_get_cell(ctx, ctx->term.cols - 1, cur_r)->wrapped;
+
+        // Find the true length of the row to ignore empty trailing cells
+        int16_t actual_cols = ctx->term.cols;
+        if (!is_wrapped)
+            while (actual_cols > 0) {
+                sfte_cell *cell = _sfte_grid_get_cell(ctx, actual_cols - 1, cur_r);
+                if ((cell->rune != 0 && cell->rune != ' ') || cell->bg != SFTE_COLOR_BG) break;
+                actual_cols--;
+            }
+
+        // Encode runes to UTF-8 bytes
+        for (int16_t c = 0; c < actual_cols; ++c) {
+            sfte_cell *cell = _sfte_grid_get_cell(ctx, c, cur_r);
+            uint32_t rune = cell->rune ? cell->rune : ' ';
+
+            if (rune <= 0x7F) {
+                out_buf[buf_idx++] = (char)rune;
+            } else if (rune <= 0x7FF) {
+                out_buf[buf_idx++] = (char)(0xC0 | (rune >> 6));
+                out_buf[buf_idx++] = (char)(0x80 | (rune & 0x3F));
+            } else if (rune <= 0xFFFF) {
+                out_buf[buf_idx++] = (char)(0xE0 | (rune >> 12));
+                out_buf[buf_idx++] = (char)(0x80 | ((rune >> 6) & 0x3F));
+                out_buf[buf_idx++] = (char)(0x80 | (rune & 0x3F));
+            }
+        }
+
+        rows_consumed++;
+
+        if (!is_wrapped) break;
+    }
+
+    out_buf[buf_idx] = '\0';
+    return rows_consumed;
+}
+
+/*
+    Translates a 1D string match index back into a 2D grid coordinate.
+*/
+static inline void _sfte_search_map_to_coords(sfte_ctx *ctx, int32_t start_logical_row,
+                                              uint32_t match_idx, uint32_t match_len,
+                                              sfte_search_match *out_match) {
+    int32_t cur_r = start_logical_row;
+    uint32_t cur_idx = 0;
+    uint32_t end_idx = match_idx + match_len;
+    uint8_t found_start = 0;
+    uint16_t match_cell_len = 0;
+
+    out_match->logical_r = start_logical_row;
+    out_match->start_c = 0;
+    out_match->len = 0;
+
+    while (1) {
+        uint8_t is_wrapped = _sfte_grid_get_cell(ctx, ctx->term.cols - 1, cur_r)->wrapped;
+
+        int16_t actual_cols = ctx->term.cols;
+        if (!is_wrapped)
+            while (actual_cols > 0) {
+                sfte_cell *cell = _sfte_grid_get_cell(ctx, actual_cols - 1, cur_r);
+                if ((cell->rune != 0 && cell->rune != ' ') || cell->bg != SFTE_COLOR_BG) break;
+                actual_cols--;
+            }
+
+        for (int16_t c = 0; c < actual_cols; ++c) {
+            // Hit start of the match
+            if (cur_idx == match_idx) {
+                out_match->logical_r = cur_r;
+                out_match->start_c = c;
+                found_start = 1;
+            }
+
+            // Hit end of the match
+            if (cur_idx == end_idx) {
+                out_match->len = match_cell_len;
+                return;
+            }
+
+            sfte_cell *cell = _sfte_grid_get_cell(ctx, c, cur_r);
+            uint32_t rune = cell->rune ? cell->rune : ' ';
+
+            uint8_t byte_len = 0;
+            if (rune <= 0x7F)
+                byte_len = 1;
+            else if (rune <= 0x7FF)
+                byte_len = 2;
+            else if (rune <= 0xFFFF)
+                byte_len = 3;
+            else
+                byte_len = 4;
+
+            cur_idx += byte_len;
+            if (found_start) match_cell_len++;
+        }
+
+        if (cur_idx == end_idx) {
+            out_match->len = match_cell_len;
+            return;
+        }
+
+        if (!is_wrapped) break;
+        cur_r++;
+    }
+}
+
+/*
+    Queries if a specific grid cell falls within the active search match boundaries.
+    Returns 0 if is not highlighted.
+    Returns 1 if is highlighted and ISN'T the current match.
+    Returns 2 if is highlighted and IS the current match.
+*/
+static inline uint8_t _sfte_search_is_highlighted(sfte_ctx *ctx, int16_t col, int32_t logical_row) {
+    if (!ctx->search.is_active || ctx->search.match_cnt == 0) return 0;
+
+    for (uint32_t i = 0; i < ctx->search.match_cnt; ++i) {
+        sfte_search_match *m = &ctx->search.matches[i];
+
+        // Calculate the vertical distance
+        // If `row_diff` is negative, match is below
+        int32_t row_diff = logical_row - m->logical_r;
+        if (row_diff < 0) continue;
+
+        // Check if the cell falls inside the 1D wrap distance
+        int32_t cell_off = (row_diff * ctx->term.cols) + col - m->start_c;
+        if (cell_off >= 0 && cell_off < m->len) return (i == ctx->search.active_match_idx) ? 2 : 1;
+
+        // If this match is above current row
+        // and it's length isn't long enough to wrap down to current row,
+        // no older match in the array will reach
+        if (row_diff > (m->len / ctx->term.cols) + 1) break;
+    }
+
+    return 0;
+}
+
+/*
+    Jumps to the currently active search match.
+*/
+static inline void _sfte_search_jump(sfte_ctx *ctx) {
+    int32_t match_logical_r = ctx->search.matches[ctx->search.active_match_idx].logical_r;
+    int32_t top_logical_r = -ctx->term.sb_offset;
+    int32_t bot_logical_r = top_logical_r + ctx->term.rows - 2;  // `- 2` because search takes a row
+
+    if (match_logical_r < top_logical_r || match_logical_r > bot_logical_r) {
+        int32_t target_off = -match_logical_r + (ctx->term.rows / 2);
+        if (target_off < 0) target_off = 0;
+        sfte_view_scroll(ctx, target_off + top_logical_r);
+    }
+
+    // If `delta` is 0, sfte_view_scroll will NOT dirty the screen,
+    // so force a redraw here just in case.
+    top_logical_r = -ctx->term.sb_offset;
+    bot_logical_r = top_logical_r + ctx->term.rows - 1;
+    _sfte_grid_dirty_rows(ctx, top_logical_r, bot_logical_r);
+    ctx->search.ui_dirty = 1;
+}
+
+/*
+    Jumps the viewport down the scrollback to the next newer match.
+*/
+static inline void _sfte_search_prev(sfte_ctx *ctx) {
+    if (!ctx->search.is_active || ctx->search.match_cnt == 0) return;
+
+    if (ctx->search.active_match_idx == 0)
+        ctx->search.active_match_idx = ctx->search.match_cnt - 1;
+    else
+        ctx->search.active_match_idx--;
+
+    _sfte_search_jump(ctx);
+}
+
+/*
+    Jumps the viewport up the scrollback to the next older match.
+*/
+static inline void _sfte_search_next(sfte_ctx *ctx) {
+    if (!ctx->search.is_active || ctx->search.match_cnt == 0) return;
+
+    if (ctx->search.active_match_idx == ctx->search.match_cnt - 1)
+        ctx->search.active_match_idx = 0;
+    else
+        ctx->search.active_match_idx++;
+
+    _sfte_search_jump(ctx);
+}
+
+/*
+    Compiles the regex, scans the scrollback via extraction helpers,
+    populates the match list, and snaps the viewport to the most recent match.
+
+    Populates the match list from the bottom (live screen), later going to scrollback.
+*/
+static inline void _sfte_search_exec(sfte_ctx *ctx, const char *query) {
+    char temp_query[SFTE_SEARCH_MAX_QUERY];
+    size_t query_len = strlen(query);
+    if (query_len >= SFTE_SEARCH_MAX_QUERY) query_len = SFTE_SEARCH_MAX_QUERY;
+    memcpy(temp_query, query, query_len);
+    temp_query[query_len] = '\0';
+
+    uint8_t ignore_case = 1;
+    for (size_t i = 0; i < query_len; ++i)
+        if (temp_query[i] >= 'A' && temp_query[i] <= 'Z') {
+            ignore_case = 0;
+            break;
+        }
+
+    if (ctx->search.compiled_re) {
+        SFTE_SEARCH_RE_FREE(&ctx->stack, ctx->search.compiled_re);
+        ctx->search.compiled_re = NULL;
+    }
+
+    if (ctx->search.pre_off == 0)
+        ctx->search.pre_off = _sfte_mem_stack_save(&ctx->stack);
+    else
+        _sfte_mem_stack_rewind(&ctx->stack, ctx->search.pre_off);
+
+    ctx->search.is_active = 1;
+    ctx->search.ignore_case = ignore_case;
+    memcpy(ctx->search.query, temp_query, query_len + 1);
+
+    ctx->search.match_cnt = 0;
+    ctx->search.matches = NULL;
+
+#if SFTE_SEARCH_PLACEMENT_TOP
+    uint16_t row = 0;
+#else   // !SFTE_SEARCH_PLACEMENT_TOP
+    uint16_t row = ctx->term.rows - 1;
+#endif  // !SFTE_SEARCH_PLACEMENT_TOP
+    _sfte_grid_dirty_rows(ctx, row, row);
+    ctx->search.ui_dirty = 1;
+
+    if (query_len == 0) return;
+
+    ctx->search.compiled_re = SFTE_SEARCH_RE_INIT(&ctx->stack, ctx->search.query, ignore_case);
+
+    if (!ctx->search.compiled_re) return;
+
+    ctx->search.match_cap = SFTE_SEARCH_MATCH_INIT_CAP;
+    ctx->search.matches = (sfte_search_match *)_sfte_mem_stack_alloc(
+        &ctx->stack, sizeof(sfte_search_match) * ctx->search.match_cap,
+        _Alignof(sfte_search_match));
+
+    int32_t min_logical_r = -(ctx->term.sb_len < ctx->term.sb_cap ? ctx->term.sb_len
+                                                                  : ctx->term.sb_cap);
+    int32_t max_logical_r = ctx->term.rows - 1;
+
+    char row_buf[SFTE_SEARCH_ROW_BUF_CAP];
+
+    int32_t cur_r = max_logical_r;
+    while (cur_r >= min_logical_r) {
+        // Find start of this logical line block
+        int32_t logical_start_r = cur_r;
+        while (logical_start_r > min_logical_r) {
+            // Check if previous row wrapped into this one
+            int32_t prev_r = logical_start_r - 1;
+            sfte_cell *last_cell = _sfte_grid_get_cell(ctx, ctx->term.cols - 1, prev_r);
+            if (!last_cell || !last_cell->wrapped) break;
+            logical_start_r--;
+        }
+
+        // Extract full logical line starting from head
+        _sfte_search_extract_logical_line(ctx, logical_start_r, row_buf, SFTE_SEARCH_ROW_BUF_CAP);
+
+        int32_t search_off = 0;
+        int32_t match_idx, match_len;
+
+        // Loop offset to catch lines with multiple hits
+        while (SFTE_SEARCH_RE_MATCH(ctx->search.compiled_re, row_buf + search_off, &match_idx,
+                                    &match_len)) {
+            // Expand arena array if full
+            if (ctx->search.match_cnt >= ctx->search.match_cap) {
+                // Since there were no allocations between last alloc and this,
+                // we can just allocate the CURRENT capacity (essentially doubling it).
+                // The memory is continuous so after the allocation we can keep
+                // adding to the array without any memcpy'ing and such.
+                _sfte_mem_stack_alloc(&ctx->stack,
+                                      sizeof(sfte_search_match) * ctx->search.match_cap,
+                                      _Alignof(sfte_search_match));
+                ctx->search.match_cap *= 2;
+            }
+
+            sfte_search_match *m = &ctx->search.matches[ctx->search.match_cnt];
+            _sfte_search_map_to_coords(ctx, logical_start_r, search_off + match_idx, match_len, m);
+            ctx->search.match_cnt++;
+
+            if (match_len == 0)
+                search_off += match_idx + 1;
+            else
+                search_off += match_idx + match_len;
+
+            if (search_off >= SFTE_SEARCH_ROW_BUF_CAP) break;
+        }
+
+        // Jump loop counter behind logical block just processed
+        cur_r = logical_start_r - 1;
+    }
+
+    if (ctx->search.match_cnt > 0) {
+        int32_t cur_center_r = -ctx->term.sb_offset + (ctx->term.rows / 2);
+        uint32_t closest_idx = 0;
+        int32_t min_dist = INT32_MAX;
+
+        for (uint32_t i = 0; i < ctx->search.match_cnt; ++i) {
+            int32_t dist = ctx->search.matches[i].logical_r - cur_center_r;
+            if (dist < 0) dist = -dist;
+
+            if (dist < min_dist) {
+                min_dist = dist;
+                closest_idx = i;
+            }
+        }
+
+        ctx->search.active_match_idx = closest_idx;
+        _sfte_search_jump(ctx);
+    } else
+        ctx->search.active_match_idx = 0;
+}
+
+/*
+    Frees the compiled regex context and clears the match list.
+*/
+static inline void _sfte_search_clear(sfte_ctx *ctx) {
+    if (!ctx->search.is_active) return;
+    if (ctx->search.compiled_re) {
+        SFTE_SEARCH_RE_FREE(&ctx->stack, ctx->search.compiled_re);
+        ctx->search.compiled_re = NULL;
+    }
+
+    _sfte_mem_stack_rewind(&ctx->stack, ctx->search.pre_off);
+    ctx->search.is_active = 0;
+    ctx->search.ui_dirty = 1;
+    ctx->search.match_cnt = 0;
+    ctx->search.match_cap = 0;
+    ctx->search.matches = NULL;
+    ctx->search.active_match_idx = 0;
+    ctx->search.query[0] = '\0';
+
+    int32_t top_logical_r = -ctx->term.sb_offset;
+    int32_t bot_logical_r = top_logical_r + ctx->term.rows - 1;
+    _sfte_grid_dirty_rows(ctx, top_logical_r, bot_logical_r);
+}
+
+#endif  // SFTE_SEARCH
 // =================================================================================================
 // >>color
 // =================================================================================================
@@ -5760,8 +6286,10 @@ static inline void _sfte_csi_reset_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt
 #if SFTE_CURSOR_TRAIL
                 ctx->term.last_move_ms = 0;
                 ctx->term.is_trailing = 0;
-                ctx->term.tail_rx = ctx->term.cursor_col * ctx->font.cell_width;
-                ctx->term.tail_ry = ctx->term.cursor_row * ctx->font.cell_height;
+                int16_t vis_col, vis_row;
+                _sfte_render_get_cursor_pos(ctx, &vis_col, &vis_row);
+                ctx->term.tail_rx = vis_col * ctx->font.cell_width;
+                ctx->term.tail_ry = vis_row * ctx->font.cell_height;
                 ctx->term.trail_dmg.w = 0;
 #endif  // SFTE_CURSOR_TRAIL
             }
@@ -6278,6 +6806,9 @@ static inline void _sfte_parser_esc_ris(sfte_ctx *ctx) {
     _sfte_csi_dispatch(ctx, 'p');
     ctx->term.cursor_col = 0, ctx->term.cursor_row = 0;
     _sfte_grid_clear_cells(ctx, 0, ctx->term.cols * ctx->term.rows);
+#if SFTE_SEARCH
+    _sfte_search_clear(ctx);
+#endif  // SFTE_SEARCH
 }
 
 /*
@@ -7503,7 +8034,124 @@ static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, uint8_t is_b
 }
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 
+#if SFTE_SEARCH
+static inline void _sfte_render_search_overlay(sfte_ctx *ctx, void *px_buf,
+                                               sfte_damage_rect *out_dmg) {
+    if (!ctx->search.is_active) return;
+
+    int32_t bar_h = ctx->font.cell_height;
+#if SFTE_SEARCH_PLACEMENT_TOP
+    int32_t r = 0;
+#else   // !SFTE_SEARCH_PLACEMENT_TOP
+    int32_t r = ctx->term.rows - 1;
+#endif  // !SFTE_SEARCH_PLACEMENT_TOP
+    int32_t start_y = r * ctx->font.cell_height;
+#if SFTE_WINDOW_PAD_Y
+    start_y += SFTE_WINDOW_PAD_Y;
+#endif  // SFTE_WINDOW_PAD_Y
+
+    char right_buf[64];
+    int16_t right_len = snprintf(right_buf, sizeof(right_buf), " [%u/%u] ",
+                                 ctx->search.match_cnt > 0 ? ctx->search.active_match_idx + 1 : 0,
+                                 ctx->search.match_cnt);
+
+    // Calculate available space for query
+    int16_t prefix_len = strlen(SFTE_SEARCH_PREFIX);
+    int16_t query_len = strlen(ctx->search.query);
+
+    int16_t avail_query_space = ctx->term.cols - prefix_len - right_len - 1;
+
+    char left_buf[SFTE_SEARCH_MAX_QUERY + 64];
+    int16_t left_len = 0;
+
+    if (query_len > avail_query_space && avail_query_space >= 3) {  // Query won't fit
+        int16_t copy_len = avail_query_space - 3;
+        int16_t start_idx = query_len - copy_len;
+
+        // Snap to next valid byte to prevent splitting an UTF-8 character
+        while (start_idx < query_len && (ctx->search.query[start_idx] & 0xC0) == 0x80) start_idx++;
+
+        left_len = snprintf(left_buf, sizeof(left_buf), "%s...%s ", SFTE_SEARCH_PREFIX,
+                            ctx->search.query + start_idx);
+    } else
+        left_len = snprintf(left_buf, sizeof(left_buf), "%s%s ", SFTE_SEARCH_PREFIX,
+                            ctx->search.query);
+
+    int32_t bar_w = ctx->term.cols * ctx->font.cell_width;
+    int32_t start_x = 0;
+#if SFTE_WINDOW_PAD_X
+    start_x += SFTE_WINDOW_PAD_X;
+#endif  // SFTE_WINDOW_PAD_X
+
+    for (int32_t y = 0; y < bar_h; ++y) {
+        int32_t py = start_y + y;
+        if (py >= ctx->height) break;
+
+        for (int32_t x = 0; x < bar_w; ++x) {
+            int32_t px = start_x + x;
+            if (px >= ctx->width) break;
+
+            uint32_t col_bg = (SFTE_SEARCH_BG_BAR_OPACITY << 24) |
+                              (SFTE_SEARCH_BG_BAR & ~SFTE_COLOR_ALPHA_MASK);
+            SFTE_COLOR_BLEND_PIXEL(px_buf, px, py, ctx->width, col_bg, (uint8_t)(col_bg >> 24));
+        }
+    }
+
+    sfte_font_cache *font = _sfte_font_get_cache(ctx, SFTE_FONT_STYLE_REGULAR);
+
+    for (int16_t c = 0; c < left_len && c < ctx->term.cols; ++c) {
+        uint32_t rune = (uint8_t)left_buf[c];
+
+        uint8_t font_idx = 0;
+        uint16_t glyph_id = 0;
+        _sfte_font_resolve_rune(font, rune, &font_idx, &glyph_id);
+        _sfte_render_fg_cell(ctx, px_buf, c, r, 0, rune, glyph_id, font_idx, SFTE_COLOR_FG, font);
+    }
+
+    int16_t right_start_c = ctx->term.cols - right_len;
+    if (right_start_c < 0) right_start_c = 0;
+
+    for (int16_t c = 0; c < right_len && (right_start_c + c) < ctx->term.cols; ++c) {
+        uint32_t rune = (uint8_t)right_buf[c];
+
+        uint8_t font_idx = 0;
+        uint16_t glyph_id = 0;
+        _sfte_font_resolve_rune(font, rune, &font_idx, &glyph_id);
+        _sfte_render_fg_cell(ctx, px_buf, right_start_c + c, r, 0, rune, glyph_id, font_idx,
+                             SFTE_COLOR_FG, font);
+    }
+
+    _sfte_render_damage_add(out_dmg, start_x, start_y, bar_w, bar_h);
+}
+#endif  // SFTE_SEARCH
+
 #if SFTE_CURSOR_TRAIL
+/*
+    Updates the cursor trail positions.
+    This is separated from _sfte_render_trail to avoid not updating on early returns.
+*/
+static inline void _sfte_render_update_trail(sfte_ctx *ctx) {
+    int16_t vis_col, vis_row;
+    _sfte_render_get_cursor_pos(ctx, &vis_col, &vis_row);
+    float target_x = vis_col * ctx->font.cell_width;
+    float target_y = vis_row * ctx->font.cell_height;
+
+    if (vis_col != ctx->term.last_grid_col || vis_row != ctx->term.last_grid_row) {
+        uint64_t now = SFTE_TIME_MS();
+
+        if (ctx->term.last_move_ms != 0 && (now - ctx->term.last_move_ms >= SFTE_CURSOR_TRAIL))
+            ctx->term.is_trailing = 1;
+        else if (!ctx->term.is_trailing) {
+            ctx->term.tail_rx = target_x;
+            ctx->term.tail_ry = target_y;
+        }
+
+        ctx->term.last_grid_col = vis_col;
+        ctx->term.last_grid_row = vis_row;
+        ctx->term.last_move_ms = now;
+    }
+}
+
 /*
     Compositor pass for the cursor trail.
     Drawn as the last element in the rendering loop.
@@ -7513,8 +8161,10 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
         _sfte_render_damage_add(out_dmg, ctx->term.trail_dmg.x, ctx->term.trail_dmg.y,
                                 ctx->term.trail_dmg.w, ctx->term.trail_dmg.h);
 
-    float target_x = ctx->term.cursor_col * ctx->font.cell_width;
-    float target_y = ctx->term.cursor_row * ctx->font.cell_height;
+    int16_t vis_col, vis_row;
+    _sfte_render_get_cursor_pos(ctx, &vis_col, &vis_row);
+    float target_x = vis_col * ctx->font.cell_width;
+    float target_y = vis_row * ctx->font.cell_height;
 
     if (ctx->term.hide_cursor || ctx->term.warp_tail || !ctx->term.is_trailing) {
         ctx->term.tail_rx = target_x;
@@ -7874,16 +8524,75 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int3
 }
 
 /*
-    Renders non-block cursors (bar/underline).
+    Returns the RENDERED position of the cursor.
+    Do not mistake it for the cursor position for the shell - while they're equal 99% of the time,
+    they differ when search mode is on.
+
+    To ensure that even when search mode is on ongoing sequences render properly,
+    these two values are separate.
+
+    This can be later expanded for further terminal modes, e.g. for a theme picker.
 */
-static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
-                                             int32_t render_w) {
+static inline void _sfte_render_get_cursor_pos(sfte_ctx *ctx, int16_t *out_col, int16_t *out_row) {
+    *out_col = _SFTE_CLAMP(ctx->term.cursor_col, 0, ctx->term.cols - 1);
+    *out_row = (int16_t)_sfte_grid_log2vis(ctx, ctx->term.cursor_row);
+#if SFTE_SEARCH
+    if (ctx->search.is_active) {
+        char pre_buf[64];
+        *out_col = snprintf(pre_buf, sizeof(pre_buf), "%s%s", SFTE_SEARCH_PREFIX,
+                            ctx->search.query);
+#if SFTE_SEARCH_PLACEMENT_TOP
+        *out_row = 0;
+#else   // !SFTE_SEARCH_PLACEMENT_TOP
+        *out_row = ctx->term.rows - 1;
+#endif  // !SFTE_SEARCH_PLACEMENT_TOP
+    }
+#endif  // SFTE_SEARCH
+}
+
+static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
+                                       int32_t y_off, sfte_damage_rect *out_dmg) {
+#if SFTE_CURSOR_BLINK
+    if (!ctx->term.blink_visible) return;
+#endif  // SFTE_CURSOR_BLINK
+
+#if SFTE_CURSOR_TRAIL
+    _sfte_render_update_trail(ctx);
+#endif  // SFTE_CURSOR_TRAIL
+
+    if (ctx->term.hide_cursor) return;
+
+#if SFTE_CURSOR_TRAIL
+#if SFTE_TERM_ANIMATE_SCREEN
+    if (!ctx->term.is_animating)
+#endif  // SFTE_TERM_ANIMATE_SCREEN
+        _sfte_render_trail(ctx, px_buf, out_dmg);
+#endif  // SFTE_CURSOR_TRAIL
+
+#if SFTE_TERM_SCROLLBACK_CAP
+    if (ctx->term.sb_offset > 0
+#if SFTE_SEARCH
+        && !ctx->search.is_active
+#endif  // SFTE_SEARCH
+    )
+        return;
+#endif  // SFTE_TERM_SCROLLBACK_CAP
+
 #if SFTE_CURSOR_DYNAMIC
     uint32_t active_cur_color = ctx->term.cursor_color;
 #else   // !SFTE_CURSOR_DYNAMIC
     uint32_t active_cur_color = SFTE_CURSOR_COLOR;
 #endif  // !SFTE_CURSOR_DYNAMIC
     uint32_t cur_col = SFTE_COLOR_ALPHA_MASK | (active_cur_color & ~SFTE_COLOR_ALPHA_MASK);
+
+    int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
+    int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
+
+    int32_t render_w = ctx->font.cell_width;
+#if SFTE_FONT_WIDE_CHARS
+    sfte_cell *cell = _sfte_grid_get_cell(ctx, col, _sfte_grid_vis2log(ctx, row));
+    render_w *= (cell->attr & _SFTE_ATTR_WIDE) ? 2 : 1;
+#endif  // SFTE_FONT_WIDE_CHARS
 
 #if SFTE_TERM_FOCUS
     if (!ctx->term.is_focused) {
@@ -7899,8 +8608,28 @@ static inline void _sfte_render_cursor_shape(sfte_ctx *ctx, void *px_buf, int32_
         return;
     }
 #endif  // SFTE_TERM_FOCUS
+    if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BLOCK) {
+        _sfte_render_bg_cell(ctx, px_buf, col, row, y_off, cur_col);
+#if SFTE_SEARCH
+        if (ctx->search.is_active) return;
+#endif  // SFTE_SEARCH
 
-    if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_UNDERLINE) {
+#if SFTE_FONT_WIDE_CHARS
+        if ((cell->attr & _SFTE_ATTR_WIDE) && col + 1 < ctx->term.cols)
+            _sfte_render_bg_cell(ctx, px_buf, col + 1, row, y_off, cur_col);
+#endif  // SFTE_FONT_WIDE_CHARS
+
+        uint32_t rune = cell->rune ? cell->rune : ' ';
+
+        if (rune != ' ') {
+            sfte_font_cache *font = _sfte_font_get_cache(ctx, SFTE_FONT_STYLE_REGULAR);
+            uint8_t font_idx = 0;
+            uint16_t glyph_id = 0;
+            _sfte_font_resolve_rune(font, rune, &font_idx, &glyph_id);
+            _sfte_render_fg_cell(ctx, px_buf, col, row, y_off, rune, glyph_id, font_idx, cell->bg,
+                                 font);
+        }
+    } else if (_SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_UNDERLINE) {
         int32_t thick = ctx->font.cell_height * SFTE_CURSOR_THICK_RATIO;
         if (thick < 1) thick = 1;
 
@@ -8140,8 +8869,7 @@ static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t
     Dispatcher for terminal text decorations (underlines, cursor).
 */
 static inline void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t col,
-                                                 int16_t row, int32_t y_off, sfte_cell *vcell,
-                                                 uint8_t is_cursor) {
+                                                 int16_t row, int32_t y_off, sfte_cell *vcell) {
     int32_t cx = col * ctx->font.cell_width + SFTE_WINDOW_PAD_X;
     int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
 
@@ -8152,28 +8880,19 @@ static inline void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, in
 
     if (vcell->attr & _SFTE_ATTR_UNDERLINE)
         _sfte_render_underline_cell(ctx, px_buf, cx, cy + y_off, render_w, vcell);
-
-    uint8_t draw_shape = is_cursor && (_SFTE_CUR_STYLE(ctx) != SFTE_CURSOR_STYLE_BLOCK
-#if SFTE_TERM_FOCUS
-                                       || !ctx->term.is_focused
-#endif  // SFTE_TERM_FOCUS
-                                      );
-    if (draw_shape) _sfte_render_cursor_shape(ctx, px_buf, cx, cy + y_off, render_w);
 }
 
 /*
     Background rendering pass.
     Renders the whole grid, contrary to `_sfte_render_bg_cell`.
 */
-static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
-                                        int16_t vis_row, int32_t y_off) {
+static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int32_t y_off) {
     for (int16_t r = 0; r < ctx->term.rows; ++r) {
         int32_t logical_r = _sfte_grid_vis2log(ctx, r);
         for (int16_t c = 0; c < ctx->term.cols; ++c) {
             sfte_cell *vcell = _sfte_grid_get_cell(ctx, c, logical_r);
             if (!vcell->dirty) continue;
 
-            uint32_t fg = _sfte_grid_get_fg(vcell);
             uint32_t bg = _sfte_grid_get_bg(vcell);
             uint8_t attr = vcell->attr;
 
@@ -8181,41 +8900,23 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
             if (_sfte_input_is_selected(ctx, c, logical_r)) attr |= _SFTE_ATTR_REVERSE;
 #endif  // SFTE_INPUT_SELECTION
 
-            if (attr & _SFTE_ATTR_REVERSE) {
-                uint32_t tmp = fg;
-                fg = bg;
-                bg = tmp;
+#if SFTE_SEARCH
+            uint8_t search_res = _sfte_search_is_highlighted(ctx, c, logical_r);
+            // If `search_res` is 0 it isn't highlighted and we continue,
+            // If `search_res` is 1 it is highlighted but not active,
+            // If `search_res` is 2 it is highlighted AND active.
+            if (search_res == 1) {
+                bg = SFTE_SEARCH_BG_MATCH;
+                attr |= SFTE_SEARCH_ATTR_MATCH;
+            } else if (search_res == 2) {
+                bg = SFTE_SEARCH_BG_ACTIVE;
+                attr |= SFTE_SEARCH_ATTR_ACTIVE;
             }
+#endif  // SFTE_SEARCH
 
-            uint8_t is_cursor = (c == vis_col && r == vis_row && !ctx->term.hide_cursor);
+            if (attr & _SFTE_ATTR_REVERSE) bg = _sfte_grid_get_fg(vcell);
 
-#if SFTE_TERM_SCROLLBACK_CAP
-            // Hide active cursor when viewing scrollback history
-            if (ctx->term.sb_offset > 0) is_cursor = 0;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
-
-#if SFTE_FONT_WIDE_CHARS
-            if (!is_cursor && (attr & _SFTE_ATTR_DUMMY) && c > 0 && c - 1 == vis_col &&
-                r == vis_row && !ctx->term.hide_cursor)
-                is_cursor = 1;
-#endif  // SFTE_FONT_WIDE_CHARS
-#if SFTE_CURSOR_BLINK
-            if (!ctx->term.blink_visible) is_cursor = 0;
-#endif  // SFTE_CURSOR_BLINK
-
-            uint8_t is_solid_block = is_cursor && _SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BLOCK;
-#if SFTE_TERM_FOCUS
-            is_solid_block &= ctx->term.is_focused;
-#endif  // SFTE_TERM_FOCUS
-
-            if (is_solid_block) {
-#if SFTE_CURSOR_DYNAMIC
-                _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, ctx->term.cursor_color);
-#else   // !SFTE_CURSOR_DYNAMIC
-                _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, SFTE_CURSOR_COLOR);
-#endif  // !SFTE_CURSOR_DYNAMIC
-            } else
-                _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, bg);
+            _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, bg);
         }
     }
 }
@@ -8330,8 +9031,8 @@ static inline void _sfte_render_extract_fg_row(sfte_ctx *ctx, int32_t logical_ro
     Iterates over a shaped row and dispatches foreground/decoration drawing.
 */
 static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
-                                       int32_t logical_row, int16_t vis_col, int16_t vis_row,
-                                       int32_t y_off, sfte_damage_rect *out_dmg) {
+                                       int32_t logical_row, int32_t y_off,
+                                       sfte_damage_rect *out_dmg) {
     for (int16_t c = 0; c < ctx->term.cols; ++c) {
         sfte_cell *vcell = _sfte_grid_get_cell(ctx, c, logical_row);
         if (!vcell->dirty) continue;
@@ -8349,26 +9050,30 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
 #endif  // SFTE_FONT_WIDE_CHARS
         sfte_rune rune = vcell->rune ? vcell->rune : ' ';
         uint32_t fg = _sfte_grid_get_fg(vcell);
-        uint32_t bg = _sfte_grid_get_bg(vcell);
+
+#if SFTE_SEARCH
+        uint8_t search_res = _sfte_search_is_highlighted(ctx, c, logical_row);
+        // If `search_res` is 0 it isn't highlighted and we continue,
+        // If `search_res` is 1 it is highlighted but not active,
+        // If `search_res` is 2 it is highlighted AND active.
+        if (search_res == 1) {
+            fg = SFTE_SEARCH_FG_MATCH;
+            attr |= SFTE_SEARCH_ATTR_MATCH;
+        } else if (search_res == 2) {
+            fg = SFTE_SEARCH_FG_ACTIVE;
+            attr |= SFTE_SEARCH_ATTR_ACTIVE;
+        }
+#endif  // SFTE_SEARCH
 
         if (attr & _SFTE_ATTR_REVERSE
 #if SFTE_TERM_FOCUS
             && ctx->term.is_focused
 #endif  // SFTE_TERM_FOCUS
-        ) {
-            uint32_t tmp = fg;
-            fg = bg;
-            bg = tmp;
-        }
+        )
+            fg = _sfte_grid_get_bg(vcell);
 #ifdef SFTE_BOLD_WHITE
         if (attr & _SFTE_ATTR_BOLD) fg = SFTE_COLOR_FG;
 #endif
-
-        uint8_t is_cursor = (c == vis_col && row == vis_row && !ctx->term.hide_cursor);
-#if SFTE_CURSOR_BLINK
-        if (!ctx->term.blink_visible) is_cursor = 0;
-#endif
-        if (is_cursor && _SFTE_CUR_STYLE(ctx) == SFTE_CURSOR_STYLE_BLOCK) fg = bg;
 
 #if SFTE_FONT_LIGATURES
         if (ctx->term.render_font_indices[c] == 0 && ctx->term.render_shaper_ids[c] != 0 &&
@@ -8380,7 +9085,7 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
         _sfte_render_fg_cell(ctx, px_buf, c, row, y_off, rune, ctx->term.render_ids[c],
                              ctx->term.render_font_indices[c], fg,
                              ctx->term.render_target_caches[c]);
-        _sfte_render_decorations_cell(ctx, px_buf, c, row, y_off, vcell, is_cursor);
+        _sfte_render_decorations_cell(ctx, px_buf, c, row, y_off, vcell);
 
         int32_t dmg_cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
         int32_t dmg_ch = ctx->font.cell_height;
@@ -8418,7 +9123,7 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
             memcpy(memo_ids, ctx->term.render_shaper_ids, ctx->term.cols * sizeof(uint16_t));
         }
 #endif  // SFTE_FONT_LIGATURES
-        _sfte_render_fg_row(ctx, px_buf, r, logical_r, vis_col, vis_row, y_off, out_dmg);
+        _sfte_render_fg_row(ctx, px_buf, r, logical_r, y_off, out_dmg);
     }
 }
 
@@ -9602,9 +10307,9 @@ int32_t sfte_get_timeout_ms(sfte_ctx *ctx) {
     int32_t frame_ms = 1000 / SFTE_TERM_REFRESH_RATE;
     if (frame_ms < 1) frame_ms = 1;
 
-#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN
     if (ctx->term.is_animating) return frame_ms;
-#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN
 #if SFTE_TERM_SCROLL_SMOOTH
     if (ctx->term.is_scrolling) return frame_ms;
 #endif  // SFTE_TERM_SCROLL_SMOOTH
@@ -9635,9 +10340,15 @@ uint8_t sfte_tick(sfte_ctx *ctx) {
     if (!ctx) return 0;
     uint8_t needs_render = 0;
 
-#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#if SFTE_SEARCH
+    if (ctx->search.ui_dirty) {
+        needs_render = 1;
+        ctx->search.ui_dirty = 0;
+    }
+#endif  // SFTE_SEARCH
+#if SFTE_TERM_ANIMATE_SCREEN
     if (ctx->term.is_animating) needs_render = 1;
-#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#endif  // SFTE_TERM_ANIMATE_SCREEN
 
 #if SFTE_TERM_SCROLL_SMOOTH
     if (ctx->term.is_scrolling) needs_render = 1;
@@ -9655,9 +10366,9 @@ uint8_t sfte_tick(sfte_ctx *ctx) {
             ctx->term.blink_visible = !ctx->term.blink_visible;
             ctx->term.next_blink_ms = now + SFTE_CURSOR_BLINK_RATE_MS;
 
-            int16_t vis_col = ctx->term.cursor_col >= ctx->term.cols ? ctx->term.cols - 1
-                                                                     : ctx->term.cursor_col;
-            ctx->term.cells[_sfte_grid_get_idx(ctx, vis_col, ctx->term.cursor_row)].dirty = 1;
+            int16_t vis_col, vis_row;
+            _sfte_render_get_cursor_pos(ctx, &vis_col, &vis_row);
+            ctx->term.cells[_sfte_grid_get_idx(ctx, vis_col, vis_row)].dirty = 1;
             needs_render = 1;
         }
     }
@@ -9665,10 +10376,10 @@ uint8_t sfte_tick(sfte_ctx *ctx) {
 
 #if SFTE_CURSOR_TRAIL
     if (ctx->term.is_trailing) {
-        int16_t vis_col = ctx->term.cursor_col >= ctx->term.cols ? ctx->term.cols - 1
-                                                                 : ctx->term.cursor_col;
+        int16_t vis_col, vis_row;
+        _sfte_render_get_cursor_pos(ctx, &vis_col, &vis_row);
         float target_rx = vis_col * ctx->font.cell_width;
-        float target_ry = ctx->term.cursor_row * ctx->font.cell_height;
+        float target_ry = vis_row * ctx->font.cell_height;
 
         uint64_t now = SFTE_TIME_MS();
         if (ctx->term.last_trail_update_ms == 0) ctx->term.last_trail_update_ms = now;
@@ -9726,28 +10437,6 @@ void sfte_parse(sfte_ctx *ctx, const uint8_t *data, size_t len) {
 
     // parse incoming stream
     for (size_t i = 0; i < len; ++i) _sfte_parser_feed_byte(ctx, data[i]);
-
-#if SFTE_CURSOR_TRAIL
-    int16_t vis_col = ctx->term.cursor_col >= ctx->term.cols ? ctx->term.cols - 1
-                                                             : ctx->term.cursor_col;
-    float target_rx = vis_col * ctx->font.cell_width;
-    float target_ry = ctx->term.cursor_row * ctx->font.cell_height;
-
-    if (vis_col != ctx->term.last_grid_col || ctx->term.cursor_row != ctx->term.last_grid_row) {
-        uint64_t now = SFTE_TIME_MS();
-
-        if (ctx->term.last_move_ms != 0 && (now - ctx->term.last_move_ms >= SFTE_CURSOR_TRAIL))
-            ctx->term.is_trailing = 1;
-        else if (!ctx->term.is_trailing) {
-            ctx->term.tail_rx = target_rx;
-            ctx->term.tail_ry = target_ry;
-        }
-
-        ctx->term.last_grid_col = vis_col;
-        ctx->term.last_grid_row = ctx->term.cursor_row;
-        ctx->term.last_move_ms = now;
-    }
-#endif  // SFTE_CURSOR_TRAIL
 }
 
 void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_rect *out_dmg) {
@@ -9762,8 +10451,9 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
     if (new_cols != ctx->term.cols || new_rows != ctx->term.rows)
         _sfte_grid_resize(ctx, new_cols, new_rows);
 
-    int16_t vis_col = _SFTE_CLAMP(ctx->term.cursor_col, 0, ctx->term.cols - 1);
-    int32_t vis_row = _sfte_grid_log2vis(ctx, ctx->term.cursor_row);
+    int16_t vis_col;
+    int16_t vis_row;
+    _sfte_render_get_cursor_pos(ctx, &vis_col, &vis_row);
 #if SFTE_FONT_WIDE_CHARS
     uint8_t cursor_is_visible = (vis_row >= 0 && vis_row < ctx->term.rows);
     if (cursor_is_visible && vis_col > 0 &&
@@ -9773,6 +10463,17 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
 
     _sfte_render_propagate_damage(ctx, vis_col, vis_row);
 
+#if SFTE_SEARCH && SFTE_SEARCH_BG_BAR_OPACITY != 0xFF
+    // Force the text grid row beneath the overlay to completely redraw
+    // This is crucial so that alpha blending doesn't break, hence
+    // it's hidden behind `SFTE_SEARCH_BAR_BG_OPACITY != 0xFF`.
+#if SFTE_SEARCH_PLACEMENT_TOP
+    int16_t search_row = 0;
+#else   // !SFTE_SEARCH_PLACEMENT_TOP
+    int16_t search_row = ctx->term.rows - 1;
+#endif  // !SFTE_SEARCH_PLACEMENT_TOP
+    if (ctx->search.is_active) _sfte_grid_dirty_rows(ctx, search_row, search_row);
+#endif  // SFTE_SEARCH && SFTE_SEARCH_BG_BAR_OPACITY != 0xFF
 #if SFTE_CURSOR_TRAIL
     _sfte_grid_dirty_trail(ctx);
 #endif  // SFTE_CURSOR_TRAIL
@@ -9799,7 +10500,7 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
 
         // Rendering order:
         // BG grid -> BG images -> FG grid -> FG images
-        _sfte_render_bg_grid(ctx, px_buf, vis_col, vis_row, passes[p].y_off);
+        _sfte_render_bg_grid(ctx, px_buf, passes[p].y_off);
 
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
         _sfte_render_images(ctx, px_buf, 1, base_y_off + passes[p].y_off, ctx->padding_dirty);
@@ -9816,12 +10517,11 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
     ctx->term.alt_active = orig_alt_active;
 #endif  // SFTE_TERM_ALT_SCREEN
 
-#if SFTE_CURSOR_TRAIL
-#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
-    if (!ctx->term.is_animating)
-#endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
-        _sfte_render_trail(ctx, px_buf, out_dmg);
-#endif  // SFTE_CURSOR_TRAIL
+#if SFTE_SEARCH
+    _sfte_render_search_overlay(ctx, px_buf, out_dmg);
+#endif  // SFTE_SEARCH
+
+    _sfte_render_cursor(ctx, px_buf, vis_col, vis_row, passes[0].y_off, out_dmg);
 
     if (ctx->padding_dirty) {
         _sfte_view_clear_padding_rects(ctx, px_buf);
@@ -9884,6 +10584,24 @@ void sfte_zoom(sfte_ctx *ctx, float delta) {
 void sfte_input_text(sfte_ctx *ctx, const char *text, size_t len) {
     if (!ctx || !text || !len) return;
 
+#if SFTE_SEARCH
+    if (ctx->search.is_active) {
+        size_t query_len = strlen(ctx->search.query);
+        if (query_len + len < SFTE_SEARCH_MAX_QUERY) {
+            memcpy(ctx->search.query + query_len, text, len);
+            ctx->search.query[query_len + len] = '\0';
+
+            for (size_t i = query_len; i < query_len + len; ++i)
+                if (ctx->search.query[i] > 0 && ctx->search.query[i] < 32)
+                    ctx->search.query[i] = ' ';
+            _sfte_search_exec(ctx, ctx->search.query);
+            _sfte_grid_dirty_range(ctx, (ctx->term.rows - 1) * ctx->term.cols, ctx->term.cols);
+        }
+
+        return;
+    }
+#endif  // SFTE_SEARCH
+
 #if SFTE_TERM_SCROLLBACK_CAP
     if (ctx->term.sb_offset > 0) {
         ctx->term.sb_offset = 0;
@@ -9905,6 +10623,27 @@ void sfte_input_paste_end(sfte_ctx *ctx) {
 
 void sfte_input_key(sfte_ctx *ctx, sfte_key key, uint32_t mod_mask) {
     if (!ctx) return;
+
+#if SFTE_SEARCH
+    if (ctx->search.is_active) {
+        if (key == SFTE_KEY_BACKSPACE) {
+            size_t query_len = strlen(ctx->search.query);
+
+            if (query_len > 0) {
+                while (query_len > 0) {
+                    query_len--;
+                    if ((ctx->search.query[query_len] & 0xC0) != 0x80) {
+                        ctx->search.query[query_len] = '\0';
+                        break;
+                    }
+                }
+
+                _sfte_search_exec(ctx, ctx->search.query);
+            }
+        }
+        return;
+    }
+#endif  // SFTE_SEARCH
 
     char buf[128];
     size_t size = 0;
