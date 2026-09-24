@@ -496,7 +496,7 @@ _SFTE_ENSURE_RANGE(SFTE_TERM_ANIM_DUR_MS, 0.0f, FLT_MAX);
     With SFTE_TERM_REFLOW disabled, any text going off the right edge is deleted immediately.
 */
 #ifndef SFTE_TERM_REFLOW
-#define SFTE_TERM_REFLOW 1
+#define SFTE_TERM_REFLOW 0
 #endif  // SFTE_TERM_REFLOW
 _SFTE_ENSURE_RANGE(SFTE_TERM_REFLOW, 0, 1);
 
@@ -1718,6 +1718,7 @@ sfte_ctx *sfte_wayland_get_ctx(sfte_wayland_app *app);
 int sfte_wayland_run(sfte_wayland_app *app);
 #endif  // SFTE_WAYLAND
 
+#define SFTE_IMPL
 #ifdef SFTE_IMPL
 // #################################################################################################
 // >>>INTERNAL DECLARATIONS
@@ -3622,7 +3623,10 @@ static inline void _sfte_search_exec(sfte_ctx *ctx, const char *query) {
             // Check if previous row wrapped into this one
             int32_t prev_r = logical_start_r - 1;
             sfte_cell *last_cell = _sfte_grid_get_cell(ctx, ctx->term.cols - 1, prev_r);
-            if (!last_cell || !last_cell->wrapped) break;
+            if (!last_cell) break;
+#if SFTE_TERM_REFLOW
+            if (!last_cell->wrapped) break;
+#endif  // SFTE_TERM_REFLOW
             logical_start_r--;
         }
 
