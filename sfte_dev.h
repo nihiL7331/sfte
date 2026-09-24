@@ -1052,6 +1052,159 @@ _SFTE_ENSURE_RANGE(SFTE_IMG_PLACEMENT_MAX_CAP, 16, UINT32_MAX);
 _SFTE_ENSURE_RANGE(SFTE_IMG_PLACEMENT_INIT_CAP, 1, SFTE_IMG_PLACEMENT_MAX_CAP);
 
 // =================================================================================================
+// >>search macros
+// =================================================================================================
+
+/*
+    Adds scrollback search capability to the terminal.
+    Supports regex via regex.h for POSIX, tiny-regex-c (github.com/kokke/tiny-regex-c) otherwise.
+    The default search shortcut is Ctrl+Shift+/.
+
+    NOTE:
+    tiny-regex-c implementation is modified to be a single header and
+    scoped only to this translation unit via `static inline` prefixes.
+*/
+#ifndef SFTE_SEARCH
+#define SFTE_SEARCH 1
+#endif  // SFTE_SEARCH
+_SFTE_ENSURE_RANGE(SFTE_SEARCH, 0, 1);
+
+/*
+    Prefix of the search bar.
+    Mainly a cosmetic setting, although at extra-small terminal sizes
+    making it shorter will allow to see more of the query on screen at once.
+*/
+#ifndef SFTE_SEARCH_PREFIX
+#define SFTE_SEARCH_PREFIX " search: "
+#endif  // SFTE_SEARCH_PREFIX
+
+/*
+    If enabled, places the search bar at the top.
+*/
+#ifndef SFTE_SEARCH_PLACEMENT_TOP
+#define SFTE_SEARCH_PLACEMENT_TOP 0
+#endif  // SFTE_SEARCH_PLACEMENT_TOP
+
+/*
+    Background color of the search query bar.
+*/
+#ifndef SFTE_SEARCH_BG_BAR
+#define SFTE_SEARCH_BG_BAR 0x000000
+#endif  // SFTE_SEARCH_BG
+_SFTE_ENSURE_RANGE(SFTE_SEARCH_BG_BAR, 0x000000, 0xFFFFFF);
+
+/*
+    Background color opacity of the search query bar.
+*/
+#ifndef SFTE_SEARCH_BG_BAR_OPACITY
+#define SFTE_SEARCH_BG_BAR_OPACITY 0x7F
+#endif  // SFTE_SEARCH_BG_BAR_OPACITY
+_SFTE_ENSURE_RANGE(SFTE_SEARCH_BG_BAR_OPACITY, 0x00, 0xFF);
+
+/*
+    Background color of a highlighted active search result.
+*/
+#ifndef SFTE_SEARCH_BG_ACTIVE
+#define SFTE_SEARCH_BG_ACTIVE SFTE_COLOR_FG
+#endif  // SFTE_SEARCH_BG_ACTIVE
+_SFTE_ENSURE_RANGE(SFTE_SEARCH_BG_ACTIVE, 0x000000, 0xFFFFFF);
+
+/*
+    Background color of a highlighted inactive search result.
+*/
+#ifndef SFTE_SEARCH_BG_MATCH
+#define SFTE_SEARCH_BG_MATCH 0x7F7F7F
+#endif  // SFTE_SEARCH_BG_MATCH
+_SFTE_ENSURE_RANGE(SFTE_SEARCH_BG_MATCH, 0x000000, 0xFFFFFF);
+
+/*
+    Foreground color of a highlighted active search result.
+*/
+#ifndef SFTE_SEARCH_FG_ACTIVE
+#define SFTE_SEARCH_FG_ACTIVE SFTE_COLOR_BG
+#endif  // SFTE_SEARCH_FG_ACTIVE
+_SFTE_ENSURE_RANGE(SFTE_SEARCH_FG_ACTIVE, 0x000000, 0xFFFFFF);
+
+/*
+    Foreground color of a highlighted inactive search result.
+*/
+#ifndef SFTE_SEARCH_FG_MATCH
+#define SFTE_SEARCH_FG_MATCH SFTE_COLOR_BG
+#endif  // SFTE_SEARCH_FG_MATCH
+_SFTE_ENSURE_RANGE(SFTE_SEARCH_FG_MATCH, 0x000000, 0xFFFFFF);
+
+/*
+    Attributes applied to a highlighted active search result.
+
+    Available options:
+
+    SFTE_ATTR_NONE
+    SFTE_ATTR_BOLD
+    SFTE_ATTR_ITALIC
+    SFTE_ATTR_UNDERLINE
+    SFTE_ATTR_REVERSE
+
+    To combine multiple attributes, use the '|' (binary OR) operator.
+*/
+#ifndef SFTE_SEARCH_ATTR_ACTIVE
+#define SFTE_SEARCH_ATTR_ACTIVE SFTE_ATTR_BOLD
+#endif  // SFTE_SEARCH_ATTR_ACTIVE
+_SFTE_ENSURE_RANGE(SFTE_SEARCH_ATTR_ACTIVE, SFTE_ATTR_NONE,
+                   SFTE_ATTR_BOLD | SFTE_ATTR_ITALIC | SFTE_ATTR_UNDERLINE | SFTE_ATTR_REVERSE);
+
+/*
+    Attributes applied to a highlighted inactive search result.
+
+    Available options:
+
+    SFTE_ATTR_NONE
+    SFTE_ATTR_BOLD
+    SFTE_ATTR_ITALIC
+    SFTE_ATTR_UNDERLINE
+    SFTE_ATTR_REVERSE
+
+    To combine multiple attributes, use the '|' (binary OR) operator.
+*/
+#ifndef SFTE_SEARCH_ATTR_MATCH
+#define SFTE_SEARCH_ATTR_MATCH SFTE_ATTR_NONE
+#endif  // SFTE_SEARCH_ATTR_MATCH
+_SFTE_ENSURE_RANGE(SFTE_SEARCH_ATTR_MATCH, SFTE_ATTR_NONE,
+                   SFTE_ATTR_BOLD | SFTE_ATTR_ITALIC | SFTE_ATTR_UNDERLINE | SFTE_ATTR_REVERSE);
+
+/*
+    Maximum length (in bytes) of a search query.
+*/
+#ifndef SFTE_SEARCH_MAX_QUERY
+#define SFTE_SEARCH_MAX_QUERY 256
+#endif  // SFTE_SEARCH_MAX_QUERY
+_SFTE_ENSURE_RANGE(SFTE_SEARCH_MAX_QUERY, 1, 1024);
+
+/*
+    Maximum capacity of the search matches array.
+*/
+#ifndef SFTE_SEARCH_MATCH_MAX_CAP
+#define SFTE_SEARCH_MATCH_MAX_CAP 4096
+#endif  // SFTE_SEARCH_MATCH_MAX_CAP
+_SFTE_ENSURE_RANGE(SFTE_SEARCH_MATCH_MAX_CAP, 16, UINT32_MAX);
+
+/*
+    Initial capacity of the search matches array.
+*/
+#ifndef SFTE_SEARCH_MATCH_INIT_CAP
+#define SFTE_SEARCH_MATCH_INIT_CAP 16
+#endif  // SFTE_SEARCH_MATCH_INIT_CAP
+_SFTE_ENSURE_RANGE(SFTE_SEARCH_MATCH_INIT_CAP, 1, SFTE_SEARCH_MATCH_MAX_CAP);
+
+/*
+    Size of the extraction row buffer (in bytes).
+    Allocated temporarily on the thread stack during the search execution.
+*/
+#ifndef SFTE_SEARCH_ROW_BUF_CAP
+#define SFTE_SEARCH_ROW_BUF_CAP 8192
+#endif  // SFTE_SEARCH_ROW_BUF_CAP
+_SFTE_ENSURE_RANGE(SFTE_SEARCH_ROW_BUF_CAP, 128, 65536);
+
+// =================================================================================================
 // >>input macros
 // =================================================================================================
 
@@ -1192,6 +1345,20 @@ static inline uint8_t _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg
 static inline uint8_t _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_WAYLAND
 
+#if SFTE_SEARCH
+static inline uint8_t _sfte_search_start_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
+static inline uint8_t _sfte_search_prev_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
+static inline uint8_t _sfte_search_next_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
+static inline uint8_t _sfte_search_clear_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
+#define _SFTE_SEARCH_BINDS                                                                         \
+    {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_question, _sfte_search_start_shortcut, {.v = NULL}},  \
+        {SFTE_MOD_NONE, XKB_KEY_Up, _sfte_search_next_shortcut, {.v = NULL}},                      \
+        {SFTE_MOD_NONE, XKB_KEY_Down, _sfte_search_prev_shortcut, {.v = NULL}},                    \
+        {SFTE_MOD_NONE, XKB_KEY_Escape, _sfte_search_clear_shortcut, {.v = NULL}},
+#else  // !SFTE_SEARCH
+#define _SFTE_SEARCH_BINDS
+#endif  // !SFTE_SEARCH
+
 #if SFTE_FONT_ZOOM && SFTE_WAYLAND
 #define _SFTE_WAYLAND_ZOOM_BINDS                                                                   \
     {SFTE_MOD_CTRL, XKB_KEY_equal, _sfte_wayland_font_resize, {.f = 2.0f}},                        \
@@ -1226,7 +1393,7 @@ static inline uint8_t _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_ar
 #endif  // !SFTE_CLIPBOARD || !SFTE_WAYLAND || !SFTE_INPUT_SELECTION
 
 #define SFTE_BASE_SHORTCUTS                                                                        \
-    _SFTE_WAYLAND_ZOOM_BINDS _SFTE_WAYLAND_SCROLL_BINDS _SFTE_WAYLAND_COPY_BIND                    \
+    _SFTE_SEARCH_BINDS _SFTE_WAYLAND_ZOOM_BINDS _SFTE_WAYLAND_SCROLL_BINDS _SFTE_WAYLAND_COPY_BIND \
         _SFTE_WAYLAND_PASTE_BIND
 
 #ifndef SFTE_SHORTCUTS
