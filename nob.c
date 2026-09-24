@@ -210,6 +210,11 @@ static uint8_t build_amalgamation(const char *input_path, const char *output_pat
                 &out,
                 "/*=== stb_image.h =========================================================*/\n");
             if (!nob_read_entire_file("vendor/stb_image.h", &out)) return false;
+        } else if (nob_sv_eq(trimmed, nob_sv_from_cstr("#include \"vendor/re.h\""))) {
+            nob_sb_append_cstr(
+                &out,
+                "/*=== tiny-regex-c ========================================================*/\n");
+            if (!nob_read_entire_file("vendor/re.h", &out)) return false;
         } else {
             nob_sb_append_buf(&out, line.data, line.count);
             nob_sb_append_cstr(&out, "\n");
