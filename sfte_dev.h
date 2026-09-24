@@ -138,11 +138,48 @@
     NOTE:
     Remember to use SFTE_BASE_SHORTCUTS if you want to keep default shortcuts.
 
+    SEARCH
+    ======
 
+    sfte comes with a simple scrollback buffer searchbar.
+    It supports regex via regex.h on Linux and tiny-regex-c on other (custom) platforms.
+    It works with smart case rules, that is:
+    - if the entire query is in lowercase, the case is ignored,
+    - otherwise the search is case-sensitive.
+
+    Search support can be enabled/disabled by defining the SFTE_SEARCH macro.
+    By default, searching is enabled.
+
+    The default shortcut to toggle the search bar is Ctrl+Shift+/.
+    To exit the search mode, either click Escape or Backspace when the query is empty.
+    Use Arrow Up/Down to change the currently active match.
+
+    Both the search bar and search results can be heavily customized.
+
+    Available options:
+
+    SFTE_SEARCH                 (default: 1)
+    SFTE_SEARCH_PREFIX          (default: " search: ")
+    SFTE_SEARCH_PLACEMENT_TOP   (default: 0)
+    SFTE_SEARCH_BG_BAR          (default: 0x000000)
+    SFTE_SEARCH_BG_BAR_OPACITY  (default: 0x7F)
+    SFTE_SEARCH_BG_ACTIVE       (default: SFTE_COLOR_FG)
+    SFTE_SEARCH_BG_MATCH        (default: 0x7F7F7F)
+    SFTE_SEARCH_FG_ACTIVE       (default: SFTE_COLOR_BG)
+    SFTE_SEARCH_FG_MATCH        (default: SFTE_COLOR_BG)
+    SFTE_SEARCH_ATTR_ACTIVE     (default: SFTE_ATTR_BOLD)
+    SFTE_SEARCH_ATTR_MATCH      (default: SFTE_ATTR_NONE)
+    SFTE_SEARCH_MAX_QUERY       (default: 256)
+    SFTE_SEARCH_MATCH_MAX_CAP   (default: 4096)
+    SFTE_SEARCH_MATCH_INIT_CAP  (default: 16)
+    SFTE_SEARCH_ROW_BUF_CAP     (default: 8192)
+
+    For an in-depth explanation of configuration options, check the '>>search macros' section below.
 
     TODO:
     Sections explaining: custom backend support, procedural boxes, cursor macros, images, input,
     clipboard, minimal setup, SFTE_COLOR_DRAW/BLEND_PIXEL overrides, ligatures.
+    Also match the style of all the sections to 'SEARCH'.
 
     LICENSE
     =======
