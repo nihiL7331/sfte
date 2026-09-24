@@ -8614,8 +8614,8 @@ static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col,
     int32_t cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
 
     int32_t render_w = ctx->font.cell_width;
-#if SFTE_FONT_WIDE_CHARS
     sfte_cell *cell = _sfte_grid_get_cell(ctx, col, _sfte_grid_vis2log(ctx, row));
+#if SFTE_FONT_WIDE_CHARS
     render_w *= (cell->attr & _SFTE_ATTR_WIDE) ? 2 : 1;
 #endif  // SFTE_FONT_WIDE_CHARS
 
