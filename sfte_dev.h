@@ -1346,12 +1346,12 @@ static inline uint8_t _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_ar
 #endif  // SFTE_WAYLAND
 
 #if SFTE_SEARCH
-static inline uint8_t _sfte_search_start_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
+static inline uint8_t _sfte_search_toggle_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
 static inline uint8_t _sfte_search_prev_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
 static inline uint8_t _sfte_search_next_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
 static inline uint8_t _sfte_search_clear_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
 #define _SFTE_SEARCH_BINDS                                                                         \
-    {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_question, _sfte_search_start_shortcut, {.v = NULL}},  \
+    {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_question, _sfte_search_toggle_shortcut, {.v = NULL}}, \
         {SFTE_MOD_NONE, XKB_KEY_Up, _sfte_search_next_shortcut, {.v = NULL}},                      \
         {SFTE_MOD_NONE, XKB_KEY_Down, _sfte_search_prev_shortcut, {.v = NULL}},                    \
         {SFTE_MOD_NONE, XKB_KEY_Escape, _sfte_search_clear_shortcut, {.i = 1}},                    \
@@ -3291,23 +3291,29 @@ static inline void _sfte_search_posix_re_free(sfte_stack *stack, void *re_ctx) {
 
 /*
     Used for default search shortcuts.
+    Toggles (on/off) the search bar visibility.
 */
-static inline uint8_t _sfte_search_start_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
+static inline uint8_t _sfte_search_toggle_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
 #if SFTE_TERM_ALT_SCREEN
     if (ctx->term.alt_active) return 0;
 #endif  // SFTE_TERM_ALT_SCREEN
-    ctx->search.pre_off = 0;
-    ctx->search.is_active = 1;
-    ctx->search.query[0] = '\0';
+    if (ctx->search.is_active) {
+        const sfte_arg clear_arg = {.i = 1};
+        return _sfte_search_clear_shortcut(ctx, &clear_arg);
+    } else {
+        ctx->search.pre_off = 0;
+        ctx->search.is_active = 1;
+        ctx->search.query[0] = '\0';
 #if SFTE_SEARCH_PLACEMENT_TOP
-    uint16_t row = 0;
+        uint16_t row = 0;
 #else   // !SFTE_SEARCH_PLACEMENT_TOP
-    uint16_t row = ctx->term.rows - 1;
+        uint16_t row = ctx->term.rows - 1;
 #endif  // !SFTE_SEARCH_PLACEMENT_TOP
-    _sfte_grid_dirty_rows(ctx, row, row);
-    ctx->search.ui_dirty = 1;
-    return ctx->search.is_active;
+        _sfte_grid_dirty_rows(ctx, row, row);
+        ctx->search.ui_dirty = 1;
+        return ctx->search.is_active;
+    }
 }
 
 /*
