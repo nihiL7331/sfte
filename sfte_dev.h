@@ -1722,6 +1722,14 @@ int sfte_wayland_run(sfte_wayland_app *app);
 // >>>INTERNAL DECLARATIONS
 // #################################################################################################
 
+#ifndef SFTE_REGEX_CUSTOM_BACKEND
+#if SFTE_NO_POSIX
+#include "vendor/re.h"
+#else  // !SFTE_NO_POSIX
+#include <regex.h>
+#endif  // !SFTE_NO_POSIX
+#endif  // !SFTE_REGEX_CUSTOM_BACKEND
+
 #ifndef SFTE_FONT_CUSTOM_BACKEND
 #define STB_TRUETYPE_IMPLEMENTATION
 #define STBTT_STATIC
