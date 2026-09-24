@@ -3354,7 +3354,11 @@ static inline int16_t _sfte_search_extract_logical_line(sfte_ctx *ctx, int32_t l
     // Leave 4 bytes of room at the end to safely encode a 4-byte UTF-8 char + null terminator
     while (buf_idx < max_len - 5) {
         int32_t cur_r = logical_row + rows_consumed;
-        uint8_t is_wrapped = _sfte_grid_get_cell(ctx, ctx->term.cols - 1, cur_r)->wrapped;
+
+        uint8_t is_wrapped = 0;
+#if SFTE_TERM_REFLOW
+        is_wrapped = _sfte_grid_get_cell(ctx, ctx->term.cols - 1, cur_r)->wrapped;
+#endif  // SFTE_TERM_REFLOW
 
         // Find the true length of the row to ignore empty trailing cells
         int16_t actual_cols = ctx->term.cols;
@@ -3408,7 +3412,10 @@ static inline void _sfte_search_map_to_coords(sfte_ctx *ctx, int32_t start_logic
     out_match->len = 0;
 
     while (1) {
-        uint8_t is_wrapped = _sfte_grid_get_cell(ctx, ctx->term.cols - 1, cur_r)->wrapped;
+        uint8_t is_wrapped = 0;
+#if SFTE_TERM_REFLOW
+        is_wrapped = _sfte_grid_get_cell(ctx, ctx->term.cols - 1, cur_r)->wrapped;
+#endif  // SFTE_TERM_REFLOW
 
         int16_t actual_cols = ctx->term.cols;
         if (!is_wrapped)
@@ -4279,7 +4286,9 @@ static inline void _sfte_grid_resize(sfte_ctx *ctx, int16_t new_cols, int16_t ne
     ctx->term.render_target_caches = (sfte_font_cache **)SFTE_REALLOC(
         ctx->term.render_target_caches, new_cols * sizeof(sfte_font_cache *));
 
+#if SFTE_TERM_REFLOW
     int16_t grid_off_old = ctx->term.grid_off;
+#endif  // SFTE_TERM_REFLOW
     int16_t old_cols = ctx->term.cols;
 #if SFTE_TERM_ALT_SCREEN || !SFTE_TERM_REFLOW
     int16_t old_rows = ctx->term.rows;
@@ -8556,6 +8565,7 @@ static inline void _sfte_render_get_cursor_pos(sfte_ctx *ctx, int16_t *out_col, 
 
 static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
                                        int32_t y_off, sfte_damage_rect *out_dmg) {
+    (void)out_dmg;
 #if SFTE_CURSOR_BLINK
     if (!ctx->term.blink_visible) return;
 #endif  // SFTE_CURSOR_BLINK
