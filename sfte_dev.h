@@ -2825,7 +2825,7 @@ static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_
 static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
                                                   _sfte_pass_info *passes,
                                                   sfte_damage_rect *out_dmg);
-static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, uint8_t src_a);
+static inline uint32_t _sfte_render_blend_argb(uint32_t dst_col, uint32_t src_col, uint8_t src_a);
 static inline void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
                                         int32_t y_off, uint32_t bg);
 static inline void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
@@ -3947,7 +3947,6 @@ static inline void _sfte_grid_dirty_trail(sfte_ctx *ctx) {
 
     _sfte_grid_dirty_rect(ctx, start_c, start_logical_r, (end_c - start_c) + 1,
                           (end_logical_r - start_logical_r) + 1);
-    _sfte_grid_dirty_rect(ctx, 0, 0, ctx->term.cols, ctx->term.rows);
 }
 #endif  // SFTE_CURSOR_TRAIL
 
@@ -8368,13 +8367,13 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
     Fast integer-based alpha blending.
     Used for cursor trails and antialiased font rendering to avoid slow floating-point math.
 */
-static inline uint32_t _sfte_render_blend_argb(uint32_t dst, uint32_t src_col, uint8_t src_a) {
-    if (src_a == 0) return dst;  // no trail
+static inline uint32_t _sfte_render_blend_argb(uint32_t dst_col, uint32_t src_col, uint8_t src_a) {
+    if (src_a == 0) return dst_col;  // no trail
     if (src_a == 255)
         return SFTE_COLOR_ALPHA_MASK | (src_col & ~SFTE_COLOR_ALPHA_MASK);  // solid trail
 
-    uint8_t da = (dst >> 24) & 0xFF;
-    uint8_t dr = (dst >> 16) & 0xFF, dg = (dst >> 8) & 0xFF, db = dst & 0xFF;
+    uint8_t da = (dst_col >> 24) & 0xFF;
+    uint8_t dr = (dst_col >> 16) & 0xFF, dg = (dst_col >> 8) & 0xFF, db = dst_col & 0xFF;
     uint8_t sr = (src_col >> 16) & 0xFF, sg = (src_col >> 8) & 0xFF, sb = src_col & 0xFF;
 
     uint8_t out_r = (sr * src_a + dr * (255 - src_a)) >> 8;
@@ -10425,7 +10424,7 @@ void sfte_parse(sfte_ctx *ctx, const uint8_t *data, size_t len) {
     // snap view to bottom if new output arrives
     if (ctx->term.sb_offset > 0) {
         ctx->term.sb_offset = 0;
-        _sfte_grid_dirty_range(ctx, 0, ctx->term.cols * ctx->term.rows);
+        _sfte_grid_dirty_rows(ctx, 0, ctx->term.rows - 1);
     }
 #endif  // SFTE_TERM_SCROLLBACK_CAP
 
