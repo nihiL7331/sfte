@@ -84,6 +84,7 @@ There are still a couple of mandatory ones, which were hard to get rid of, hence
 
 - [`stb_truetype.h`](https://github.com/nothings/stb/blob/master/stb_truetype.h)
 - [`stb_image.h`](https://github.com/nothings/stb/blob/master/stb_image.h)
+- [`tiny-regex-c`](https://github.com/kokke/tiny-regex-c) (for non-POSIX builds)
 
 ## License
 
