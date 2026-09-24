@@ -1354,7 +1354,8 @@ static inline uint8_t _sfte_search_clear_shortcut(sfte_ctx *ctx, const sfte_arg 
     {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_question, _sfte_search_start_shortcut, {.v = NULL}},  \
         {SFTE_MOD_NONE, XKB_KEY_Up, _sfte_search_next_shortcut, {.v = NULL}},                      \
         {SFTE_MOD_NONE, XKB_KEY_Down, _sfte_search_prev_shortcut, {.v = NULL}},                    \
-        {SFTE_MOD_NONE, XKB_KEY_Escape, _sfte_search_clear_shortcut, {.v = NULL}},
+        {SFTE_MOD_NONE, XKB_KEY_Escape, _sfte_search_clear_shortcut, {.i = 1}},                    \
+        {SFTE_MOD_NONE, XKB_KEY_BackSpace, _sfte_search_clear_shortcut, {.i = 0}},
 #else  // !SFTE_SEARCH
 #define _SFTE_SEARCH_BINDS
 #endif  // !SFTE_SEARCH
@@ -3329,9 +3330,13 @@ static inline uint8_t _sfte_search_next_shortcut(sfte_ctx *ctx, const sfte_arg *
 
 /*
     Used for default search shortcuts.
+    If `arg` is 0, exits unconditionally.
+    If `arg` is 1, exits if query is empty.
 */
 static inline uint8_t _sfte_search_clear_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
-    (void)arg;
+    uint8_t ignore_query = arg->i;
+    if (!ignore_query && strlen(ctx->search.query)) return 0;
+
     uint8_t was_active = ctx->search.is_active;
     _sfte_search_clear(ctx);
     return was_active;
