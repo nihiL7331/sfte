@@ -650,9 +650,9 @@ _SFTE_ENSURE_RANGE(SFTE_COLOR_BG_OPACITY, 0x00, 0xFF);
     Needed for cursor trail and images support.
 */
 #ifndef SFTE_COLOR_BLEND_PIXEL
-#define SFTE_COLOR_BLEND_PIXEL(buf, x, y, stride, argb_color, alpha)                               \
+#define SFTE_COLOR_BLEND_PIXEL(buf, x, y, stride, rgb_color, alpha)                                \
     (((uint32_t *)(buf))[(y) * (stride) + (x)] = _sfte_render_blend_argb(                          \
-         ((uint32_t *)(buf))[(y) * (stride) + (x)], (argb_color), (alpha)))
+         ((uint32_t *)(buf))[(y) * (stride) + (x)], (rgb_color), (alpha)))
 #endif  // SFTE_COLOR_BLEND_PIXEL
 
 #define SFTE_COLOR_ALPHA_MASK 0xFF000000
