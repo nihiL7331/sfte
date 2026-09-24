@@ -111,13 +111,17 @@
     It is possible to create own shortcuts.
     To create a shortcut, first create its callback following this definition:
 
-    void my_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
+    uint8_t my_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
         // my shortcut logic... e.g.,
         (void)arg;
         printf("Current cursor position: %d x %d\n", ctx->term.cursor_col, ctx->term.cursor_row);
+        return 1;
     }
 
     Inside this function write the wanted logic that should happen when a shortcut is toggled.
+    The returned value should be either 0 or 1:
+    - 0, if the callback shouldn't consume the keyboard input required to toggle that shortcut,
+    - 1, if it should.
     `sfte_arg` is a type that's a union:
 
     typedef union {
@@ -1119,20 +1123,20 @@ typedef union {
 typedef struct {
     uint32_t mod_mask;
     uint32_t /* xkb_keysym_t */ keysym;
-    void (*func)(sfte_ctx *ctx, const sfte_arg *);
+    uint8_t (*func)(sfte_ctx *ctx, const sfte_arg *);
     const sfte_arg arg;
 } sfte_shortcut;
 
 #if SFTE_WAYLAND
 #if SFTE_FONT_ZOOM
-static inline void _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg);
-static inline void _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *arg);
+static inline uint8_t _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg);
+static inline uint8_t _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_FONT_ZOOM
 #if SFTE_TERM_SCROLLBACK_CAP
-static inline void _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg);
+static inline uint8_t _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_TERM_SCROLLBACK_CAP
-static inline void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg);
-static inline void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg);
+static inline uint8_t _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg);
+static inline uint8_t _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_WAYLAND
 
 #if SFTE_FONT_ZOOM && SFTE_WAYLAND
@@ -2568,11 +2572,11 @@ static inline void _sfte_wayland_write_cb(void *user_data, const char *data, siz
 static inline void _sfte_wayland_pty_spawn(sfte_wayland_app *app);
 static inline void _sfte_wayland_pty_update(sfte_wayland_app *app);
 #if SFTE_FONT_ZOOM
-static inline void _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg);
-static inline void _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *dummy);
+static inline uint8_t _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg);
+static inline uint8_t _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_FONT_ZOOM
 #if SFTE_TERM_SCROLLBACK_CAP
-static inline void _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg);
+static inline uint8_t _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_TERM_SCROLLBACK_CAP
 static inline void _sfte_wayland_create_buffer(sfte_wayland_app *app);
 #if SFTE_INPUT_HYPERLINKS
@@ -2585,9 +2589,9 @@ static inline void _sfte_wayland_unload(sfte_wayland_app *app);
 #if SFTE_CLIPBOARD_OSC52
 static inline void _sfte_wayland_osc52_clipboard_cb(void *user_data, char target, const char *data);
 #endif  // SFTE_CLIPBOARD_OSC52
-static inline void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg);
+static inline uint8_t _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_INPUT_SELECTION
-static inline void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg);
+static inline uint8_t _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_CLIPBOARD
 static inline void _sfte_wayland_loop(sfte_wayland_app *app);
 #endif  // SFTE_WAYLAND
@@ -8222,25 +8226,28 @@ static inline void _sfte_wayland_pty_update(sfte_wayland_app *app) {
 }
 
 #if SFTE_FONT_ZOOM
-static inline void _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg) {
+static inline uint8_t _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg) {
     sfte_zoom(ctx, arg->f);
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
     _sfte_wayland_pty_update(app);
     app->needs_render = 1;
+    return 1;
 }
 
-static inline void _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *dummy) {
-    (void)dummy;
-    const sfte_arg arg = {.f = SFTE_FONT_DEFAULT_SIZE - ctx->font.cur_size};
-    _sfte_wayland_font_resize(ctx, &arg);
+static inline uint8_t _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *arg) {
+    (void)arg;
+    const sfte_arg actual_arg = {.f = SFTE_FONT_DEFAULT_SIZE - ctx->font.cur_size};
+    _sfte_wayland_font_resize(ctx, &actual_arg);
+    return 1;
 }
 #endif  // SFTE_FONT_ZOOM
 
 #if SFTE_TERM_SCROLLBACK_CAP
-static inline void _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg) {
+static inline uint8_t _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg) {
     sfte_view_scroll(ctx, arg->i);
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
     app->needs_render = 1;
+    return 1;
 }
 #endif  // SFTE_TERM_SCROLLBACK_CAP
 
@@ -8620,10 +8627,8 @@ static inline void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *ke
 
     for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_shortcuts); ++i)
         if ((xkb_keysym_t)_sfte_shortcuts[i].keysym == sym &&
-            _sfte_shortcuts[i].mod_mask == active_mods) {
-            _sfte_shortcuts[i].func(app->ctx, &_sfte_shortcuts[i].arg);
-            return;
-        }
+            _sfte_shortcuts[i].mod_mask == active_mods)
+            if (_sfte_shortcuts[i].func(app->ctx, &_sfte_shortcuts[i].arg)) return;
 
     sfte_xkb_process_key(app->ctx, app->xkb_state, keycode);
 }
@@ -8923,7 +8928,7 @@ static inline void _sfte_wayland_osc52_clipboard_cb(void *user_data, char target
 }
 #endif  // SFTE_CLIPBOARD_OSC52
 
-static inline void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
+static inline uint8_t _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
 
@@ -8936,31 +8941,34 @@ static inline void _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *a
         app->selection_text = NULL;
     }
 
-    if (!app->ctx->term.mouse_sel_active || !app->data_device_manager || !app->data_device) return;
+    if (!app->ctx->term.mouse_sel_active || !app->data_device_manager || !app->data_device)
+        return 0;
 
     size_t needed_bytes = sfte_get_selection(app->ctx, NULL, 0);
     if (needed_bytes == 0) {
         _SFTE_INFO(ctx, CLIPBOARD_EMPTY);
-        return;
+        return 0;
     }
 
     app->selection_text = (char *)SFTE_MALLOC(needed_bytes);
     sfte_get_selection(app->ctx, app->selection_text, needed_bytes);
-    if (!app->selection_text) return;
+    if (!app->selection_text) return 0;
 
     app->data_source = wl_data_device_manager_create_data_source(app->data_device_manager);
     wl_data_source_add_listener(app->data_source, &_sfte_wayland_data_source_listener, app);
     wl_data_source_offer(app->data_source, "text/plain;charset=utf-8");
     wl_data_source_offer(app->data_source, "text/plain");
     wl_data_device_set_selection(app->data_device, app->data_source, app->serial);
+
+    return 1;
 }
 #endif  // SFTE_INPUT_SELECTION
 
-static inline void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg) {
+static inline uint8_t _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->user_data;
 
-    if (!app->data_offer) return;
+    if (!app->data_offer) return 0;
 
     int fds[2];
     if (pipe(fds) == 0) {
@@ -8980,6 +8988,8 @@ static inline void _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *
 
         close(fds[0]);
     }
+
+    return 1;
 }
 #endif  // SFTE_CLIPBOARD
 
