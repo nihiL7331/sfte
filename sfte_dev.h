@@ -256,6 +256,13 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 
 typedef struct sfte_ctx sfte_ctx;
 
+// Full declaration of these values are placed in the implementation layer as an enum.
+#define SFTE_ATTR_NONE 0
+#define SFTE_ATTR_BOLD 1 << 0
+#define SFTE_ATTR_ITALIC 1 << 1
+#define SFTE_ATTR_UNDERLINE 1 << 2
+#define SFTE_ATTR_REVERSE 1 << 3
+
 /*
     Memory allocation macro hooks.
 */
@@ -310,6 +317,15 @@ typedef struct sfte_ctx sfte_ctx;
 #define _SFTE_ENSURE_DEPS(macro, dep)                                                              \
     SFTE_STATIC_ASSERT(!(macro) || (dep), #macro " unmet dependencies: " #dep)
 #endif  // !SFTE_NO_ENSURES
+
+/*
+    Internal helper macro used to ensure the value set
+    for a macro is matching the internal implementation value.
+
+    This ISN'T disabled by SFTE_NO_ENSURES, as disabling it would provide no value.
+*/
+#define _SFTE_ENSURE_EQUAL(val1, val2)                                                             \
+    SFTE_STATIC_ASSERT((val1) == (val2), #val1 " must be strictly equal to " #val2)
 
 typedef enum {
     SFTE_LOG_LVL_PANIC,
@@ -1715,6 +1731,12 @@ typedef enum {
     _SFTE_ATTR_DUMMY = 1 << 5,  // Marks skipped trailing cell after wide rune
 #endif                          // SFTE_FONT_WIDE_CHARS
 } sfte_attr;
+// This might be a little overkill, but only costs comptime
+_SFTE_ENSURE_EQUAL(_SFTE_ATTR_NONE, SFTE_ATTR_NONE);
+_SFTE_ENSURE_EQUAL(_SFTE_ATTR_BOLD, SFTE_ATTR_BOLD);
+_SFTE_ENSURE_EQUAL(_SFTE_ATTR_ITALIC, SFTE_ATTR_ITALIC);
+_SFTE_ENSURE_EQUAL(_SFTE_ATTR_UNDERLINE, SFTE_ATTR_UNDERLINE);
+_SFTE_ENSURE_EQUAL(_SFTE_ATTR_REVERSE, SFTE_ATTR_REVERSE);
 
 /*
     Represents a single cell on the terminal grid.
