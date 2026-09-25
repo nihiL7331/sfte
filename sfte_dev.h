@@ -2128,14 +2128,6 @@ typedef struct {
 typedef struct {
     sfte_cell *cells;
     uint8_t *tab_stops;
-#if SFTE_FONT_LIGATURES
-    uint16_t *render_shaper_ids;
-    uint64_t *row_hashes;
-    uint16_t *row_shaper_ids;
-#endif  // SFTE_FONT_LIGATURES
-    uint16_t *render_ids;
-    uint8_t *render_font_indices;
-    sfte_font_cache **render_target_caches;
     char *osc_payload;
     size_t osc_len;
     size_t osc_cap;
@@ -2172,10 +2164,6 @@ typedef struct {
 #if !SFTE_TERM_ASCII_CHARSET
     uint32_t utf8_rune_acc;  // Accumulator for incoming multi-byte UTF-8 streams
 #endif                       // !SFTE_TERM_ASCII_CHARSET
-#if SFTE_CURSOR_TRAIL
-    float tail_rx, tail_ry;
-    sfte_damage_rect trail_dmg;
-#endif  // SFTE_CURSOR_TRAIL
 #if SFTE_TERM_SCROLLBACK_CAP
     int32_t sb_cap;
     int32_t sb_len;
@@ -2217,7 +2205,6 @@ typedef struct {
     int16_t last_grid_col, last_grid_row;
 #endif  // SFTE_CURSOR_TRAIL
 #if SFTE_INPUT_MOUSE
-    int16_t mouse_hover_col, mouse_hover_row;
     uint16_t mouse_mode;  // 0=off, 1000=normal, 1002=button-event, 1003=any-event
     uint16_t mouse_ext;   // 0=off, 1006=SGR
 #if SFTE_INPUT_SELECTION
@@ -2258,30 +2245,23 @@ typedef struct {
 #if SFTE_TERM_ALT_SCREEN
     uint8_t alt_active;  // Tracks if currently is in a alt buffer
 #endif                   // SFTE_TERM_ALT_SCREEN
-#if SFTE_INPUT_MOUSE
-    uint8_t mouse_btn_state;  // 0=LMB, 1=MMB, 2=RMB, 3=none
 #if SFTE_INPUT_SELECTION
     uint8_t mouse_sel_active;    // 1 if has selection
     uint8_t mouse_sel_dragging;  // 1 if lmb is held down
 #endif                           // SFTE_INPUT_SELECTION
-#endif                           // SFTE_INPUT_MOUSE
 #if SFTE_INPUT_KITTY
     uint8_t kitty_kb_stack_idx[2];
 #endif  // SFTE_INPUT_KITTY
 #if SFTE_UNDERLINE_EXTENDED
     uint8_t cur_ul_style;
 #endif  // SFTE_UNDERLINE_EXTENDED
-#if SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#if SFTE_TERM_ANIMATE_SCREEN
     uint8_t is_animating;
     uint8_t anim_dir;  // 1=entering alt screen, -1=leaving
-#endif                 // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
+#endif                 // SFTE_TERM_ANIMATE_SCREEN
 #if SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
     uint8_t is_scrolling;
 #endif  // SFTE_TERM_SCROLL_SMOOTH && SFTE_TERM_SCROLLBACK_CAP
-#if SFTE_TERM_FOCUS
-    uint8_t is_focused;
-    uint8_t report_focus;
-#endif  // SFTE_TERM_FOCUS
 } sfte_term;
 
 /*
@@ -2327,6 +2307,20 @@ struct sfte_ctx {
     sfte_search_state search;
 #endif  // SFTE_SEARCH
 
+#if SFTE_CURSOR_TRAIL
+    float tail_rx, tail_ry;
+    sfte_damage_rect trail_dmg;
+#endif  // SFTE_CURSOR_TRAIL
+
+#if SFTE_FONT_LIGATURES
+    uint16_t *render_shaper_ids;
+    uint64_t *row_hashes;
+    uint16_t *row_shaper_ids;
+#endif  // SFTE_FONT_LIGATURES
+    uint16_t *render_ids;
+    uint8_t *render_font_indices;
+    sfte_font_cache **render_target_caches;
+
     sfte_write_cb write_cb;
     sfte_bell_cb bell_cb;
 #if SFTE_CLIPBOARD && SFTE_CLIPBOARD_OSC52
@@ -2341,6 +2335,15 @@ struct sfte_ctx {
 
     int32_t width;
     int32_t height;
+
+#if SFTE_INPUT_MOUSE
+    int16_t mouse_hover_col, mouse_hover_row;
+    uint8_t mouse_btn_state;  // 0=LMB, 1=MMB, 2=RMB, 3=none
+#endif                        // SFTE_INPUT_MOUSE
+#if SFTE_TERM_FOCUS
+    uint8_t is_focused;
+    uint8_t report_focus;
+#endif  // SFTE_TERM_FOCUS
     uint8_t padding_dirty;
 };
 
@@ -3958,14 +3961,13 @@ static inline void _sfte_grid_dirty_range(sfte_ctx *ctx, uint32_t start_idx, uin
     Flags the AABB of the cursor trail as dirty.
 */
 static inline void _sfte_grid_dirty_trail(sfte_ctx *ctx) {
-    if (ctx->term.trail_dmg.w <= 0 || ctx->term.trail_dmg.h <= 0) return;
+    if (ctx->trail_dmg.w <= 0 || ctx->trail_dmg.h <= 0) return;
 
     int16_t start_c, end_c;
     int32_t start_logical_r, end_logical_r;
-    _sfte_grid_from_px(ctx, ctx->term.trail_dmg.x, ctx->term.trail_dmg.y, &start_c,
-                       &start_logical_r, NULL);
-    _sfte_grid_from_px(ctx, ctx->term.trail_dmg.x + ctx->term.trail_dmg.w,
-                       ctx->term.trail_dmg.y + ctx->term.trail_dmg.h, &end_c, &end_logical_r, NULL);
+    _sfte_grid_from_px(ctx, ctx->trail_dmg.x, ctx->trail_dmg.y, &start_c, &start_logical_r, NULL);
+    _sfte_grid_from_px(ctx, ctx->trail_dmg.x + ctx->trail_dmg.w,
+                       ctx->trail_dmg.y + ctx->trail_dmg.h, &end_c, &end_logical_r, NULL);
     if (start_logical_r < 0 || end_logical_r < 0) return;
 
     _sfte_grid_dirty_rect(ctx, start_c, start_logical_r, (end_c - start_c) + 1,
@@ -4281,21 +4283,19 @@ static inline void _sfte_grid_resize(sfte_ctx *ctx, int16_t new_cols, int16_t ne
     if (new_cols < 1 || new_rows < 1) return;
 
 #if SFTE_FONT_LIGATURES
-    ctx->term.render_shaper_ids = (uint16_t *)SFTE_REALLOC(ctx->term.render_shaper_ids,
-                                                           new_cols * sizeof(uint16_t));
-    ctx->term.row_hashes = (uint64_t *)SFTE_REALLOC(ctx->term.row_hashes,
-                                                    new_rows * sizeof(uint64_t));
-    memset(ctx->term.row_hashes, 0,
+    ctx->render_shaper_ids = (uint16_t *)SFTE_REALLOC(ctx->render_shaper_ids,
+                                                      new_cols * sizeof(uint16_t));
+    ctx->row_hashes = (uint64_t *)SFTE_REALLOC(ctx->row_hashes, new_rows * sizeof(uint64_t));
+    memset(ctx->row_hashes, 0,
            new_rows * sizeof(uint64_t));  // Force cache misses on resize
-    ctx->term.row_shaper_ids = (uint16_t *)SFTE_REALLOC(ctx->term.row_shaper_ids,
-                                                        new_rows * new_cols * sizeof(uint16_t));
+    ctx->row_shaper_ids = (uint16_t *)SFTE_REALLOC(ctx->row_shaper_ids,
+                                                   new_rows * new_cols * sizeof(uint16_t));
 #endif  // SFTE_FONT_LIGATURES
-    ctx->term.render_ids = (uint16_t *)SFTE_REALLOC(ctx->term.render_ids,
-                                                    new_cols * sizeof(uint16_t));
-    ctx->term.render_font_indices = (uint8_t *)SFTE_REALLOC(ctx->term.render_font_indices,
-                                                            new_cols * sizeof(uint8_t));
-    ctx->term.render_target_caches = (sfte_font_cache **)SFTE_REALLOC(
-        ctx->term.render_target_caches, new_cols * sizeof(sfte_font_cache *));
+    ctx->render_ids = (uint16_t *)SFTE_REALLOC(ctx->render_ids, new_cols * sizeof(uint16_t));
+    ctx->render_font_indices = (uint8_t *)SFTE_REALLOC(ctx->render_font_indices,
+                                                       new_cols * sizeof(uint8_t));
+    ctx->render_target_caches = (sfte_font_cache **)SFTE_REALLOC(
+        ctx->render_target_caches, new_cols * sizeof(sfte_font_cache *));
 
 #if SFTE_TERM_REFLOW
     int16_t grid_off_old = ctx->term.grid_off;
@@ -4537,11 +4537,10 @@ static inline void _sfte_input_send_mouse_event(sfte_ctx *ctx, uint8_t btn, uint
 
     if (is_motion) {
         if (ctx->term.mouse_mode == SFTE_INPUT_MOUSE_MODE_DRAG &&
-            ctx->term.mouse_btn_state != SFTE_INPUT_MOUSE_BTN_RELEASE)
-            encoded_btn = ctx->term.mouse_btn_state + SFTE_INPUT_MOUSE_MOTION_OFFSET;  // Dragging
+            ctx->mouse_btn_state != SFTE_INPUT_MOUSE_BTN_RELEASE)
+            encoded_btn = ctx->mouse_btn_state + SFTE_INPUT_MOUSE_MOTION_OFFSET;  // Dragging
         else if (ctx->term.mouse_mode == SFTE_INPUT_MOUSE_MODE_MOTION)
-            encoded_btn = ctx->term.mouse_btn_state +
-                          SFTE_INPUT_MOUSE_MOTION_OFFSET;  // Hover/dragging
+            encoded_btn = ctx->mouse_btn_state + SFTE_INPUT_MOUSE_MOTION_OFFSET;  // Hover/dragging
         else
             return;  // Mode 1000 ignores motion
     }
@@ -6140,7 +6139,7 @@ static inline void _sfte_csi_set_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt, 
         }
 #if SFTE_TERM_FOCUS
         else if (p[i] == 1004)
-            ctx->term.report_focus = 1;
+            ctx->report_focus = 1;
 #endif  // SFTE_TERM_FOCUS
         else if (p[i] == 2004)
             ctx->term.bracketed_paste = 1;
@@ -6225,7 +6224,7 @@ static inline void _sfte_csi_reset_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt
         }
 #if SFTE_TERM_FOCUS
         else if (p[i] == 1004)
-            ctx->term.report_focus = 0;
+            ctx->report_focus = 0;
 #endif  // SFTE_TERM_FOCUS
         else if (p[i] == 2004)
             ctx->term.bracketed_paste = 0;
@@ -6312,9 +6311,9 @@ static inline void _sfte_csi_reset_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt
                 ctx->term.is_trailing = 0;
                 int16_t vis_col, vis_row;
                 _sfte_render_get_cursor_pos(ctx, &vis_col, &vis_row);
-                ctx->term.tail_rx = vis_col * ctx->font.cell_width;
-                ctx->term.tail_ry = vis_row * ctx->font.cell_height;
-                ctx->term.trail_dmg.w = 0;
+                ctx->tail_rx = vis_col * ctx->font.cell_width;
+                ctx->tail_ry = vis_row * ctx->font.cell_height;
+                ctx->trail_dmg.w = 0;
 #endif  // SFTE_CURSOR_TRAIL
             }
         }
@@ -8166,8 +8165,8 @@ static inline void _sfte_render_update_trail(sfte_ctx *ctx) {
         if (ctx->term.last_move_ms != 0 && (now - ctx->term.last_move_ms >= SFTE_CURSOR_TRAIL))
             ctx->term.is_trailing = 1;
         else if (!ctx->term.is_trailing) {
-            ctx->term.tail_rx = target_x;
-            ctx->term.tail_ry = target_y;
+            ctx->tail_rx = target_x;
+            ctx->tail_ry = target_y;
         }
 
         ctx->term.last_grid_col = vis_col;
@@ -8181,9 +8180,9 @@ static inline void _sfte_render_update_trail(sfte_ctx *ctx) {
     Drawn as the last element in the rendering loop.
 */
 static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_rect *out_dmg) {
-    if (ctx->term.trail_dmg.w > 0 && ctx->term.trail_dmg.h > 0)
-        _sfte_render_damage_add(out_dmg, ctx->term.trail_dmg.x, ctx->term.trail_dmg.y,
-                                ctx->term.trail_dmg.w, ctx->term.trail_dmg.h);
+    if (ctx->trail_dmg.w > 0 && ctx->trail_dmg.h > 0)
+        _sfte_render_damage_add(out_dmg, ctx->trail_dmg.x, ctx->trail_dmg.y, ctx->trail_dmg.w,
+                                ctx->trail_dmg.h);
 
     int16_t vis_col, vis_row;
     _sfte_render_get_cursor_pos(ctx, &vis_col, &vis_row);
@@ -8191,12 +8190,12 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
     float target_y = vis_row * ctx->font.cell_height;
 
     if (ctx->term.hide_cursor || ctx->term.warp_tail || !ctx->term.is_trailing) {
-        ctx->term.tail_rx = target_x;
-        ctx->term.tail_ry = target_y;
+        ctx->tail_rx = target_x;
+        ctx->tail_ry = target_y;
         ctx->term.warp_tail = 0;
 
-        ctx->term.trail_dmg.w = 0;
-        ctx->term.trail_dmg.h = 0;
+        ctx->trail_dmg.w = 0;
+        ctx->trail_dmg.h = 0;
         return;
     }
 
@@ -8216,9 +8215,9 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
     float rx = trail_w * 0.5f;
     float ry = trail_h * 0.5f;
 
-    float cx0 = ctx->term.tail_rx + rx;
+    float cx0 = ctx->tail_rx + rx;
     float cx1 = target_x + rx;
-    float cy0 = ctx->term.tail_ry + y_off + ry;
+    float cy0 = ctx->tail_ry + y_off + ry;
     float cy1 = target_y + y_off + ry;
 
     float ab_x = cx1 - cx0, ab_y = cy1 - cy0;
@@ -8260,13 +8259,13 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
         }
     }
 
-    ctx->term.trail_dmg.x = min_x;
-    ctx->term.trail_dmg.y = min_y;
-    ctx->term.trail_dmg.w = max_x - min_x;
-    ctx->term.trail_dmg.h = max_y - min_y;
+    ctx->trail_dmg.x = min_x;
+    ctx->trail_dmg.y = min_y;
+    ctx->trail_dmg.w = max_x - min_x;
+    ctx->trail_dmg.h = max_y - min_y;
 
-    _sfte_render_damage_add(out_dmg, ctx->term.trail_dmg.x, ctx->term.trail_dmg.y,
-                            ctx->term.trail_dmg.w, ctx->term.trail_dmg.h);
+    _sfte_render_damage_add(out_dmg, ctx->trail_dmg.x, ctx->trail_dmg.y, ctx->trail_dmg.w,
+                            ctx->trail_dmg.h);
 }
 #endif  // SFTE_CURSOR_TRAIL
 
@@ -8620,7 +8619,7 @@ static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col,
 #endif  // SFTE_FONT_WIDE_CHARS
 
 #if SFTE_TERM_FOCUS
-    if (!ctx->term.is_focused) {
+    if (!ctx->is_focused) {
         for (int32_t y = cy; y < cy + ctx->font.cell_height; ++y) {
             SFTE_COLOR_DRAW_PIXEL(px_buf, cx, y, ctx->width, ctx->height, cur_col);
             SFTE_COLOR_DRAW_PIXEL(px_buf, cx + render_w - 1, y, ctx->width, ctx->height, cur_col);
@@ -8960,9 +8959,9 @@ static inline uint64_t _sfte_render_get_row_hash(sfte_ctx *ctx, int32_t logical_
         uint32_t fg = _sfte_grid_get_fg(vcell);
         uint32_t bg = _sfte_grid_get_bg(vcell);
 
-        hash ^= ctx->term.render_shaper_ids[c];
+        hash ^= ctx->render_shaper_ids[c];
         hash *= prime;
-        hash ^= ctx->term.render_font_indices[c];
+        hash ^= ctx->render_font_indices[c];
         hash *= prime;
         hash ^= attr;
         hash *= prime;
@@ -8982,7 +8981,7 @@ static inline uint64_t _sfte_render_get_row_hash(sfte_ctx *ctx, int32_t logical_
 static inline void _sfte_render_shape_fg_row(sfte_ctx *ctx, int32_t logical_row) {
     int16_t span_start = 0;
     while (span_start < ctx->term.cols) {
-        if (!ctx->term.render_shaper_ids[span_start]) {
+        if (!ctx->render_shaper_ids[span_start]) {
             span_start++;
             continue;
         }
@@ -8991,23 +8990,23 @@ static inline void _sfte_render_shape_fg_row(sfte_ctx *ctx, int32_t logical_row)
         uint32_t active_fg = _sfte_grid_get_fg(start_cell);
         uint32_t active_bg = _sfte_grid_get_bg(start_cell);
 
-        sfte_font_cache *active_cache = ctx->term.render_target_caches[span_start];
-        uint8_t active_font_idx = ctx->term.render_font_indices[span_start];
+        sfte_font_cache *active_cache = ctx->render_target_caches[span_start];
+        uint8_t active_font_idx = ctx->render_font_indices[span_start];
 
         int16_t span_end = span_start + 1;
-        while (span_end < ctx->term.cols && ctx->term.render_shaper_ids[span_end] != 0) {
+        while (span_end < ctx->term.cols && ctx->render_shaper_ids[span_end] != 0) {
             sfte_cell *next_cell = _sfte_grid_get_cell(ctx, span_end, logical_row);
             if (_sfte_grid_get_fg(next_cell) != active_fg ||
                 _sfte_grid_get_bg(next_cell) != active_bg ||
-                ctx->term.render_target_caches[span_end] != active_cache ||
-                ctx->term.render_font_indices[span_end] != active_font_idx)
+                ctx->render_target_caches[span_end] != active_cache ||
+                ctx->render_font_indices[span_end] != active_font_idx)
                 break;
             span_end++;
         }
 
         _sfte_shaper_shape_row(&active_cache->shaper[active_font_idx],
                                active_cache->ttf_buf[active_font_idx],
-                               &ctx->term.render_shaper_ids[span_start], span_end - span_start);
+                               &ctx->render_shaper_ids[span_start], span_end - span_start);
 
         span_start = span_end;
     }
@@ -9039,15 +9038,14 @@ static inline void _sfte_render_extract_fg_row(sfte_ctx *ctx, int32_t logical_ro
         if ((attr & _SFTE_ATTR_BOLD) && (attr & _SFTE_ATTR_ITALIC))
             target_cache = &ctx->font.bold_italic;
 #endif  // SFTE_FONT_BOLD_ITALIC
-        ctx->term.render_target_caches[c] = target_cache;
-        _sfte_font_resolve_rune(target_cache, rune, &ctx->term.render_font_indices[c],
-                                &ctx->term.render_ids[c]);
+        ctx->render_target_caches[c] = target_cache;
+        _sfte_font_resolve_rune(target_cache, rune, &ctx->render_font_indices[c],
+                                &ctx->render_ids[c]);
 
 #if SFTE_FONT_LIGATURES
         uint8_t is_cursor = (c == vis_col && row == vis_row && !ctx->term.hide_cursor);
-        ctx->term.render_shaper_ids[c] = (rune == ' ' || rune == 0 || is_cursor)
-                                             ? 0
-                                             : ctx->term.render_ids[c];
+        ctx->render_shaper_ids[c] = (rune == ' ' || rune == 0 || is_cursor) ? 0
+                                                                            : ctx->render_ids[c];
 #endif  // SFTE_FONT_LIGATURES
     }
 }
@@ -9092,7 +9090,7 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
 
         if (attr & _SFTE_ATTR_REVERSE
 #if SFTE_TERM_FOCUS
-            && ctx->term.is_focused
+            && ctx->is_focused
 #endif  // SFTE_TERM_FOCUS
         )
             fg = _sfte_grid_get_bg(vcell);
@@ -9101,15 +9099,14 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
 #endif
 
 #if SFTE_FONT_LIGATURES
-        if (ctx->term.render_font_indices[c] == 0 && ctx->term.render_shaper_ids[c] != 0 &&
-            ctx->term.render_shaper_ids[c] != ctx->term.render_ids[c]) {
-            ctx->term.render_ids[c] = ctx->term.render_shaper_ids[c];
+        if (ctx->render_font_indices[c] == 0 && ctx->render_shaper_ids[c] != 0 &&
+            ctx->render_shaper_ids[c] != ctx->render_ids[c]) {
+            ctx->render_ids[c] = ctx->render_shaper_ids[c];
         }
 #endif  // SFTE_TERM_LIGATURES
 
-        _sfte_render_fg_cell(ctx, px_buf, c, row, y_off, rune, ctx->term.render_ids[c],
-                             ctx->term.render_font_indices[c], fg,
-                             ctx->term.render_target_caches[c]);
+        _sfte_render_fg_cell(ctx, px_buf, c, row, y_off, rune, ctx->render_ids[c],
+                             ctx->render_font_indices[c], fg, ctx->render_target_caches[c]);
         _sfte_render_decorations_cell(ctx, px_buf, c, row, y_off, vcell);
 
         int32_t dmg_cy = row * ctx->font.cell_height + SFTE_WINDOW_PAD_Y;
@@ -9139,13 +9136,13 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
         int32_t cache_idx = (logical_r >= 0) ? ((logical_r + ctx->term.grid_off) % ctx->term.rows)
                                              : r;
         uint64_t row_hash = _sfte_render_get_row_hash(ctx, logical_r);
-        uint16_t *memo_ids = &ctx->term.row_shaper_ids[cache_idx * ctx->term.cols];
-        if (ctx->term.row_hashes[cache_idx] == row_hash)
-            memcpy(ctx->term.render_shaper_ids, memo_ids, ctx->term.cols * sizeof(uint16_t));
+        uint16_t *memo_ids = &ctx->row_shaper_ids[cache_idx * ctx->term.cols];
+        if (ctx->row_hashes[cache_idx] == row_hash)
+            memcpy(ctx->render_shaper_ids, memo_ids, ctx->term.cols * sizeof(uint16_t));
         else {
             _sfte_render_shape_fg_row(ctx, logical_r);
-            ctx->term.row_hashes[cache_idx] = row_hash;
-            memcpy(memo_ids, ctx->term.render_shaper_ids, ctx->term.cols * sizeof(uint16_t));
+            ctx->row_hashes[cache_idx] = row_hash;
+            memcpy(memo_ids, ctx->render_shaper_ids, ctx->term.cols * sizeof(uint16_t));
         }
 #endif  // SFTE_FONT_LIGATURES
         _sfte_render_fg_row(ctx, px_buf, r, logical_r, y_off, out_dmg);
@@ -9416,9 +9413,8 @@ static inline void _sfte_wayland_pointer_button(void *data, struct wl_pointer *p
 #endif  // SFTE_CLIPBOARD
 
     sfte_mouse_click(app->ctx, SFTE_MOUSE_BUTTON_LEFT, state == WL_POINTER_BUTTON_STATE_PRESSED,
-                     app->ctx->term.mouse_hover_col * app->ctx->font.cell_width + SFTE_WINDOW_PAD_X,
-                     app->ctx->term.mouse_hover_row * app->ctx->font.cell_height +
-                         SFTE_WINDOW_PAD_Y);
+                     app->ctx->mouse_hover_col * app->ctx->font.cell_width + SFTE_WINDOW_PAD_X,
+                     app->ctx->mouse_hover_row * app->ctx->font.cell_height + SFTE_WINDOW_PAD_Y);
     app->needs_render = 1;
 
 #if SFTE_CLIPBOARD && SFTE_INPUT_SELECTION
@@ -9435,10 +9431,9 @@ static inline void _sfte_wayland_pointer_axis(void *data, struct wl_pointer *poi
 
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     int8_t dir = (wl_fixed_to_double(value) < 0) ? 1 : -1;
-    sfte_mouse_scroll(
-        app->ctx, dir,
-        app->ctx->term.mouse_hover_col * app->ctx->font.cell_width + SFTE_WINDOW_PAD_X,
-        app->ctx->term.mouse_hover_row * app->ctx->font.cell_height + SFTE_WINDOW_PAD_Y);
+    sfte_mouse_scroll(app->ctx, dir,
+                      app->ctx->mouse_hover_col * app->ctx->font.cell_width + SFTE_WINDOW_PAD_X,
+                      app->ctx->mouse_hover_row * app->ctx->font.cell_height + SFTE_WINDOW_PAD_Y);
     app->needs_render = 1;
 #endif  // SFTE_INPUT_MOUSE
 }
@@ -10089,15 +10084,15 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
     ctx->term.cols = SFTE_TERM_INIT_COLS;
     ctx->term.rows = SFTE_TERM_INIT_ROWS;
 #if SFTE_FONT_LIGATURES
-    ctx->term.render_shaper_ids = (uint16_t *)SFTE_CALLOC(SFTE_TERM_INIT_COLS, sizeof(uint16_t));
-    ctx->term.row_hashes = (uint64_t *)SFTE_CALLOC(SFTE_TERM_INIT_ROWS, sizeof(uint64_t));
-    ctx->term.row_shaper_ids = (uint16_t *)SFTE_CALLOC(SFTE_TERM_INIT_COLS * SFTE_TERM_INIT_ROWS,
-                                                       sizeof(uint16_t));
+    ctx->render_shaper_ids = (uint16_t *)SFTE_CALLOC(SFTE_TERM_INIT_COLS, sizeof(uint16_t));
+    ctx->row_hashes = (uint64_t *)SFTE_CALLOC(SFTE_TERM_INIT_ROWS, sizeof(uint64_t));
+    ctx->row_shaper_ids = (uint16_t *)SFTE_CALLOC(SFTE_TERM_INIT_COLS * SFTE_TERM_INIT_ROWS,
+                                                  sizeof(uint16_t));
 #endif  // SFTE_FONT_LIGATURES
-    ctx->term.render_ids = (uint16_t *)SFTE_CALLOC(SFTE_TERM_INIT_COLS, sizeof(uint16_t));
-    ctx->term.render_font_indices = (uint8_t *)SFTE_CALLOC(SFTE_TERM_INIT_COLS, sizeof(uint8_t));
-    ctx->term.render_target_caches = (sfte_font_cache **)SFTE_CALLOC(SFTE_TERM_INIT_COLS,
-                                                                     sizeof(sfte_font_cache *));
+    ctx->render_ids = (uint16_t *)SFTE_CALLOC(SFTE_TERM_INIT_COLS, sizeof(uint16_t));
+    ctx->render_font_indices = (uint8_t *)SFTE_CALLOC(SFTE_TERM_INIT_COLS, sizeof(uint8_t));
+    ctx->render_target_caches = (sfte_font_cache **)SFTE_CALLOC(SFTE_TERM_INIT_COLS,
+                                                                sizeof(sfte_font_cache *));
     ctx->term.auto_wrap = 1;
     ctx->term.origin_mode = 0;
 
@@ -10110,7 +10105,7 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
     _sfte_grid_resize_tabs(ctx, 0, ctx->term.cols);
 
 #if SFTE_INPUT_MOUSE
-    ctx->term.mouse_btn_state = 3;
+    ctx->mouse_btn_state = 3;
 #endif  // SFTE_INPUT_MOUSE
 #if SFTE_INPUT_KITTY
     ctx->term.kitty_kb_stack_idx[0] = 0;
@@ -10125,12 +10120,12 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
     ctx->term.next_blink_ms = SFTE_TIME_MS() + SFTE_CURSOR_BLINK_RATE_MS;
 #endif  // SFTE_CURSOR_BLINK
 #if SFTE_CURSOR_TRAIL
-    ctx->term.tail_rx = 0.0f;
-    ctx->term.tail_ry = 0.0f;
-    ctx->term.trail_dmg.x = 0.0f;
-    ctx->term.trail_dmg.y = 0.0f;
-    ctx->term.trail_dmg.w = 0.0f;
-    ctx->term.trail_dmg.h = 0.0f;
+    ctx->tail_rx = 0.0f;
+    ctx->tail_ry = 0.0f;
+    ctx->trail_dmg.x = 0.0f;
+    ctx->trail_dmg.y = 0.0f;
+    ctx->trail_dmg.w = 0.0f;
+    ctx->trail_dmg.h = 0.0f;
     ctx->term.last_grid_col = 0;
     ctx->term.last_grid_row = 0;
     ctx->term.last_move_ms = 0;
@@ -10160,7 +10155,7 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
     ctx->term.cur_link_idx = 0;
 #endif  // SFTE_INPUT_HYPERLINKS
 #if SFTE_TERM_FOCUS
-    ctx->term.is_focused = 1;
+    ctx->is_focused = 1;
 #endif  // SFTE_TERM_FOCUS
 
     ctx->term.cells = (sfte_cell *)SFTE_MALLOC(ctx->term.cols * ctx->term.rows * sizeof(sfte_cell));
@@ -10347,7 +10342,7 @@ int32_t sfte_get_timeout_ms(sfte_ctx *ctx) {
 #if SFTE_CURSOR_BLINK
     uint8_t can_blink = ctx->term.blink_enabled && !ctx->term.hide_cursor;
 #if SFTE_TERM_FOCUS
-    can_blink &= ctx->term.is_focused;
+    can_blink &= ctx->is_focused;
 #endif  // SFTE_TERM_FOCUS
 
     if (can_blink) {
@@ -10382,7 +10377,7 @@ uint8_t sfte_tick(sfte_ctx *ctx) {
 #if SFTE_CURSOR_BLINK
     uint8_t can_blink = ctx->term.blink_enabled && !ctx->term.hide_cursor;
 #if SFTE_TERM_FOCUS
-    can_blink &= ctx->term.is_focused;
+    can_blink &= ctx->is_focused;
 #endif  // SFTE_TERM_FOCUS
 
     if (can_blink) {
@@ -10411,20 +10406,20 @@ uint8_t sfte_tick(sfte_ctx *ctx) {
         float dt_ms = (float)(now - ctx->term.last_trail_update_ms);
         ctx->term.last_trail_update_ms = now;
 
-        float tx = target_rx - ctx->term.tail_rx;
-        float ty = target_ry - ctx->term.tail_ry;
+        float tx = target_rx - ctx->tail_rx;
+        float ty = target_ry - ctx->tail_ry;
 
         // Snap to target if we're close enough to stop animating
         if (tx * tx + ty * ty <= 0.5f) {
             ctx->term.is_trailing = 0;
-            ctx->term.tail_rx = target_rx;
-            ctx->term.tail_ry = target_ry;
+            ctx->tail_rx = target_rx;
+            ctx->tail_ry = target_ry;
             ctx->term.last_trail_update_ms = 0;
         } else {
             float decay = dt_ms * SFTE_CURSOR_TRAIL_DECAY;
             if (decay > 1.0f) decay = 1.0f;
-            ctx->term.tail_rx += tx * decay;
-            ctx->term.tail_ry += ty * decay;
+            ctx->tail_rx += tx * decay;
+            ctx->tail_ry += ty * decay;
         }
         needs_render = 1;
     }
@@ -10894,13 +10889,13 @@ void sfte_mouse_move(sfte_ctx *ctx, int32_t px_x, int32_t px_y) {
     int32_t logical_r;
     _sfte_grid_from_px(ctx, px_x, px_y, &c, &logical_r, &screen_r);
 
-    if (ctx->term.mouse_hover_col == c && ctx->term.mouse_hover_row == screen_r) return;
+    if (ctx->mouse_hover_col == c && ctx->mouse_hover_row == screen_r) return;
 
-    ctx->term.mouse_hover_col = c;
-    ctx->term.mouse_hover_row = screen_r;
+    ctx->mouse_hover_col = c;
+    ctx->mouse_hover_row = screen_r;
 
     if (ctx->term.mouse_mode) {
-        _sfte_input_send_mouse_event(ctx, ctx->term.mouse_btn_state, 0, c, screen_r, 1);
+        _sfte_input_send_mouse_event(ctx, ctx->mouse_btn_state, 0, c, screen_r, 1);
         return;
     }
 
@@ -10908,11 +10903,11 @@ void sfte_mouse_move(sfte_ctx *ctx, int32_t px_x, int32_t px_y) {
     if (!ctx->term.mouse_sel_dragging) return;
     sfte_term *term = &ctx->term;
 
-    if (term->mouse_sel_end_col == term->mouse_hover_col && term->mouse_sel_end_row == logical_r)
+    if (term->mouse_sel_end_col == ctx->mouse_hover_col && term->mouse_sel_end_row == logical_r)
         return;
 
     _sfte_grid_dirty_rows(ctx, term->mouse_sel_start_row, term->mouse_sel_end_row);
-    term->mouse_sel_end_col = term->mouse_hover_col;
+    term->mouse_sel_end_col = ctx->mouse_hover_col;
     term->mouse_sel_end_row = logical_r;
     _sfte_grid_dirty_rows(ctx, term->mouse_sel_start_row, term->mouse_sel_end_row);
 #endif  // SFTE_INPUT_SELECTION
@@ -10937,9 +10932,9 @@ void sfte_mouse_click(sfte_ctx *ctx, sfte_mouse_button btn, uint8_t pressed, int
 
     if (term->mouse_mode) {
         if (pressed)
-            term->mouse_btn_state = btn;
+            ctx->mouse_btn_state = btn;
         else
-            term->mouse_btn_state = SFTE_INPUT_MOUSE_BTN_RELEASE;
+            ctx->mouse_btn_state = SFTE_INPUT_MOUSE_BTN_RELEASE;
 
         _sfte_input_send_mouse_event(ctx, btn, !pressed, c, screen_r, 0);
         return;
@@ -10950,8 +10945,8 @@ void sfte_mouse_click(sfte_ctx *ctx, sfte_mouse_button btn, uint8_t pressed, int
         if (term->mouse_sel_active)
             _sfte_grid_dirty_rows(ctx, term->mouse_sel_start_row, term->mouse_sel_end_row);
 
-        term->mouse_hover_col = c;
-        term->mouse_hover_row = screen_r;
+        ctx->mouse_hover_col = c;
+        ctx->mouse_hover_row = screen_r;
 
         term->mouse_sel_start_col = c;
         term->mouse_sel_start_row = logical_r;
@@ -11174,9 +11169,9 @@ void sfte_xkb_process_key(sfte_ctx *ctx, struct xkb_state *state, uint32_t keyco
 
 #if SFTE_TERM_FOCUS
 void sfte_set_focus(sfte_ctx *ctx, uint8_t focused) {
-    if (!ctx || ctx->term.is_focused == focused) return;
+    if (!ctx || ctx->is_focused == focused) return;
 
-    ctx->term.is_focused = focused;
+    ctx->is_focused = focused;
 
 #if SFTE_CURSOR_BLINK
     // Force the cursor to be visible when changing focus states
@@ -11188,7 +11183,7 @@ void sfte_set_focus(sfte_ctx *ctx, uint8_t focused) {
                                                              : ctx->term.cursor_col;
     ctx->term.cells[_sfte_grid_get_idx(ctx, vis_col, ctx->term.cursor_row)].dirty = 1;
 
-    if (ctx->term.report_focus && ctx->write_cb) {
+    if (ctx->report_focus && ctx->write_cb) {
         if (focused)
             ctx->write_cb(ctx->user_data, "\033[I", 3);
         else
