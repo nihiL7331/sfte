@@ -1327,7 +1327,7 @@ typedef union {
     const void *v;
 } sfte_arg;
 
-typedef struct {
+typedef struct sfte_shortcut {
     uint32_t mod_mask;
     uint32_t /* xkb_keysym_t */ keysym;
     uint8_t (*func)(sfte_ctx *ctx, const sfte_arg *);
@@ -1918,7 +1918,7 @@ _SFTE_ENSURE_EQUAL(_SFTE_ATTR_REVERSE, SFTE_ATTR_REVERSE);
 /*
     Represents a single cell on the terminal grid.
 */
-typedef struct {
+typedef struct sfte_cell {
     sfte_rune rune;
 #if SFTE_FONT_WIDE_CHARS && SFTE_FONT_MAX_COMBINING
     sfte_rune combining_runes[SFTE_FONT_MAX_COMBINING];
@@ -1949,7 +1949,7 @@ typedef struct {
 /*
     Represents a baked texture atlas entry for a single character.
 */
-typedef struct {
+typedef struct sfte_glyph {
     uint16_t glyph_id;
     int16_t xadvance;
     uint16_t x0, y0, x1, y1;  // Atlas texture coordinates
@@ -1961,7 +1961,7 @@ typedef struct {
 /*
     Shared image buffer data.
 */
-typedef struct {
+typedef struct sfte_img {
     uint32_t *pixels;  // Format ARGB8888
     uint32_t id;
     uint32_t ref_cnt;  // How many placements are using this image
@@ -1973,7 +1973,7 @@ typedef struct {
 /*
     Represents where and how an image is drawn on the screen.
 */
-typedef struct {
+typedef struct sfte_img_placement {
     uint32_t img_id;
     uint32_t placement_id;
     int16_t start_col;
@@ -1996,7 +1996,7 @@ typedef enum {
     SIXEL_COLOR_PARAM   // Color definition
 } sfte_sixel_state_enum;
 
-typedef struct {
+typedef struct sfte_sixel_state {
     uint32_t *pixels;  // Temporary dynamic buffer for the in-progress image
 
     uint32_t palette[256];
@@ -2017,7 +2017,7 @@ typedef struct {
 #endif  // SFTE_IMG_SIXEL
 
 #if SFTE_IMG_KITTY
-typedef struct {
+typedef struct sfte_kitty_state {
     char *b64_buf;
     size_t b64_len;
     size_t b64_cap;
@@ -2046,7 +2046,7 @@ typedef struct {
 #endif  // SFTE_IMG_KITTY
 
 #if SFTE_FONT_LIGATURES
-typedef struct {
+typedef struct sfte_shaper_feature {
     uint16_t lookup_indices[SFTE_FONT_MAX_LIGATURE_LOOKUPS];
     uint32_t subtable_offs[SFTE_FONT_MAX_LIGATURE_LOOKUPS][SFTE_FONT_MAX_LIGATURE_SUBTABLES];
     uint16_t subtable_cnts[SFTE_FONT_MAX_LIGATURE_LOOKUPS];
@@ -2057,7 +2057,7 @@ typedef struct {
 /*
     Font shaper data context.
 */
-typedef struct {
+typedef struct sfte_shaper_ctx {
     uint32_t table_off;
     uint32_t script_list_off;
     uint32_t feat_list_off;
@@ -2067,7 +2067,7 @@ typedef struct {
     sfte_shaper_feature liga;  // Standard ligatures
 } sfte_shaper_ctx;
 
-typedef struct {
+typedef struct sfte_shaper_subst_record {
     uint16_t sequence_idx;
     uint16_t lookup_idx;
 } sfte_shaper_subst_record;
@@ -2102,7 +2102,7 @@ typedef struct sfte_search_state {
 /*
     Font variant texture cache.
 */
-typedef struct {
+typedef struct sfte_font_cache {
 #if SFTE_FONT_LIGATURES
     sfte_shaper_ctx shaper[SFTE_FONT_MAX_COUNT];
 #endif  // SFTE_FONT_LIGATURES
@@ -2141,7 +2141,7 @@ typedef struct sfte_parser_state {
 /*
     Core terminal emulation state machine and grid bounds.
 */
-typedef struct {
+typedef struct sfte_term {
     sfte_cell *cells;
     sfte_parser_state parser;
     uint8_t *tab_stops;
@@ -2277,7 +2277,7 @@ typedef struct {
 /*
     Central typography metrics and caching.
 */
-typedef struct {
+typedef struct sfte_font {
     sfte_font_cache regular;
 #ifdef SFTE_FONT_BOLD
     sfte_font_cache bold;
@@ -2409,17 +2409,17 @@ struct sfte_wayland_app {
 };
 #endif  // SFTE_WAYLAND
 
-typedef struct _sfte_resize_buffers {
+typedef struct sfte_resize_buffers {
     sfte_cell *main_grid;
 #if SFTE_TERM_SCROLLBACK_CAP
     sfte_cell *sb_grid;
     int32_t sb_lines;
 #endif  // SFTE_TERM_SCROLLBACK_CAP
     int16_t new_col, new_row;
-} _sfte_resize_buffers;
+} sfte_resize_buffers;
 
 #if SFTE_TERM_REFLOW
-typedef struct _sfte_reflow_state {
+typedef struct sfte_reflow_state {
     sfte_cell *temp_rows;
 
     int32_t reflow_row;
@@ -2430,14 +2430,14 @@ typedef struct _sfte_reflow_state {
     int16_t target_old_col, target_old_row;
 
     uint8_t is_live;
-} _sfte_reflow_state;
+} sfte_reflow_state;
 #endif  // SFTE_TERM_REFLOW
 
-typedef struct {
+typedef struct sfte_pass_info {
     int32_t y_off;
     sfte_cell *grid;
     uint8_t hide_cursor;
-} _sfte_pass_info;
+} sfte_pass_info;
 
 // =================================================================================================
 // >>internal api
@@ -2640,23 +2640,23 @@ static inline void _sfte_input_send_mouse_event(sfte_ctx *ctx, uint8_t btn, uint
 // >reflow
 // -------------------------------------------------------------------------------------------------
 #if SFTE_TERM_REFLOW
-static inline void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell cell, uint8_t is_cursor);
+static inline void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell cell, uint8_t is_cursor);
 static inline int16_t _sfte_reflow_get_len(sfte_cell *row, int16_t cols, int16_t cursor_cx);
 static inline void _sfte_reflow_process_row(sfte_cell *row, int16_t cols, int16_t cursor_cx,
-                                            _sfte_reflow_state *st);
+                                            sfte_reflow_state *st);
 static inline void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old,
-                                                 int16_t grid_off_old, _sfte_reflow_state *st);
+                                                 int16_t grid_off_old, sfte_reflow_state *st);
 static inline sfte_cell *_sfte_reflow_linearize(sfte_ctx *ctx, sfte_cell *main_old,
                                                 int16_t grid_off_old, int16_t new_cols,
-                                                int16_t new_rows, _sfte_reflow_state *st);
+                                                int16_t new_rows, sfte_reflow_state *st);
 static inline void _sfte_reflow_extract_view(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows,
-                                             int16_t target_cy, _sfte_reflow_state *st,
-                                             _sfte_resize_buffers *out);
-static inline _sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_ctx *ctx, sfte_cell *main_old,
-                                                                 int16_t grid_off_old,
-                                                                 int16_t new_cols, int16_t new_rows,
-                                                                 int16_t target_cx,
-                                                                 int16_t target_cy);
+                                             int16_t target_cy, sfte_reflow_state *st,
+                                             sfte_resize_buffers *out);
+static inline sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_ctx *ctx, sfte_cell *main_old,
+                                                                int16_t grid_off_old,
+                                                                int16_t new_cols, int16_t new_rows,
+                                                                int16_t target_cx,
+                                                                int16_t target_cy);
 #endif  // SFTE_TERM_REFLOW
 
 // -------------------------------------------------------------------------------------------------
@@ -2839,7 +2839,7 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
 static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_y, int32_t *in_y);
 #endif  // SFTE_TERM_ANIMATE_SCREEN && SFTE_TERM_ALT_SCREEN
 static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
-                                                  _sfte_pass_info *passes,
+                                                  sfte_pass_info *passes,
                                                   sfte_damage_rect *out_dmg);
 static inline uint32_t _sfte_render_blend_argb(uint32_t dst_col, uint32_t src_col, uint8_t src_a);
 static inline void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
@@ -4326,7 +4326,7 @@ static inline void _sfte_grid_resize(sfte_ctx *ctx, int16_t new_cols, int16_t ne
     int16_t target_row = ctx->term.cursor_row;
 #endif  // !SFTE_TERM_ALT_SCREEN
 
-    _sfte_resize_buffers out = {0};
+    sfte_resize_buffers out = {0};
 
 #if SFTE_TERM_REFLOW
     out = _sfte_reflow_generate_buffers(ctx, main_old, grid_off_old, new_cols, new_rows, target_col,
@@ -4585,7 +4585,7 @@ static inline void _sfte_input_send_mouse_event(sfte_ctx *ctx, uint8_t btn, uint
 /*
     Pushes a single cell into the temporary linear buffer.
 */
-static inline void _sfte_reflow_push(_sfte_reflow_state *st, sfte_cell cell, uint8_t is_cursor) {
+static inline void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell cell, uint8_t is_cursor) {
 #if SFTE_FONT_WIDE_CHARS
     // If we're pushing a double-width character and we're at last column, wrap early.
     if ((cell.attr & _SFTE_ATTR_WIDE) && st->reflow_col == st->new_cols - 1) {
@@ -4650,7 +4650,7 @@ static inline int16_t _sfte_reflow_get_len(sfte_cell *row, int16_t cols, int16_t
     Processes a single row, extracting length, pushing cells, and handling cursor edge cases.
 */
 static inline void _sfte_reflow_process_row(sfte_cell *row, int16_t cols, int16_t cursor_col,
-                                            _sfte_reflow_state *st) {
+                                            sfte_reflow_state *st) {
     int16_t len = _sfte_reflow_get_len(row, cols, cursor_col);
 
     for (int16_t c = 0; c < len; ++c) _sfte_reflow_push(st, row[c], c == cursor_col);
@@ -4683,7 +4683,7 @@ static inline void _sfte_reflow_process_row(sfte_cell *row, int16_t cols, int16_
     during scrollback iteration to explicitly trim trailing whitespace on all historical lines.
 */
 static inline void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_old,
-                                                 int16_t grid_off_old, _sfte_reflow_state *st) {
+                                                 int16_t grid_off_old, sfte_reflow_state *st) {
 #if SFTE_TERM_SCROLLBACK_CAP
     for (int32_t i = 0; i < ctx->term.sb_len; ++i) {
         uint32_t ring_idx = (ctx->term.sb_head - ctx->term.sb_len + i + ctx->term.sb_cap) %
@@ -4711,7 +4711,7 @@ static inline void _sfte_reflow_grid_into_linear(sfte_ctx *ctx, sfte_cell *main_
 */
 static sfte_cell *_sfte_reflow_linearize(sfte_ctx *ctx, sfte_cell *main_old, int16_t grid_off_old,
                                          int16_t new_cols, int16_t new_rows,
-                                         _sfte_reflow_state *st) {
+                                         sfte_reflow_state *st) {
     // ctx->term.cols / new_cols calculates the raw expansion factor.
     // We add +2 to to this multiplier:
     // +1 to account for integer division truncation, and
@@ -4745,8 +4745,8 @@ static sfte_cell *_sfte_reflow_linearize(sfte_ctx *ctx, sfte_cell *main_old, int
     Modifies `st->new_cy` to reflect its clamped viewport position.
 */
 static inline void _sfte_reflow_extract_view(sfte_ctx *ctx, int16_t new_cols, int16_t new_rows,
-                                             int16_t target_row, _sfte_reflow_state *st,
-                                             _sfte_resize_buffers *out) {
+                                             int16_t target_row, sfte_reflow_state *st,
+                                             sfte_resize_buffers *out) {
     (void)ctx;
     int32_t total_lines = st->reflow_row + (st->reflow_col > 0 ? 1 : 0);
 
@@ -4797,18 +4797,18 @@ static inline void _sfte_reflow_extract_view(sfte_ctx *ctx, int16_t new_cols, in
 /*
     Orchestrates the reflow pipeline and returns the newly allocated grid buffers.
 */
-static _sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_ctx *ctx, sfte_cell *main_old,
-                                                          int16_t grid_off_old, int16_t new_cols,
-                                                          int16_t new_rows, int16_t target_col,
-                                                          int16_t target_row) {
-    _sfte_reflow_state st = {
+static sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_ctx *ctx, sfte_cell *main_old,
+                                                         int16_t grid_off_old, int16_t new_cols,
+                                                         int16_t new_rows, int16_t target_col,
+                                                         int16_t target_row) {
+    sfte_reflow_state st = {
         .target_old_col = target_col,
         .target_old_row = target_row,
     };
 
     sfte_cell *temp = _sfte_reflow_linearize(ctx, main_old, grid_off_old, new_cols, new_rows, &st);
 
-    _sfte_resize_buffers out = {0};
+    sfte_resize_buffers out = {0};
     _sfte_reflow_extract_view(ctx, new_cols, new_rows, target_row, &st, &out);
 
     SFTE_FREE(temp);
@@ -8318,7 +8318,7 @@ static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_
     Returns the amount of passes in `passes` array.
 */
 static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
-                                                  _sfte_pass_info *passes,
+                                                  sfte_pass_info *passes,
                                                   sfte_damage_rect *out_dmg) {
     passes[0].y_off = 0;
     passes[0].grid = ctx->term.cells;
@@ -10484,7 +10484,7 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
     ctx->width = w;
     ctx->height = h;
 
-    _sfte_pass_info passes[2];
+    sfte_pass_info passes[2];
     uint8_t num_passes = _sfte_render_prepare_passes(ctx, px_buf, passes, out_dmg);
 
     int16_t new_cols = (w - (2 * SFTE_WINDOW_PAD_X)) / ctx->font.cell_width;
