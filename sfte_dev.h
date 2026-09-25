@@ -2122,15 +2122,29 @@ typedef struct {
     int8_t num_fonts;
 } sfte_font_cache;
 
+typedef struct sfte_parser_state {
+    uint16_t state;
+    uint16_t params[16];
+    uint8_t param_idx;
+    uint8_t dec_priv;
+
+    char *osc_payload;
+    size_t osc_len;
+    size_t osc_cap;
+
+#if !SFTE_TERM_ASCII_CHARSET
+    uint32_t utf8_rune_acc;
+    uint8_t utf8_bytes_left;
+#endif  // !SFTE_TERM_ASCII_CHARSET
+} sfte_parser_state;
+
 /*
     Core terminal emulation state machine and grid bounds.
 */
 typedef struct {
     sfte_cell *cells;
+    sfte_parser_state parser;
     uint8_t *tab_stops;
-    char *osc_payload;
-    size_t osc_len;
-    size_t osc_cap;
 #if SFTE_TERM_SCROLLBACK_CAP
     sfte_cell *scrollback;  // Ring buffer storing history
 #endif                      // SFTE_TERM_SCROLLBACK_CAP
@@ -2199,8 +2213,6 @@ typedef struct {
     int16_t scroll_bot;
     int16_t grid_off;
     uint16_t cur_attr;
-    uint16_t parser_state;
-    uint16_t vt_params[16];  // Stores numbers from escape sequences
 #if SFTE_CURSOR_TRAIL
     int16_t last_grid_col, last_grid_row;
 #endif  // SFTE_CURSOR_TRAIL
@@ -2227,8 +2239,6 @@ typedef struct {
     uint8_t auto_wrap;
     uint8_t origin_mode;
     uint8_t hide_cursor;
-    uint8_t vt_param_idx;
-    uint8_t vt_dec_priv;      // Tracks if the sequence starts with a '?'
     uint8_t bracketed_paste;  // Tracks \033[?2004h
     uint8_t utf8_bytes_left;
 #if SFTE_CURSOR_BLINK
@@ -6065,7 +6075,7 @@ static inline void _sfte_csi_exec_ech(sfte_ctx *ctx, uint16_t *p, int16_t col) {
     Add identity to customization. This might be useful especially for custom backends and such.
 */
 static inline void _sfte_csi_exec_da(sfte_ctx *ctx) {
-    if (ctx->term.vt_dec_priv == 2) {
+    if (ctx->term.parser.dec_priv == 2) {
         const char *sda = "\033[>0;95;0c";
         if (ctx->write_cb) ctx->write_cb(ctx->user_data, sda, strlen(sda));
     } else {
@@ -6130,7 +6140,7 @@ static inline void _sfte_csi_exec_tbc(sfte_ctx *ctx, uint16_t *p) {
     DECOM (Origin Mode), and alt screen buffer toggles.
 */
 static inline void _sfte_csi_set_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt, int16_t col) {
-    if (!ctx->term.vt_dec_priv) return;
+    if (!ctx->term.parser.dec_priv) return;
 
     for (int i = 0; i < cnt; ++i) {
         if (p[i] == 25) {
@@ -6215,7 +6225,7 @@ static inline void _sfte_csi_set_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt, 
     Matches the implementations found in SM.
 */
 static inline void _sfte_csi_reset_mode(sfte_ctx *ctx, uint16_t *p, uint16_t cnt, int16_t col) {
-    if (!ctx->term.vt_dec_priv) return;
+    if (!ctx->term.parser.dec_priv) return;
 
     for (int i = 0; i < cnt; ++i) {
         if (p[i] == 25) {
@@ -6581,7 +6591,7 @@ static inline void _sfte_csi_exec_xtwinops(sfte_ctx *ctx, uint16_t *p) {
     Restores the previously saved cursor position and attributes.
 */
 static inline void _sfte_csi_exec_scorc(sfte_ctx *ctx, uint16_t *p) {
-    if (ctx->term.vt_dec_priv != 0 || p[0] != 0) return;
+    if (ctx->term.parser.dec_priv != 0 || p[0] != 0) return;
     uint8_t s_idx = 0;
 #if SFTE_TERM_ALT_SCREEN
     s_idx = ctx->term.alt_active;
@@ -6602,22 +6612,22 @@ static inline void _sfte_csi_exec_scorc(sfte_ctx *ctx, uint16_t *p) {
     the keyboard flag stack when preceded by >, =, < or ?.
 */
 static inline void _sfte_csi_exec_kitty(sfte_ctx *ctx, uint16_t *p) {
-    if (ctx->term.vt_dec_priv == 0) return;
+    if (ctx->term.parser.dec_priv == 0) return;
     uint8_t s_idx = 0;
 #if SFTE_TERM_ALT_SCREEN
     s_idx = ctx->term.alt_active;
-#endif                                 // SFTE_TERM_ALT_SCREEN
-    if (ctx->term.vt_dec_priv == 1) {  // CSI ? u (query)
+#endif                                     // SFTE_TERM_ALT_SCREEN
+    if (ctx->term.parser.dec_priv == 1) {  // CSI ? u (query)
         char buf[32];
         uint16_t flags = ctx->term.kitty_kb_stack[s_idx][ctx->term.kitty_kb_stack_idx[s_idx]];
         size_t len = snprintf(buf, sizeof(buf), "\033[?%du", flags);
         if (ctx->write_cb) ctx->write_cb(ctx->user_data, buf, len);
-    } else if (ctx->term.vt_dec_priv == 2) {  // CSI > flags u (push)
+    } else if (ctx->term.parser.dec_priv == 2) {  // CSI > flags u (push)
         if (ctx->term.kitty_kb_stack_idx[s_idx] < 15) ctx->term.kitty_kb_stack_idx[s_idx]++;
         ctx->term.kitty_kb_stack[s_idx][ctx->term.kitty_kb_stack_idx[s_idx]] = p[0];
-    } else if (ctx->term.vt_dec_priv == 3)  // CSI < n u (pop)
+    } else if (ctx->term.parser.dec_priv == 3)  // CSI < n u (pop)
         ctx->term.kitty_kb_stack_idx[s_idx] -= (p[0] > 0) ? p[0] : 1;
-    else if (ctx->term.vt_dec_priv == 4)  // CSI = flags u (set/overwrite)
+    else if (ctx->term.parser.dec_priv == 4)  // CSI = flags u (set/overwrite)
         ctx->term.kitty_kb_stack[s_idx][ctx->term.kitty_kb_stack_idx[s_idx]] = p[0];
 }
 #endif  // SFTE_INPUT_KITTY
@@ -6626,8 +6636,8 @@ static inline void _sfte_csi_exec_kitty(sfte_ctx *ctx, uint16_t *p) {
     The main routing switch for Control Sequence Introducer events.
 */
 static inline void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
-    uint16_t *p = ctx->term.vt_params;
-    int16_t cnt = ctx->term.vt_param_idx + 1;
+    uint16_t *p = ctx->term.parser.params;
+    int16_t cnt = ctx->term.parser.param_idx + 1;
     int16_t col = ctx->term.cursor_col >= ctx->term.cols ? ctx->term.cols - 1
                                                          : ctx->term.cursor_col;
 
@@ -6659,11 +6669,11 @@ static inline void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
         ctx->term.cursor_row = _SFTE_CLAMP(_SFTE_P_IDX(p[0]), 0, ctx->term.rows - 1);
         break;
     case 'J':
-        if (ctx->term.vt_dec_priv == 0)
+        if (ctx->term.parser.dec_priv == 0)
             for (int i = 0; i < cnt; ++i) _sfte_csi_exec_ed(ctx, p[i], col);
         break;
     case 'K':
-        if (ctx->term.vt_dec_priv == 0)
+        if (ctx->term.parser.dec_priv == 0)
             for (int i = 0; i < cnt; ++i) _sfte_csi_exec_el(ctx, p[i], col);
         break;
     case 'L': _sfte_csi_exec_il(ctx, p); break;
@@ -6673,7 +6683,7 @@ static inline void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
     case 'T': _sfte_grid_scroll(ctx, -_SFTE_P(p[0])); break;
     case 'X': _sfte_csi_exec_ech(ctx, p, col); break;
     case 'c':
-        if (ctx->term.vt_dec_priv == 0) _sfte_csi_exec_da(ctx);
+        if (ctx->term.parser.dec_priv == 0) _sfte_csi_exec_da(ctx);
         break;
     case 'd': _sfte_csi_exec_vpa(ctx, p); break;
     case 'f': _sfte_csi_exec_hvp(ctx, p); break;
@@ -6681,18 +6691,18 @@ static inline void _sfte_csi_dispatch(sfte_ctx *ctx, uint8_t cmd) {
     case 'h': _sfte_csi_set_mode(ctx, p, cnt, col); break;
     case 'l': _sfte_csi_reset_mode(ctx, p, cnt, col); break;
     case 'm':
-        if (ctx->term.vt_dec_priv == 0) _sfte_csi_exec_sgr(ctx, p, cnt);
+        if (ctx->term.parser.dec_priv == 0) _sfte_csi_exec_sgr(ctx, p, cnt);
         break;
     case 'n': _sfte_csi_exec_dsr(ctx, p); break;
     case 'p': _sfte_csi_exec_decstr(ctx, col); break;
     case 'q': _sfte_csi_exec_decscusr(ctx, p, col); break;
     case 'r': _sfte_csi_exec_decstbm(ctx, p, cnt); break;
     case 's':
-        if (ctx->term.vt_dec_priv == 0) _sfte_csi_exec_scosc(ctx, p);
+        if (ctx->term.parser.dec_priv == 0) _sfte_csi_exec_scosc(ctx, p);
         break;
     case 't': _sfte_csi_exec_xtwinops(ctx, p); break;
     case 'u':
-        if (ctx->term.vt_dec_priv == 0) _sfte_csi_exec_scorc(ctx, p);
+        if (ctx->term.parser.dec_priv == 0) _sfte_csi_exec_scorc(ctx, p);
 #if SFTE_INPUT_KITTY
         else
             _sfte_csi_exec_kitty(ctx, p);
@@ -6782,11 +6792,14 @@ static inline uint32_t _sfte_parser_osc_color(const char *str, uint32_t fallback
     unless it's already at its max capacity.
 */
 static inline void _sfte_parser_append_payload(sfte_ctx *ctx, uint8_t b) {
-    if (ctx->term.osc_len + 1 >= ctx->term.osc_cap && ctx->term.osc_cap < SFTE_OSC_MAX_CAP) {
-        ctx->term.osc_cap *= 2;
-        ctx->term.osc_payload = (char *)SFTE_REALLOC(ctx->term.osc_payload, ctx->term.osc_cap);
+    if (ctx->term.parser.osc_len + 1 >= ctx->term.parser.osc_cap &&
+        ctx->term.parser.osc_cap < SFTE_OSC_MAX_CAP) {
+        ctx->term.parser.osc_cap *= 2;
+        ctx->term.parser.osc_payload = (char *)SFTE_REALLOC(ctx->term.parser.osc_payload,
+                                                            ctx->term.parser.osc_cap);
     }
-    if (ctx->term.osc_len + 1 < ctx->term.osc_cap) ctx->term.osc_payload[ctx->term.osc_len++] = b;
+    if (ctx->term.parser.osc_len + 1 < ctx->term.parser.osc_cap)
+        ctx->term.parser.osc_payload[ctx->term.parser.osc_len++] = b;
 }
 
 /*
@@ -6931,15 +6944,15 @@ static inline void _sfte_parser_hash_decaln(sfte_ctx *ctx) {
 */
 static inline void _sfte_parser_osc_dispatch(sfte_ctx *ctx, uint8_t terminator) {
     const char *term = (terminator == '\x1b') ? "\033\\" : "\x07";
-    ctx->term.osc_payload[ctx->term.osc_len] = '\0';
+    ctx->term.parser.osc_payload[ctx->term.parser.osc_len] = '\0';
 
-    if (strncmp(ctx->term.osc_payload, "10;?", 4) == 0 ||
-        strncmp(ctx->term.osc_payload, "11;?", 4) == 0
+    if (strncmp(ctx->term.parser.osc_payload, "10;?", 4) == 0 ||
+        strncmp(ctx->term.parser.osc_payload, "11;?", 4) == 0
 #if SFTE_CURSOR_DYNAMIC
-        || strncmp(ctx->term.osc_payload, "12;?", 4) == 0
+        || strncmp(ctx->term.parser.osc_payload, "12;?", 4) == 0
 #endif  // SFTE_CURSOR_DYNAMIC
     ) {
-        uint8_t code_char = ctx->term.osc_payload[1];
+        uint8_t code_char = ctx->term.parser.osc_payload[1];
         uint8_t code = (code_char == '0') ? 10 : ((code_char == '1') ? 11 : 12);
         uint32_t col = (code == 11) ? SFTE_COLOR_BG : SFTE_COLOR_FG;
 #if SFTE_CURSOR_DYNAMIC
@@ -6953,19 +6966,19 @@ static inline void _sfte_parser_osc_dispatch(sfte_ctx *ctx, uint8_t terminator) 
         if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
     }
 #if SFTE_CURSOR_DYNAMIC
-    else if (strncmp(ctx->term.osc_payload, "12;", 3) == 0)
-        ctx->term.cursor_color = _sfte_parser_osc_color(ctx->term.osc_payload + 3,
+    else if (strncmp(ctx->term.parser.osc_payload, "12;", 3) == 0)
+        ctx->term.cursor_color = _sfte_parser_osc_color(ctx->term.parser.osc_payload + 3,
                                                         ctx->term.cursor_color);
-    else if (strncmp(ctx->term.osc_payload, "112", 3) == 0)
+    else if (strncmp(ctx->term.parser.osc_payload, "112", 3) == 0)
         ctx->term.cursor_color = SFTE_CURSOR_COLOR;
 #endif  // SFTE_CURSOR_DYNAMIC
 #if SFTE_CLIPBOARD && SFTE_CLIPBOARD_OSC52
-    else if (strncmp(ctx->term.osc_payload, "52;", 3) == 0) {  // Remote Clipboard (OSC 52)
-        char *p = ctx->term.osc_payload + (strlen("52;") - 1);
+    else if (strncmp(ctx->term.parser.osc_payload, "52;", 3) == 0) {  // Remote Clipboard (OSC 52)
+        char *p = ctx->term.parser.osc_payload + (strlen("52;") - 1);
         char target = (*p && *p != ';') ? *p : 'c';
         while (*p && *p != ';') p++;
         if (*p == ';' && *++p != '?' /* Skips read requests */) {
-            size_t b64_len = ctx->term.osc_len - (p - ctx->term.osc_payload);
+            size_t b64_len = ctx->term.parser.osc_len - (p - ctx->term.parser.osc_payload);
             size_t raw_len = 0;
             uint8_t *raw_data = _sfte_b64_decode(&ctx->stack, (uint8_t *)p, b64_len, &raw_len);
             if (raw_data) {
@@ -6986,8 +6999,8 @@ static inline void _sfte_parser_osc_dispatch(sfte_ctx *ctx, uint8_t terminator) 
     }
 #endif  // SFTE_CLIPBOARD && SFTE_CLIPBOARD_OSC52
 #if SFTE_INPUT_HYPERLINKS
-    else if (strncmp(ctx->term.osc_payload, "8;", 2) == 0) {  // hyperlink
-        char *p = ctx->term.osc_payload + (strlen("8;") - 1);
+    else if (strncmp(ctx->term.parser.osc_payload, "8;", 2) == 0) {  // hyperlink
+        char *p = ctx->term.parser.osc_payload + (strlen("8;") - 1);
         while (*p && *p != ';') p++;
         if (*p++ == ';') {
             if (*p == '\0')  // Empty URI means close the link
@@ -7018,13 +7031,13 @@ static inline void _sfte_parser_osc_dispatch(sfte_ctx *ctx, uint8_t terminator) 
         }
     }
 #endif  // SFTE_INPUT_HYPERLINKS
-    else if (strncmp(ctx->term.osc_payload, "0;", 2) == 0 ||
-             strncmp(ctx->term.osc_payload, "1;", 2) == 0 ||
-             strncmp(ctx->term.osc_payload, "2;", 2) == 0) {
-        char *title = ctx->term.osc_payload + 2;
+    else if (strncmp(ctx->term.parser.osc_payload, "0;", 2) == 0 ||
+             strncmp(ctx->term.parser.osc_payload, "1;", 2) == 0 ||
+             strncmp(ctx->term.parser.osc_payload, "2;", 2) == 0) {
+        char *title = ctx->term.parser.osc_payload + 2;
         if (ctx->title_cb) ctx->title_cb(ctx->user_data, title);
-    } else if (strncmp(ctx->term.osc_payload, "9;4;", 4) == 0) {
-        char *p = ctx->term.osc_payload + 4;
+    } else if (strncmp(ctx->term.parser.osc_payload, "9;4;", 4) == 0) {
+        char *p = ctx->term.parser.osc_payload + 4;
         uint8_t state = *p - '0';
         while (*p && *p != ';') p++;
         uint8_t progress = 0;
@@ -7032,7 +7045,7 @@ static inline void _sfte_parser_osc_dispatch(sfte_ctx *ctx, uint8_t terminator) 
         if (progress > 100) progress = 100;
         if (ctx->progress_cb) ctx->progress_cb(ctx->user_data, state, progress);
     } else
-        _SFTE_WARN(ctx, UNHANDLED_OSC, ctx->term.osc_payload);
+        _SFTE_WARN(ctx, UNHANDLED_OSC, ctx->term.parser.osc_payload);
 }
 
 /*
@@ -7042,17 +7055,17 @@ static inline void _sfte_parser_osc_dispatch(sfte_ctx *ctx, uint8_t terminator) 
 */
 static inline void _sfte_parser_dcs_dispatch(sfte_ctx *ctx, uint8_t terminator) {
     const char *term = (terminator == '\x1b') ? "\033\\" : "\x07";
-    ctx->term.osc_payload[ctx->term.osc_len] = '\0';
+    ctx->term.parser.osc_payload[ctx->term.parser.osc_len] = '\0';
 
 #if SFTE_IMG_KITTY
-    if (ctx->term.osc_payload[0] == 'G')
-        _sfte_kitty_parse_graphics(ctx, ctx->term.osc_payload + strlen("G"));
+    if (ctx->term.parser.osc_payload[0] == 'G')
+        _sfte_kitty_parse_graphics(ctx, ctx->term.parser.osc_payload + strlen("G"));
     else
 #endif  // SFTE_IMG_KITTY
-        if (strncmp(ctx->term.osc_payload, "+q", 2) == 0) {
+        if (strncmp(ctx->term.parser.osc_payload, "+q", 2) == 0) {
             char reply[128];
             size_t len = snprintf(reply, sizeof(reply), "\033P0+r%s%s",
-                                  ctx->term.osc_payload + strlen("+q"), term);
+                                  ctx->term.parser.osc_payload + strlen("+q"), term);
             if (ctx->write_cb) ctx->write_cb(ctx->user_data, reply, len);
         }
 }
@@ -7080,10 +7093,10 @@ static inline void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
     default: break;
     }
 
-    switch (ctx->term.parser_state) {
+    switch (ctx->term.parser.state) {
     case VT_GROUND:
         if (b == '\033' || b == '\x1b')
-            ctx->term.parser_state = VT_ESCAPE;
+            ctx->term.parser.state = VT_ESCAPE;
         else if (b >= 0x20) {
 #if SFTE_TERM_ASCII_CHARSET
             if (b >= 0x80) {
@@ -7100,73 +7113,73 @@ static inline void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
         break;
     case VT_ESCAPE:
         if (b == '[') {
-            ctx->term.parser_state = VT_CSI_ENTRY;
-            ctx->term.vt_param_idx = 0;
-            ctx->term.vt_dec_priv = 0;
-            memset(ctx->term.vt_params, 0, sizeof(ctx->term.vt_params));
+            ctx->term.parser.state = VT_CSI_ENTRY;
+            ctx->term.parser.param_idx = 0;
+            ctx->term.parser.dec_priv = 0;
+            memset(ctx->term.parser.params, 0, sizeof(ctx->term.parser.params));
         } else if (b == ']') {
-            ctx->term.parser_state = VT_OSC;
-            ctx->term.osc_len = 0;
+            ctx->term.parser.state = VT_OSC;
+            ctx->term.parser.osc_len = 0;
         } else if (b == 'c') {
             _sfte_parser_esc_ris(ctx);
-            ctx->term.parser_state = VT_GROUND;
+            ctx->term.parser.state = VT_GROUND;
         } else if (b == '\\')
-            ctx->term.parser_state = VT_GROUND;
+            ctx->term.parser.state = VT_GROUND;
         else if (b == 'P' || b == '_' || b == '^') {
-            ctx->term.parser_state = VT_DCS;
-            ctx->term.osc_len = 0;
+            ctx->term.parser.state = VT_DCS;
+            ctx->term.parser.osc_len = 0;
         } else if (b == '(' || b == ')')
-            ctx->term.parser_state = VT_CHARSET;
+            ctx->term.parser.state = VT_CHARSET;
         else if (b == '7') {
             _sfte_parser_esc_sc(ctx);
-            ctx->term.parser_state = VT_GROUND;
+            ctx->term.parser.state = VT_GROUND;
         } else if (b == '8') {
             _sfte_parser_esc_rc(ctx);
-            ctx->term.parser_state = VT_GROUND;
+            ctx->term.parser.state = VT_GROUND;
         } else if (b == '#')
-            ctx->term.parser_state = VT_HASH;
+            ctx->term.parser.state = VT_HASH;
         else if (b == 'D') {
             _sfte_parser_esc_ind(ctx);
-            ctx->term.parser_state = VT_GROUND;
+            ctx->term.parser.state = VT_GROUND;
         } else if (b == 'M') {
             _sfte_parser_esc_ri(ctx);
-            ctx->term.parser_state = VT_GROUND;
+            ctx->term.parser.state = VT_GROUND;
         } else if (b == 'E') {
             _sfte_parser_esc_nel(ctx);
-            ctx->term.parser_state = VT_GROUND;
+            ctx->term.parser.state = VT_GROUND;
         } else
-            ctx->term.parser_state = VT_GROUND;
+            ctx->term.parser.state = VT_GROUND;
         break;
     case VT_HASH:
         if (b == '8') _sfte_parser_hash_decaln(ctx);
-        ctx->term.parser_state = VT_GROUND;
+        ctx->term.parser.state = VT_GROUND;
         break;
-    case VT_CHARSET: ctx->term.parser_state = VT_GROUND; break;
+    case VT_CHARSET: ctx->term.parser.state = VT_GROUND; break;
     case VT_OSC:
         if (b == '\x07' || b == '\x1b') {
             _sfte_parser_osc_dispatch(ctx, b);
-            ctx->term.parser_state = (b == '\x1b') ? VT_ESCAPE : VT_GROUND;
+            ctx->term.parser.state = (b == '\x1b') ? VT_ESCAPE : VT_GROUND;
         } else
             _sfte_parser_append_payload(ctx, b);
         break;
     case VT_DCS:
         if (b == '\x07' || b == '\x1b') {
             _sfte_parser_dcs_dispatch(ctx, b);
-            ctx->term.parser_state = (b == '\x1b') ? VT_ESCAPE : VT_GROUND;
+            ctx->term.parser.state = (b == '\x1b') ? VT_ESCAPE : VT_GROUND;
         }
 #if SFTE_IMG_SIXEL
         else if (b == 'q') {
             // Detect if this dcs header is strictly sixel params (nums/semicols)
             uint8_t is_sixel = 1;
-            for (size_t i = 0; i < ctx->term.osc_len; ++i) {
-                char pb = ctx->term.osc_payload[i];
+            for (size_t i = 0; i < ctx->term.parser.osc_len; ++i) {
+                char pb = ctx->term.parser.osc_payload[i];
                 if (pb != ';' && (pb < '0' || pb > '9')) {
                     is_sixel = 0;
                     break;
                 }
             }
             if (is_sixel) {
-                ctx->term.parser_state = VT_SIXEL;
+                ctx->term.parser.state = VT_SIXEL;
                 ctx->sixel = (sfte_sixel_state){
                     .start_col = ctx->term.cursor_col,
                     .start_row = ctx->term.cursor_row,
@@ -7183,7 +7196,7 @@ static inline void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
     case VT_SIXEL:
         if (b == '\x1b' || b == '\x07') {
             _sfte_sixel_commit(ctx);
-            ctx->term.parser_state = (b == '\x1b') ? VT_ESCAPE : VT_GROUND;
+            ctx->term.parser.state = (b == '\x1b') ? VT_ESCAPE : VT_GROUND;
         } else
             _sfte_sixel_parse_byte(ctx, b);
         break;
@@ -7191,20 +7204,21 @@ static inline void _sfte_parser_feed_byte(sfte_ctx *ctx, uint8_t b) {
     case VT_CSI_ENTRY:
     case VT_CSI_PARAM:
         if (b == '?') {  // private marker
-            ctx->term.parser_state = VT_CSI_PARAM;
-            ctx->term.vt_dec_priv = 1;
+            ctx->term.parser.state = VT_CSI_PARAM;
+            ctx->term.parser.dec_priv = 1;
         } else if (b == '>') {
-            ctx->term.parser_state = VT_CSI_PARAM;
-            ctx->term.vt_dec_priv = 2;
+            ctx->term.parser.state = VT_CSI_PARAM;
+            ctx->term.parser.dec_priv = 2;
         } else if (b >= '0' && b <= '9') {
-            ctx->term.parser_state = VT_CSI_PARAM;
-            ctx->term.vt_params[ctx->term.vt_param_idx] *= 10;
-            ctx->term.vt_params[ctx->term.vt_param_idx] += (b - '0');
+            ctx->term.parser.state = VT_CSI_PARAM;
+            ctx->term.parser.params[ctx->term.parser.param_idx] *= 10;
+            ctx->term.parser.params[ctx->term.parser.param_idx] += (b - '0');
         } else if (b == ';' || b == ':') {
-            if (ctx->term.vt_param_idx < 15) ctx->term.vt_param_idx++;  // Move to next parameter
+            if (ctx->term.parser.param_idx < 15)
+                ctx->term.parser.param_idx++;  // Move to next parameter
         } else if (b >= 0x40 && b <= 0x7E) {
             _sfte_csi_dispatch(ctx, b);
-            ctx->term.parser_state = VT_GROUND;
+            ctx->term.parser.state = VT_GROUND;
         }
     }
 }
@@ -10144,9 +10158,9 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
     ctx->term.scroll_top = 0;
     ctx->term.scroll_bot = ctx->term.rows - 1;
 
-    ctx->term.osc_cap = SFTE_OSC_INIT_CAP;
-    ctx->term.osc_payload = (char *)SFTE_MALLOC(ctx->term.osc_cap);
-    ctx->term.osc_len = 0;
+    ctx->term.parser.osc_cap = SFTE_OSC_INIT_CAP;
+    ctx->term.parser.osc_payload = (char *)SFTE_MALLOC(ctx->term.parser.osc_cap);
+    ctx->term.parser.osc_len = 0;
 
 #if SFTE_INPUT_HYPERLINKS
     ctx->term.link_pool_cap = SFTE_INPUT_HYPERLINKS_INIT_CAP;
@@ -10192,7 +10206,7 @@ void sfte_free(sfte_ctx *ctx) {
 
 #undef FREE_CACHE
 
-    SFTE_FREE(ctx->term.osc_payload);
+    SFTE_FREE(ctx->term.parser.osc_payload);
     SFTE_FREE(ctx->term.cells);
 #if SFTE_TERM_ALT_SCREEN
     SFTE_FREE(ctx->term.alt_cells);
