@@ -334,6 +334,9 @@ typedef enum {
     SFTE_LOG_LVL_INFO,
 } sfte_log_level;
 
+typedef void (*sfte_log_func)(const char *tag, sfte_log_level log_level, const char *msg,
+                              uint32_t line_nr);
+
 /*
     Available levels of severity:
     SFTE_LOG_LVL_PANIC
@@ -1823,11 +1826,13 @@ static const char *_sfte_log_messages[] = {_SFTE_LOG_ITEMS};
 #undef _SFTE_LOGITEM_XMACRO
 
 #define _SFTE_PANIC(ctx, code, ...)                                                                \
-    _sfte_log(ctx, code, SFTE_LOG_LVL_PANIC, __LINE__, ##__VA_ARGS__)
+    _sfte_log(ctx->logger.func, code, SFTE_LOG_LVL_PANIC, __LINE__, ##__VA_ARGS__)
 #define _SFTE_ERROR(ctx, code, ...)                                                                \
-    _sfte_log(ctx, code, SFTE_LOG_LVL_ERROR, __LINE__, ##__VA_ARGS__)
-#define _SFTE_WARN(ctx, code, ...) _sfte_log(ctx, code, SFTE_LOG_LVL_WARN, __LINE__, ##__VA_ARGS__)
-#define _SFTE_INFO(ctx, code, ...) _sfte_log(ctx, code, SFTE_LOG_LVL_INFO, __LINE__, ##__VA_ARGS__)
+    _sfte_log(ctx->logger.func, code, SFTE_LOG_LVL_ERROR, __LINE__, ##__VA_ARGS__)
+#define _SFTE_WARN(ctx, code, ...)                                                                 \
+    _sfte_log(ctx->logger.func, code, SFTE_LOG_LVL_WARN, __LINE__, ##__VA_ARGS__)
+#define _SFTE_INFO(ctx, code, ...)                                                                 \
+    _sfte_log(ctx->logger.func, code, SFTE_LOG_LVL_INFO, __LINE__, ##__VA_ARGS__)
 
 #else  // !SFTE_NO_LOGGING
 
@@ -3078,8 +3083,8 @@ static inline void _sfte_log_default_func(const char *tag, sfte_log_level log_le
     This function is not called directly, instead its used by macros
    (`_SFTE_PANIC/ERROR/WARN/INFO`)
 */
-static inline void _sfte_log(sfte_ctx *ctx, _sfte_log_item log_item, sfte_log_level log_level,
-                             uint32_t line_nr, ...) {
+static inline void _sfte_log(sfte_log_func log_func, _sfte_log_item log_item,
+                             sfte_log_level log_level, uint32_t line_nr, ...) {
     if (log_level > SFTE_LOG_LEVEL) return;
 
     char buf[_SFTE_LOG_MAX_MSG_LEN];
@@ -3088,8 +3093,7 @@ static inline void _sfte_log(sfte_ctx *ctx, _sfte_log_item log_item, sfte_log_le
     vsnprintf(buf, sizeof(buf), _sfte_log_messages[log_item], args);
     va_end(args);
 
-    void (*log_func)(const char *, sfte_log_level, const char *,
-                     uint32_t) = ctx->logger.func ? ctx->logger.func : _sfte_log_default_func;
+    if (!log_func) log_func = _sfte_log_default_func;
 
     log_func(SFTE_LOG_TAG, log_level, buf, line_nr);
 
