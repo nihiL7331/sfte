@@ -283,11 +283,15 @@ int main(int argc, char **argv) {
         if (!nob_copy_file("config.def.c", "config.c")) return 1;
     }
 
-    nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-O3", "-flto=auto", "-march=native", "config.c",
-                   "-o", "sfte", "-lwayland-client", "-lrt", "-lm", "-D_GNU_SOURCE", "-lutil",
-                   "-lxkbcommon", "-std=c11");
+    nob_cmd_append(&cmd, "clang", "-Wall", "-Wextra", "-march=native", "config.c", "-o", "sfte",
+                   "-lwayland-client", "-lrt", "-lm", "-D_GNU_SOURCE", "-lutil", "-lxkbcommon",
+                   "-std=c11");
 
-    if (mode == MODE_DEV) nob_cmd_append(&cmd, "-DSFTE_DEV_ENV");
+    if (mode == MODE_DEV)
+        nob_cmd_append(&cmd, "-DSFTE_DEV_ENV", "-O0", "-g", "-fno-omit-frame-pointer",
+                       "-fsanitize=address");
+    else
+        nob_cmd_append(&cmd, "-O3", "-flto=auto");
 
     if (!nob_cmd_run_sync(cmd)) return 1;
 
