@@ -9414,19 +9414,19 @@ static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t
     // Block elements
     if (rune >= 0x2580 && rune <= 0x259F) {
 #define _BLOCK_B(f)                                                                                \
-    _SFTE_RECT(cx, cy + ch - ((((f) * ch) / 8 > 0) ? (((f) * ch) / 8) : 1), cw,                    \
-               (((f) * ch) / 8 > 0) ? (((f) * ch) / 8) : 1)
-#define _BLOCK_L(f) _SFTE_RECT(cx, cy, (((f) * cw) / 8 > 0) ? (((f) * cw) / 8) : 1, ch)
-#define _BLOCK_T(f) _SFTE_RECT(cx, cy, cw, (((f) * ch) / 8 > 0) ? (((f) * ch) / 8) : 1)
+    _SFTE_RECT(cx, cy + ch - ((((f) * ch + 4) / 8 > 0) ? (((f) * ch + 4) / 8) : 1), cw,            \
+               (((f) * ch + 4) / 8 > 0) ? (((f) * ch + 4) / 8) : 1)
+#define _BLOCK_L(f) _SFTE_RECT(cx, cy, (((f) * cw + 4) / 8 > 0) ? (((f) * cw + 4) / 8) : 1, ch)
+#define _BLOCK_T(f) _SFTE_RECT(cx, cy, cw, (((f) * ch + 4) / 8 > 0) ? (((f) * ch + 4) / 8) : 1)
 #define _BLOCK_R(f)                                                                                \
-    _SFTE_RECT(cx + cw - ((((f) * cw) / 8 > 0) ? (((f) * cw) / 8) : 1), cy,                        \
-               (((f) * cw) / 8 > 0) ? (((f) * cw) / 8) : 1, ch)
+    _SFTE_RECT(cx + cw - ((((f) * cw + 4) / 8 > 0) ? (((f) * cw + 4) / 8) : 1), cy,                \
+               (((f) * cw + 4) / 8 > 0) ? (((f) * cw + 4) / 8) : 1, ch)
 #define _QUAD(tl, tr, bl, br)                                                                      \
     do {                                                                                           \
         if (tl) _SFTE_RECT(cx, cy, cw / 2, ch / 2);                                                \
-        if (tr) _SFTE_RECT(cx + cw / 2, cy, cw / 2, ch / 2);                                       \
-        if (bl) _SFTE_RECT(cx, cy + ch / 2, cw / 2, ch / 2);                                       \
-        if (br) _SFTE_RECT(cx + cw / 2, cy + ch / 2, cw / 2, ch / 2);                              \
+        if (tr) _SFTE_RECT(cx + cw / 2, cy, cw - cw / 2, ch / 2);                                  \
+        if (bl) _SFTE_RECT(cx, cy + ch / 2, cw / 2, ch - ch / 2);                                  \
+        if (br) _SFTE_RECT(cx + cw / 2, cy + ch / 2, cw - cw / 2, ch - ch / 2);                    \
     } while (0)
 
         switch (rune) {
