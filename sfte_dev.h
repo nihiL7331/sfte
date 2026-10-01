@@ -4064,7 +4064,7 @@ static inline uint16_t _sfte_color_rgb_to_256(uint8_t r, uint8_t g, uint8_t b) {
 */
 static inline uint32_t _sfte_color_from_idx(uint16_t idx) {
 #if SFTE_COLOR_TRUECOLOR
-    return _sfte_palette_256[idx];
+    return SFTE_COLOR_ALPHA_MASK | _sfte_palette_256[idx];
 #else   // !SFTE_COLOR_TRUECOLOR
     // Last two indices are reserved for default colors
     if (idx >= _SFTE_COLOR_FG_DEFAULT) return _SFTE_COLOR_FG_DEFAULT - 1;
