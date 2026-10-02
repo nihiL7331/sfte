@@ -7788,6 +7788,12 @@ static inline void _sfte_parser_feed_byte(sfte_term *term, uint8_t b) {
         } else if (b == '>') {
             parser->state = VT_CSI_PARAM;
             parser->dec_priv = 2;
+        } else if (b == '<') {
+            parser->state = VT_CSI_PARAM;
+            parser->dec_priv = 3;
+        } else if (b == '=') {
+            parser->state = VT_CSI_PARAM;
+            parser->dec_priv = 4;
         } else if (b >= '0' && b <= '9') {
             parser->state = VT_CSI_PARAM;
             parser->params[parser->param_idx] *= 10;
