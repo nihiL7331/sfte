@@ -7134,10 +7134,12 @@ static inline void _sfte_csi_exec_kitty(sfte_term *term, uint16_t *p) {
         kb->stack[s_idx][kb->stack_idx[s_idx]] = p[0];
     } else if (parser->dec_priv == 3) {  // CSI < n u (pop)
         uint8_t pop_cnt = (p[0] > 0) ? p[0] : 1;
-        if (kb->stack_idx[s_idx] >= pop_cnt)
+        if (kb->stack_idx[s_idx] >= pop_cnt) {
             kb->stack_idx[s_idx] -= pop_cnt;
-        else
+        } else {
             kb->stack_idx[s_idx] = 0;
+            kb->stack[s_idx][0] = 0;
+        }
     } else if (parser->dec_priv == 4)  // CSI = flags u (set/overwrite)
         kb->stack[s_idx][kb->stack_idx[s_idx]] = p[0];
 }
