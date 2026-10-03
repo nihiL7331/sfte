@@ -3254,7 +3254,8 @@ static inline int8_t _sfte_term_get_new_idx(sfte_ctx *ctx) {
         if (!ctx->mux.terms[i].is_allocated) return i;
     return -1;
 #else   // !SFTE_MULTIPLEXER
-    return &ctx->term.is_allocated ? -1 : 0;
+    (void)ctx;
+    return 0;
 #endif  // !SFTE_MULTIPLEXER
 }
 
