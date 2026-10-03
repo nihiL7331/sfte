@@ -3414,25 +3414,27 @@ static inline void _sfte_term_free(sfte_term *term) {
 #if SFTE_MULTIPLEXER
 
 #if SFTE_CURSOR_TRAIL
-#define _SFTE_MUX_SWITCH_FOCUS(ctx_ptr, old_idx, new_idx) do { \
-    sfte_term *_old = &(ctx_ptr)->mux.terms[old_idx]; \
-    sfte_term *_new = &(ctx_ptr)->mux.terms[new_idx]; \
-    _new->cursor.trail = _old->cursor.trail; \
-    _new->cursor.trail.is_trailing = 1; \
-    _new->cursor.trail.last_move_ms = SFTE_TIME_MS(); \
-    for (int _j = 0; _j < _new->viewport.cols * _new->viewport.rows; ++_j) { \
-        _new->cells[_j].dirty = 1; \
-    } \
-    (ctx_ptr)->mux.active_idx = (new_idx); \
-} while(0)
+#define _SFTE_MUX_SWITCH_FOCUS(ctx_ptr, old_idx, new_idx)                                          \
+    do {                                                                                           \
+        sfte_term *_old = &(ctx_ptr)->mux.terms[old_idx];                                          \
+        sfte_term *_new = &(ctx_ptr)->mux.terms[new_idx];                                          \
+        _new->cursor.trail = _old->cursor.trail;                                                   \
+        _new->cursor.trail.is_trailing = 1;                                                        \
+        _new->cursor.trail.last_move_ms = SFTE_TIME_MS();                                          \
+        for (int _j = 0; _j < _new->viewport.cols * _new->viewport.rows; ++_j) {                   \
+            _new->cells[_j].dirty = 1;                                                             \
+        }                                                                                          \
+        (ctx_ptr)->mux.active_idx = (new_idx);                                                     \
+    } while (0)
 #else
-#define _SFTE_MUX_SWITCH_FOCUS(ctx_ptr, old_idx, new_idx) do { \
-    sfte_term *_new = &(ctx_ptr)->mux.terms[new_idx]; \
-    for (int _j = 0; _j < _new->viewport.cols * _new->viewport.rows; ++_j) { \
-        _new->cells[_j].dirty = 1; \
-    } \
-    (ctx_ptr)->mux.active_idx = (new_idx); \
-} while(0)
+#define _SFTE_MUX_SWITCH_FOCUS(ctx_ptr, old_idx, new_idx)                                          \
+    do {                                                                                           \
+        sfte_term *_new = &(ctx_ptr)->mux.terms[new_idx];                                          \
+        for (int _j = 0; _j < _new->viewport.cols * _new->viewport.rows; ++_j) {                   \
+            _new->cells[_j].dirty = 1;                                                             \
+        }                                                                                          \
+        (ctx_ptr)->mux.active_idx = (new_idx);                                                     \
+    } while (0)
 #endif
 
 /*
@@ -9101,8 +9103,8 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
         for (int32_t x = min_x; x < max_x; ++x) {
             float up_x = (float)(x - SFTE_WINDOW_PAD_X) + 0.5f;
 
-            if (skip_cursor && up_x >= target_x && up_x < target_x + trail_w && up_y >= target_y + y_off &&
-                up_y < target_y + y_off + trail_h)
+            if (skip_cursor && up_x >= target_x && up_x < target_x + trail_w &&
+                up_y >= target_y + y_off && up_y < target_y + y_off + trail_h)
                 continue;
 
             float dx_from_cx0 = up_x - cx0;
