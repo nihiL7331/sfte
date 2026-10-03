@@ -1381,31 +1381,37 @@ static inline uint8_t _sfte_search_toggle_shortcut(sfte_ctx *ctx, const sfte_arg
 static inline uint8_t _sfte_search_prev_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
 static inline uint8_t _sfte_search_next_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
 static inline uint8_t _sfte_search_clear_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
+#ifndef _SFTE_SEARCH_BINDS
 #define _SFTE_SEARCH_BINDS                                                                         \
     {SFTE_MOD_CTRL | SFTE_MOD_SHIFT, XKB_KEY_question, _sfte_search_toggle_shortcut, {.v = NULL}}, \
         {SFTE_MOD_NONE, XKB_KEY_Up, _sfte_search_next_shortcut, {.v = NULL}},                      \
         {SFTE_MOD_NONE, XKB_KEY_Down, _sfte_search_prev_shortcut, {.v = NULL}},                    \
         {SFTE_MOD_NONE, XKB_KEY_Escape, _sfte_search_clear_shortcut, {.i = 1}},                    \
         {SFTE_MOD_NONE, XKB_KEY_BackSpace, _sfte_search_clear_shortcut, {.i = 0}},
-#else  // !SFTE_SEARCH
+#endif  // !_SFTE_SEARCH_BINDS
+#else   // !SFTE_SEARCH
 #define _SFTE_SEARCH_BINDS
 #endif  // !SFTE_SEARCH
 
 #if SFTE_FONT_ZOOM && SFTE_WAYLAND
+#ifndef _SFTE_WAYLAND_ZOOM_BINDS
 #define _SFTE_WAYLAND_ZOOM_BINDS                                                                   \
     {SFTE_MOD_CTRL, XKB_KEY_equal, _sfte_wayland_font_resize, {.f = 2.0f}},                        \
         {SFTE_MOD_CTRL, XKB_KEY_plus, _sfte_wayland_font_resize, {.f = 2.0f}},                     \
         {SFTE_MOD_CTRL, XKB_KEY_minus, _sfte_wayland_font_resize, {.f = -2.0f}},                   \
         {SFTE_MOD_CTRL, XKB_KEY_0, _sfte_wayland_font_reset, {.v = NULL}},
-#else  // !SFTE_FONT_ZOOM || !SFTE_WAYLAND
+#endif  // !_SFTE_WAYLAND_ZOOM_BINDS
+#else   // !SFTE_FONT_ZOOM || !SFTE_WAYLAND
 #define _SFTE_WAYLAND_ZOOM_BINDS
 #endif  // !SFTE_FONT_ZOOM || !SFTE_WAYLAND
 
 #if SFTE_TERM_SCROLLBACK_CAP && SFTE_WAYLAND
+#ifndef _SFTE_WAYLAND_SCROLL_BINDS
 #define _SFTE_WAYLAND_SCROLL_BINDS                                                                 \
     {SFTE_MOD_SHIFT, XKB_KEY_Page_Up, _sfte_wayland_view_scroll, {.i = 10}},                       \
         {SFTE_MOD_SHIFT, XKB_KEY_Page_Down, _sfte_wayland_view_scroll, {.i = -10}},
-#else  // !SFTE_TERM_SCROLLBACK_CAP || !SFTE_WAYLAND
+#endif  // !_SFTE_WAYLAND_SCROLL_BINDS
+#else   // !SFTE_TERM_SCROLLBACK_CAP || !SFTE_WAYLAND
 #define _SFTE_WAYLAND_SCROLL_BINDS
 #endif  // !SFTE_TERM_SCROLLBACK_CAP || !SFTE_WAYLAND
 
