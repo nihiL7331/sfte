@@ -1,6 +1,6 @@
 /*
     sfte -- single-file terminal emulator
-    v1.1.3
+    v1.2.3
 
     Project URL: https://github.com/nihiL7331/sfte
 
@@ -1221,6 +1221,23 @@ _SFTE_ENSURE_RANGE(SFTE_SEARCH_ROW_BUF_CAP, 128, 65536);
 #define SFTE_MULTIPLEXER 1
 #endif  // SFTE_MULTIPLEXER
 _SFTE_ENSURE_RANGE(SFTE_MULTIPLEXER, 0, 1);
+
+/*
+
+*/
+#ifndef SFTE_MULTIPLEXER_PREVIEW
+#define SFTE_MULTIPLEXER_PREVIEW 1
+#endif  // SFTE_MULTIPLEXER_PREVIEW
+_SFTE_ENSURE_RANGE(SFTE_MULTIPLEXER_PREVIEW, 0, 1);
+
+/*
+
+*/
+#ifndef SFTE_MULTIPLEXER_RESURRECT
+#define SFTE_MULTIPLEXER_RESURRECT 1
+#endif  // SFTE_MULTIPLEXER_RESURRECT
+_SFTE_ENSURE_RANGE(SFTE_MULTIPLEXER_RESURRECT, 0, 1);
+
 /*
     The maximum number concurrent windows the multiplexer can hold.
 
@@ -1376,6 +1393,32 @@ static inline uint8_t _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg
 static inline uint8_t _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_WAYLAND
 
+#if SFTE_MULTIPLEXER
+static inline uint8_t _sfte_mux_prefix_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
+static inline uint8_t _sfte_mux_spawn_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
+static inline uint8_t _sfte_mux_jump_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
+static inline uint8_t _sfte_mux_goto_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
+#ifndef SFTE_MULTIPLEXER_BINDS
+#define _SFTE_MULTIPLEXER_BINDS                                                                    \
+    {SFTE_MOD_CTRL, XKB_KEY_a, _sfte_mux_prefix_shortcut, {.v = NULL}},                            \
+        {SFTE_MOD_NONE, XKB_KEY_c, _sfte_mux_spawn_shortcut, {.v = NULL}},                         \
+        {SFTE_MOD_NONE, XKB_KEY_n, _sfte_mux_jump_shortcut, {.i = 1}},                             \
+        {SFTE_MOD_NONE, XKB_KEY_b, _sfte_mux_jump_shortcut, {.i = -1}},                            \
+        {SFTE_MOD_NONE, XKB_KEY_0, _sfte_mux_goto_shortcut, {.i = 9}},                             \
+        {SFTE_MOD_NONE, XKB_KEY_1, _sfte_mux_goto_shortcut, {.i = 0}},                             \
+        {SFTE_MOD_NONE, XKB_KEY_2, _sfte_mux_goto_shortcut, {.i = 1}},                             \
+        {SFTE_MOD_NONE, XKB_KEY_3, _sfte_mux_goto_shortcut, {.i = 2}},                             \
+        {SFTE_MOD_NONE, XKB_KEY_4, _sfte_mux_goto_shortcut, {.i = 3}},                             \
+        {SFTE_MOD_NONE, XKB_KEY_5, _sfte_mux_goto_shortcut, {.i = 4}},                             \
+        {SFTE_MOD_NONE, XKB_KEY_6, _sfte_mux_goto_shortcut, {.i = 5}},                             \
+        {SFTE_MOD_NONE, XKB_KEY_7, _sfte_mux_goto_shortcut, {.i = 6}},                             \
+        {SFTE_MOD_NONE, XKB_KEY_8, _sfte_mux_goto_shortcut, {.i = 7}},                             \
+        {SFTE_MOD_NONE, XKB_KEY_9, _sfte_mux_goto_shortcut, {.i = 8}},
+#endif  // !SFTE_MULTIPLEXER_BINDS
+#else   // !SFTE_MULTIPLEXER
+#define _SFTE_MULTIPLEXER_BINDS
+#endif  // !SFTE_MULTIPLEXER
+
 #if SFTE_SEARCH
 static inline uint8_t _sfte_search_toggle_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
 static inline uint8_t _sfte_search_prev_shortcut(sfte_ctx *ctx, const sfte_arg *arg);
@@ -1426,13 +1469,9 @@ static inline uint8_t _sfte_search_clear_shortcut(sfte_ctx *ctx, const sfte_arg 
 #define _SFTE_WAYLAND_PASTE_BIND
 #endif  // !SFTE_CLIPBOARD || !SFTE_WAYLAND
 
-#if !SFTE_CLIPBOARD || !SFTE_WAYLAND || !SFTE_INPUT_SELECTION
-#define _SFTE_WAYLAND_COPY_BIND
-#endif  // !SFTE_CLIPBOARD || !SFTE_WAYLAND || !SFTE_INPUT_SELECTION
-
 #define SFTE_BASE_SHORTCUTS                                                                        \
-    _SFTE_SEARCH_BINDS _SFTE_WAYLAND_ZOOM_BINDS _SFTE_WAYLAND_SCROLL_BINDS _SFTE_WAYLAND_COPY_BIND \
-        _SFTE_WAYLAND_PASTE_BIND
+    _SFTE_MULTIPLEXER_BINDS _SFTE_SEARCH_BINDS _SFTE_WAYLAND_ZOOM_BINDS _SFTE_WAYLAND_SCROLL_BINDS \
+        _SFTE_WAYLAND_COPY_BIND _SFTE_WAYLAND_PASTE_BIND
 
 #ifndef SFTE_SHORTCUTS
 #define SFTE_SHORTCUTS {SFTE_BASE_SHORTCUTS}
@@ -1586,12 +1625,13 @@ void sfte_font_load_file(sfte_ctx *ctx, sfte_font_style style, const char *path)
     Spawns a shell and populates `out_fd` with the master PTY descriptor.
     Returns the shell PID.
 */
-pid_t sfte_posix_pty_spawn(sfte_ctx *ctx, int32_t *out_fd, uint16_t px_w, uint16_t px_h);
+pid_t sfte_posix_pty_spawn(sfte_ctx *ctx, int32_t *out_fd, uint16_t cols, uint16_t rows,
+                           uint16_t px_w, uint16_t px_h);
 
 /*
     Sends the TIOCSWINSZ ioctl to keep the OS shell in sync with the engine grid.
 */
-void sfte_posix_pty_resize(sfte_ctx *ctx, int32_t pty_fd, uint16_t px_w, uint16_t px_h);
+void sfte_posix_pty_resize(const sfte_term *term, int32_t pty_fd, uint16_t px_w, uint16_t px_h);
 #endif  // SFTE_NO_POSIX
 
 /*
@@ -1626,6 +1666,24 @@ sfte_term *sfte_term_get_active(sfte_ctx *ctx);
     If SFTE_MULTIPLEXER is not defined, returns 0.
 */
 int8_t sfte_term_get_idx(sfte_ctx *ctx, sfte_term *term);
+
+/*
+    Allocates a new terminal window struct and returns its handle.
+    If SFTE_MULTIPLEXER is defined, returns NULL if the multiplexer is full.
+    If it is not defined, returns NULL if already allocated.
+*/
+sfte_term *sfte_term_spawn(sfte_ctx *ctx);
+
+/*
+    Closes a terminal window.
+    If SFTE_MULTIPLEXER is defined, cleans up the provided `term`
+    and shifts focus to another available window.
+    If SFTE_MULTIPLEXER is NOT defined, just cleans up the provided `term`.
+
+    Returns 0 if no panes remain active.
+*/
+uint8_t sfte_term_close(sfte_ctx *ctx, sfte_term *term);
+
 // =================================================================================================
 // >>rendering & parsing
 // =================================================================================================
@@ -1633,12 +1691,13 @@ int8_t sfte_term_get_idx(sfte_ctx *ctx, sfte_term *term);
 /*
     Ask engine how many pixels it needs to display a specified grid.
 */
-void sfte_get_ideal_size(sfte_ctx *ctx, int16_t cols, int16_t rows, int32_t *out_w, int32_t *out_h);
+void sfte_get_ideal_size(const sfte_term *term, int16_t cols, int16_t rows, int32_t *out_w,
+                         int32_t *out_h);
 
 /*
     Feed bytes from the shell/PTY to the terminal state machine.
 */
-void sfte_parse(sfte_ctx *ctx, const uint8_t *data, size_t len);
+void sfte_parse(sfte_term *term, const uint8_t *data, size_t len);
 
 /*
     Render the grid to the provided `px_buf` buffer
@@ -1670,45 +1729,45 @@ void sfte_zoom(sfte_ctx *ctx, float delta);
     Feed raw UTF-8 text into the terminal.
     Used for both keyboard typing and streaming clipboard chunks.
 */
-void sfte_input_text(sfte_ctx *ctx, const char *text, size_t len);
+void sfte_input_text(sfte_term *term, const char *text, size_t len);
 
 /*
     Signals the start of a clipboard paste operation.
     Generates \033[200~ (bracketed paste) if enabled by the shell.
 */
-void sfte_input_paste_begin(sfte_ctx *ctx);
+void sfte_input_paste_begin(const sfte_term *term);
 
 /*
     Signals the end of a clipboard paste operation.
     Generates \033[201~ (bracketed paste) if enabled by the shell.
 */
-void sfte_input_paste_end(sfte_ctx *ctx);
+void sfte_input_paste_end(const sfte_term *term);
 
 /*
     Feed a physical control key into the terminal.
     Automatically generates VT100/ANSI escape codes (arrows, F-keys).
     Routes through `sfte_write_cb` internally.
 */
-void sfte_input_key(sfte_ctx *ctx, sfte_key key, uint32_t mod_mask);
+void sfte_input_key(sfte_term *term, sfte_key key, uint32_t mod_mask);
 
 #if SFTE_INPUT_MOUSE
 /*
     Feed raw OS mouse events to the terminal engine for hover events and drag selections.
 */
-void sfte_mouse_move(sfte_ctx *ctx, int32_t px_x, int32_t px_y);
+void sfte_mouse_move(sfte_term *term, int32_t px_x, int32_t px_y);
 
 /*
     Feed mouse clicks to the engine.
     `pressed` is a boolean: 1 for button down, 0 for button release.
 */
-void sfte_mouse_click(sfte_ctx *ctx, sfte_mouse_button btn, uint8_t pressed, int32_t px_x,
+void sfte_mouse_click(sfte_term *term, sfte_mouse_button btn, uint8_t pressed, int32_t px_x,
                       int32_t px_y);
 
 /*
     Feed scroll wheel events to the terminal engine.
     `dir` is the scroll direction: positive (>0) for up, negative (<0) for down.
 */
-void sfte_mouse_scroll(sfte_ctx *ctx, int8_t dir, int32_t px_x, int32_t px_y);
+void sfte_mouse_scroll(sfte_term *term, int8_t dir, int32_t px_x, int32_t px_y);
 #endif  // SFTE_INPUT_MOUSE
 
 #if SFTE_INPUT_HYPERLINKS
@@ -1716,7 +1775,7 @@ void sfte_mouse_scroll(sfte_ctx *ctx, int8_t dir, int32_t px_x, int32_t px_y);
     Returns the URL at the given cell coords.
     Returns NULL if no link is present.
 */
-const char *sfte_get_link_at(sfte_ctx *ctx, int16_t col, int16_t row);
+const char *sfte_get_link_at(sfte_term *term, int16_t col, int16_t row);
 #endif  // SFTE_INPUT_HYPERLINKS
 
 #if SFTE_INPUT_SELECTION
@@ -1725,14 +1784,14 @@ const char *sfte_get_link_at(sfte_ctx *ctx, int16_t col, int16_t row);
     If `out_buf` is NULL, performs a dry-run and returns the required byte size.
     Returns 0 if nothing is selected.
 */
-size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes);
+size_t sfte_get_selection(const sfte_term *term, char *out_buf, size_t max_bytes);
 #endif  // SFTE_INPUT_SELECTION
 
 #if SFTE_TERM_SCROLLBACK_CAP
 /*
     Shift viewport up or down in the scrollback buffer.
 */
-void sfte_view_scroll(sfte_ctx *ctx, int32_t delta);
+void sfte_view_scroll(sfte_term *term, int32_t delta);
 #endif  // SFTE_TERM_SCROLLBACK_CAP
 
 #ifdef SFTE_XKB_COMMON
@@ -1740,7 +1799,7 @@ void sfte_view_scroll(sfte_ctx *ctx, int32_t delta);
     Input entrypoint for XKB (Linux) implementations.
     Handles modifiers, control keys, kitty keyboard support (if enabled).
 */
-void sfte_xkb_process_key(sfte_ctx *ctx, struct xkb_state *state, uint32_t keycode);
+void sfte_xkb_process_key(sfte_term *term, struct xkb_state *state, uint32_t keycode);
 #endif  // SFTE_XKB_COMMON
 
 #if SFTE_TERM_FOCUS
@@ -2422,6 +2481,7 @@ typedef struct sfte_mux {
     uint8_t active_idx;
     uint8_t is_prefix_active;
     uint8_t is_preview_active;
+    uint8_t pending_spawn;
 } sfte_mux;
 #endif  // SFTE_MULTIPLEXER
 
@@ -2641,10 +2701,17 @@ static inline void _sfte_log(sfte_log_func log_func, _sfte_log_item log_item,
 // -------------------------------------------------------------------------------------------------
 // >term
 // -------------------------------------------------------------------------------------------------
-static inline sfte_term *_sfte_term_get_active(sfte_ctx *ctx);
+static inline int8_t _sfte_term_get_new_idx(sfte_ctx *ctx);
 static inline void _sfte_term_init(sfte_term *term, const sfte_callbacks *cb, int16_t cols,
                                    int16_t rows);
 static inline void _sfte_term_free(sfte_term *term);
+
+// -------------------------------------------------------------------------------------------------
+// >mux
+// -------------------------------------------------------------------------------------------------
+#if SFTE_MULTIPLEXER
+static inline void _sfte_mux_render_preview(sfte_ctx *ctx);
+#endif  // SFTE_MULTIPLEXER
 
 // -------------------------------------------------------------------------------------------------
 // >b64
@@ -2685,8 +2752,8 @@ static inline void _sfte_search_map_to_coords(const sfte_term *term, int32_t sta
 static inline uint8_t _sfte_search_is_highlighted(const sfte_search_state *search,
                                                   const sfte_viewport_state *vp, int16_t col,
                                                   int32_t logical_row);
-static inline void _sfte_search_jump(sfte_ctx *ctx, int8_t delta);
-static inline void _sfte_search_exec(sfte_ctx *ctx, const char *query);
+static inline void _sfte_search_jump(sfte_term *term, int8_t delta);
+static inline void _sfte_search_exec(sfte_term *term, const char *query);
 static inline void _sfte_search_clear(sfte_term *term);
 #endif  // SFTE_SEARCH
 
@@ -3177,13 +3244,17 @@ static inline void _sfte_log(sfte_log_func log_func, _sfte_log_item log_item,
 // =================================================================================================
 
 /*
-    Returns the currently active (open) terminals context struct.
+    Returns an unallocated terminal context struct index.
+    This function is useful for PTY spawning for multiplexing with custom backend implementations.
+    Returns -1 if none is found.
 */
-static inline sfte_term *_sfte_term_get_active(sfte_ctx *ctx) {
+static inline int8_t _sfte_term_get_new_idx(sfte_ctx *ctx) {
 #if SFTE_MULTIPLEXER
-    return &ctx->mux.terms[ctx->mux.active_idx];
+    for (uint8_t i = 0; i < SFTE_MULTIPLEXER_MAX_WINDOWS; ++i)
+        if (!ctx->mux.terms[i].is_allocated) return i;
+    return -1;
 #else   // !SFTE_MULTIPLEXER
-    return &ctx->term;
+    return &ctx->term.is_allocated ? -1 : 0;
 #endif  // !SFTE_MULTIPLEXER
 }
 
@@ -3212,6 +3283,8 @@ static inline void _sfte_term_init(sfte_term *term, const sfte_callbacks *cb, in
     void *stack_back_buf = SFTE_MALLOC(SFTE_MEM_STACK_SIZE);
     _sfte_mem_stack_init(stack, stack_back_buf, SFTE_MEM_STACK_SIZE);
 
+    _sfte_grid_resize_tabs(term, 0, cols);
+
     term->is_allocated = 1;
     term->viewport.cols = cols;
     term->viewport.rows = rows;
@@ -3221,15 +3294,13 @@ static inline void _sfte_term_init(sfte_term *term, const sfte_callbacks *cb, in
     term->cb = cb;
 
 #if SFTE_FONT_LIGATURES
-    render->shaper_ids = (uint16_t *)SFTE_CALLOC(SFTE_TERM_INIT_COLS, sizeof(uint16_t));
-    render->row_hashes = (uint64_t *)SFTE_CALLOC(SFTE_TERM_INIT_ROWS, sizeof(uint64_t));
-    render->row_shaper_ids = (uint16_t *)SFTE_CALLOC(SFTE_TERM_INIT_COLS * SFTE_TERM_INIT_ROWS,
-                                                     sizeof(uint16_t));
+    render->shaper_ids = (uint16_t *)SFTE_CALLOC(cols, sizeof(uint16_t));
+    render->row_hashes = (uint64_t *)SFTE_CALLOC(rows, sizeof(uint64_t));
+    render->row_shaper_ids = (uint16_t *)SFTE_CALLOC(cols * rows, sizeof(uint16_t));
 #endif  // SFTE_FONT_LIGATURES
-    render->ids = (uint16_t *)SFTE_CALLOC(SFTE_TERM_INIT_COLS, sizeof(uint16_t));
-    render->font_indices = (uint8_t *)SFTE_CALLOC(SFTE_TERM_INIT_COLS, sizeof(uint8_t));
-    render->target_caches = (sfte_font_cache **)SFTE_CALLOC(SFTE_TERM_INIT_COLS,
-                                                            sizeof(sfte_font_cache *));
+    render->ids = (uint16_t *)SFTE_CALLOC(cols, sizeof(uint16_t));
+    render->font_indices = (uint8_t *)SFTE_CALLOC(cols, sizeof(uint8_t));
+    render->target_caches = (sfte_font_cache **)SFTE_CALLOC(cols, sizeof(sfte_font_cache *));
 
 #if SFTE_IMG_SIXEL
     memcpy(sixel->palette, _sfte_palette_256, 256 * sizeof(uint32_t));
@@ -3341,6 +3412,112 @@ static inline void _sfte_term_free(sfte_term *term) {
 // =================================================================================================
 #if SFTE_MULTIPLEXER
 
+#if SFTE_CURSOR_TRAIL
+#define _SFTE_MUX_SWITCH_FOCUS(ctx_ptr, old_idx, new_idx) do { \
+    sfte_term *_old = &(ctx_ptr)->mux.terms[old_idx]; \
+    sfte_term *_new = &(ctx_ptr)->mux.terms[new_idx]; \
+    _new->cursor.trail = _old->cursor.trail; \
+    _new->cursor.trail.is_trailing = 1; \
+    _new->cursor.trail.last_move_ms = SFTE_TIME_MS(); \
+    for (int _j = 0; _j < _new->viewport.cols * _new->viewport.rows; ++_j) { \
+        _new->cells[_j].dirty = 1; \
+    } \
+    (ctx_ptr)->mux.active_idx = (new_idx); \
+} while(0)
+#else
+#define _SFTE_MUX_SWITCH_FOCUS(ctx_ptr, old_idx, new_idx) do { \
+    sfte_term *_new = &(ctx_ptr)->mux.terms[new_idx]; \
+    for (int _j = 0; _j < _new->viewport.cols * _new->viewport.rows; ++_j) { \
+        _new->cells[_j].dirty = 1; \
+    } \
+    (ctx_ptr)->mux.active_idx = (new_idx); \
+} while(0)
+#endif
+
+/*
+    Toggled when the prefix keys are pressed.
+    Next key will be consumed to determine the action.
+*/
+static inline uint8_t _sfte_mux_prefix_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
+    (void)arg;
+    sfte_mux *mux = &ctx->mux;
+
+    mux->is_prefix_active = 1;
+
+    return 1;
+}
+
+/*
+    Spawns a new terminal window.
+    For it to be supported on custom backends,
+    logic checking whether spawn is pending via `ctx->mux.pending_spawn` needs to be implemented.
+    See `_sfte_wayland_loop` for an example.
+*/
+static inline uint8_t _sfte_mux_spawn_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
+    (void)arg;
+    sfte_mux *mux = &ctx->mux;
+
+    if (!mux->is_prefix_active) return 0;
+
+    mux->is_prefix_active = 0;
+    mux->pending_spawn = 1;
+
+    return 1;
+}
+
+/*
+    Jumps to the window offset from active terminal window by `arg->i`.
+    Wraps the index value in range.
+*/
+static inline uint8_t _sfte_mux_jump_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
+    sfte_mux *mux = &ctx->mux;
+
+    if (!mux->is_prefix_active) return 0;
+
+    mux->is_prefix_active = 0;
+    int step = arg->i;
+    if (step == 0) return 1;
+
+    int target = mux->active_idx;
+
+    for (uint8_t i = 0; i < SFTE_MULTIPLEXER_MAX_WINDOWS; ++i) {
+        target += step + SFTE_MULTIPLEXER_MAX_WINDOWS;
+        target %= SFTE_MULTIPLEXER_MAX_WINDOWS;
+
+        if (mux->terms[target].is_allocated) {
+            _SFTE_MUX_SWITCH_FOCUS(ctx, mux->active_idx, target);
+            break;
+        }
+    }
+
+    return 1;
+}
+
+/*
+    Jumps to the terminal window of index `arg->i`.
+*/
+static inline uint8_t _sfte_mux_goto_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
+    sfte_mux *mux = &ctx->mux;
+
+    if (!mux->is_prefix_active) return 0;
+
+    mux->is_prefix_active = 0;
+    int target_idx = arg->i;
+
+    fprintf(stderr, "setting to: %d", target_idx);
+
+    if (target_idx >= 0 && target_idx < SFTE_MULTIPLEXER_MAX_WINDOWS &&
+        mux->terms[target_idx].is_allocated) {
+        _SFTE_MUX_SWITCH_FOCUS(ctx, mux->active_idx, target_idx);
+    }
+
+    return 1;
+}
+
+/*
+
+*/
+static inline void _sfte_mux_render_preview(sfte_ctx *ctx) {}
 #endif  // SFTE_MULTIPLEXER
 // =================================================================================================
 // >>b64
@@ -3626,7 +3803,7 @@ static inline void _sfte_search_posix_re_free(sfte_stack *stack, void *re_ctx) {
 */
 static inline uint8_t _sfte_search_toggle_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     sfte_search_state *search = &term->search;
     const sfte_modes_state *modes = &term->modes;
     const sfte_viewport_state *vp = &term->viewport;
@@ -3661,10 +3838,10 @@ static inline uint8_t _sfte_search_toggle_shortcut(sfte_ctx *ctx, const sfte_arg
 */
 static inline uint8_t _sfte_search_prev_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     sfte_search_state *search = &term->search;
 
-    _sfte_search_jump(ctx, -1);
+    _sfte_search_jump(term, -1);
     return search->is_active;
 }
 
@@ -3673,10 +3850,10 @@ static inline uint8_t _sfte_search_prev_shortcut(sfte_ctx *ctx, const sfte_arg *
 */
 static inline uint8_t _sfte_search_next_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     sfte_search_state *search = &term->search;
 
-    _sfte_search_jump(ctx, 1);
+    _sfte_search_jump(term, 1);
     return search->is_active;
 }
 
@@ -3686,7 +3863,7 @@ static inline uint8_t _sfte_search_next_shortcut(sfte_ctx *ctx, const sfte_arg *
     If `arg` is 1, exits if query is empty.
 */
 static inline uint8_t _sfte_search_clear_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     sfte_search_state *search = &term->search;
 
     uint8_t ignore_query = arg->i;
@@ -3861,8 +4038,7 @@ static inline uint8_t _sfte_search_is_highlighted(const sfte_search_state *searc
 /*
     Jumps to the currently active search match.
 */
-static inline void _sfte_search_jump(sfte_ctx *ctx, int8_t delta) {
-    sfte_term *term = _sfte_term_get_active(ctx);
+static inline void _sfte_search_jump(sfte_term *term, int8_t delta) {
     sfte_search_state *search = &term->search;
     const sfte_viewport_state *vp = &term->viewport;
 
@@ -3878,7 +4054,7 @@ static inline void _sfte_search_jump(sfte_ctx *ctx, int8_t delta) {
     if (match_logical_r < top_logical_r || match_logical_r > bot_logical_r) {
         int32_t target_off = -match_logical_r + (vp->rows / 2);
         if (target_off < 0) target_off = 0;
-        sfte_view_scroll(ctx, target_off + top_logical_r);
+        sfte_view_scroll(term, target_off + top_logical_r);
     }
 
     // If `delta` is 0, sfte_view_scroll will NOT dirty the screen,
@@ -3896,8 +4072,7 @@ static inline void _sfte_search_jump(sfte_ctx *ctx, int8_t delta) {
 
     Populates the match list from the bottom (live screen), later going to scrollback.
 */
-static inline void _sfte_search_exec(sfte_ctx *ctx, const char *query) {
-    sfte_term *term = _sfte_term_get_active(ctx);
+static inline void _sfte_search_exec(sfte_term *term, const char *query) {
     const sfte_viewport_state *vp = &term->viewport;
     sfte_stack *stack = &term->stack;
     sfte_search_state *search = &term->search;
@@ -4022,7 +4197,7 @@ static inline void _sfte_search_exec(sfte_ctx *ctx, const char *query) {
         }
 
         search->active_match_idx = closest_idx;
-        _sfte_search_jump(ctx, 0);
+        _sfte_search_jump(term, 0);
     } else
         search->active_match_idx = 0;
 }
@@ -4810,7 +4985,7 @@ static inline sfte_img *_sfte_img_find(const sfte_image_state *images, uint32_t 
 */
 static inline void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf) {
     const sfte_window_state *win = &ctx->window;
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
 
     int32_t w = win->width;
@@ -8480,9 +8655,8 @@ static inline void _sfte_font_resolve_rune(sfte_font_cache *cache, sfte_rune run
 */
 static inline void _sfte_font_reset_cache(sfte_ctx *ctx) {
     sfte_font_state *font = &ctx->font;
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     sfte_stack *stack = &term->stack;
-    sfte_viewport_state *vp = &term->viewport;
 
     _sfte_font_clear_cache(&font->regular);
     _sfte_font_update_scales(&font->regular, font->cur_size);
@@ -8508,7 +8682,8 @@ static inline void _sfte_font_reset_cache(sfte_ctx *ctx) {
     font->descent = (int)(descent_u * primary_scale -
                           0.5f /* - instead of + because descent is natively negative */);
     font->line_gap = (int)(line_gap_u * primary_scale + 0.5f);
-    vp->cell_height = font->ascent - font->descent + font->line_gap;
+
+    int16_t cell_h = font->ascent - font->descent + font->line_gap;
 
     // NOTE:
     // Terminal column width is locked to advance of 'M'.
@@ -8516,7 +8691,20 @@ static inline void _sfte_font_reset_cache(sfte_ctx *ctx) {
     uint16_t m_glyph_id = 0;
     _sfte_font_resolve_rune(&font->regular, 'M', &m_font_idx, &m_glyph_id);
     sfte_glyph *m = _sfte_font_get_glyph(stack, &font->regular, m_glyph_id, m_font_idx);
-    vp->cell_width = m->xadvance;
+    int16_t cell_w = m->xadvance;
+
+#if SFTE_MULTIPLEXER
+    for (uint8_t i = 0; i < SFTE_MULTIPLEXER_MAX_WINDOWS; ++i)
+        if (ctx->mux.terms[i].is_allocated) {
+            sfte_viewport_state *vp = &ctx->mux.terms[i].viewport;
+            vp->cell_width = cell_w;
+            vp->cell_height = cell_h;
+        }
+#else   // !SFTE_MULTIPLEXER
+    sfte_viewport_state *vp = &ctx->term.viewport;
+    vp->cell_width = cell_w;
+    vp->cell_height = cell_h;
+#endif  // !SFTE_MULTIPLEXER
 }
 // =================================================================================================
 // >>render
@@ -8559,7 +8747,7 @@ static inline void _sfte_render_damage_add(sfte_damage_rect *dmg, int32_t x, int
    rows and columns to guarantee seamless redrawing.
 */
 static inline void _sfte_render_propagate_damage(sfte_ctx *ctx, int16_t vis_col, int16_t vis_row) {
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     sfte_window_state *win = &ctx->window;
     const sfte_viewport_state *vp = &term->viewport;
 
@@ -8625,7 +8813,7 @@ static inline void _sfte_render_propagate_damage(sfte_ctx *ctx, int16_t vis_col,
     Sorts active image placements by z index using a fast insertion sort.
 */
 static inline void _sfte_render_sort_images(sfte_ctx *ctx) {
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     sfte_image_state *images = &term->images;
 
     for (uint32_t i = 1; i < images->placements_len; ++i) {
@@ -8647,7 +8835,7 @@ static inline void _sfte_render_sort_images(sfte_ctx *ctx) {
 static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, uint8_t is_bg_pass,
                                        int32_t base_y_off, uint8_t pad_was_dirty) {
     const sfte_window_state *win = &ctx->window;
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     const sfte_modes_state *modes = &term->modes;
     const sfte_viewport_state *vp = &term->viewport;
     sfte_image_state *images = &term->images;
@@ -8708,7 +8896,7 @@ static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, uint8_t is_b
 static inline void _sfte_render_search_overlay(sfte_ctx *ctx, void *px_buf,
                                                sfte_damage_rect *out_dmg) {
     const sfte_window_state *win = &ctx->window;
-    const sfte_term *term = _sfte_term_get_active(ctx);
+    const sfte_term *term = sfte_term_get_active(ctx);
     const sfte_search_state *search = &term->search;
     const sfte_viewport_state *vp = &term->viewport;
 
@@ -8806,7 +8994,7 @@ static inline void _sfte_render_search_overlay(sfte_ctx *ctx, void *px_buf,
     This is separated from _sfte_render_trail to avoid not updating on early returns.
 */
 static inline void _sfte_render_update_trail(sfte_ctx *ctx) {
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     sfte_trail_state *trail = &term->cursor.trail;
     const sfte_viewport_state *vp = &term->viewport;
 
@@ -8837,7 +9025,7 @@ static inline void _sfte_render_update_trail(sfte_ctx *ctx) {
 */
 static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_rect *out_dmg) {
     const sfte_window_state *win = &ctx->window;
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
     sfte_cursor_state *cursor = &term->cursor;
     sfte_trail_state *trail = &cursor->trail;
@@ -8899,6 +9087,12 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
     uint32_t trail_color = SFTE_CURSOR_COLOR;
 #endif  // !SFTE_CURSOR_DYNAMIC
 
+#if SFTE_CURSOR_BLINK
+    uint8_t skip_cursor = cursor->blink_visible;
+#else
+    uint8_t skip_cursor = 1;
+#endif
+
     for (int32_t y = min_y; y < max_y; ++y) {
         float up_y = (float)(y - SFTE_WINDOW_PAD_Y) + 0.5f;
         float dy_from_cy0 = up_y - cy0;
@@ -8906,7 +9100,7 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
         for (int32_t x = min_x; x < max_x; ++x) {
             float up_x = (float)(x - SFTE_WINDOW_PAD_X) + 0.5f;
 
-            if (up_x >= target_x && up_x < target_x + trail_w && up_y >= target_y + y_off &&
+            if (skip_cursor && up_x >= target_x && up_x < target_x + trail_w && up_y >= target_y + y_off &&
                 up_y < target_y + y_off + trail_h)
                 continue;
 
@@ -8939,7 +9133,7 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, sfte_damage_r
 */
 static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_y, int32_t *in_y) {
     const sfte_window_state *win = &ctx->window;
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
 
     if (!term->is_animating) return 0;
 
@@ -8972,7 +9166,7 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
                                                   sfte_pass_info *passes,
                                                   sfte_damage_rect *out_dmg) {
     sfte_window_state *win = &ctx->window;
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     const sfte_cursor_state *cursor = &term->cursor;
     sfte_viewport_state *vp = &term->viewport;
 
@@ -9084,7 +9278,7 @@ static inline uint32_t _sfte_render_blend_argb(uint32_t dst_col, uint32_t src_co
 static inline void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
                                         int32_t y_off, uint32_t bg) {
     const sfte_window_state *win = &ctx->window;
-    const sfte_viewport_state *vp = &_sfte_term_get_active(ctx)->viewport;
+    const sfte_viewport_state *vp = &sfte_term_get_active(ctx)->viewport;
 
     int32_t cx = col * vp->cell_width + SFTE_WINDOW_PAD_X;
     int32_t cy = row * vp->cell_height + SFTE_WINDOW_PAD_Y;
@@ -9109,7 +9303,7 @@ static inline void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col
 
     const sfte_font_state *font = &ctx->font;
     const sfte_window_state *win = &ctx->window;
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     sfte_stack *stack = &term->stack;
     const sfte_viewport_state *vp = &term->viewport;
 
@@ -9156,7 +9350,7 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int3
                                                int32_t render_w, sfte_cell *vcell) {
     const sfte_font_state *font = &ctx->font;
     const sfte_window_state *win = &ctx->window;
-    const sfte_viewport_state *vp = &_sfte_term_get_active(ctx)->viewport;
+    const sfte_viewport_state *vp = &sfte_term_get_active(ctx)->viewport;
 
     uint32_t base_ul_col = _sfte_grid_get_ul(vcell);
     uint32_t underline_col = SFTE_COLOR_ALPHA_MASK | (base_ul_col & ~SFTE_COLOR_ALPHA_MASK);
@@ -9266,16 +9460,12 @@ static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col,
                                        int32_t y_off, sfte_damage_rect *out_dmg) {
     (void)out_dmg;
     const sfte_window_state *win = &ctx->window;
-    const sfte_term *term = _sfte_term_get_active(ctx);
+    const sfte_term *term = sfte_term_get_active(ctx);
 #if SFTE_SEARCH
     const sfte_search_state *search = &term->search;
 #endif  // SFTE_SEARCH
     const sfte_viewport_state *vp = &term->viewport;
     const sfte_cursor_state *cursor = &term->cursor;
-
-#if SFTE_CURSOR_BLINK
-    if (!cursor->blink_visible) return;
-#endif  // SFTE_CURSOR_BLINK
 
 #if SFTE_CURSOR_TRAIL
     _sfte_render_update_trail(ctx);
@@ -9289,6 +9479,10 @@ static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col,
 #endif  // SFTE_TERM_ANIMATE_SCREEN
         _sfte_render_trail(ctx, px_buf, out_dmg);
 #endif  // SFTE_CURSOR_TRAIL
+
+#if SFTE_CURSOR_BLINK
+    if (!cursor->blink_visible) return;
+#endif  // SFTE_CURSOR_BLINK
 
 #if SFTE_TERM_SCROLLBACK_CAP
     if (vp->sb_off > 0
@@ -9434,7 +9628,7 @@ static inline void _sfte_render_line(sfte_ctx *ctx, void *px_buf, int32_t x0, in
  */
 static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
                                             uint32_t col, uint32_t rune, int32_t y_off) {
-    const sfte_viewport_state *vp = &_sfte_term_get_active(ctx)->viewport;
+    const sfte_viewport_state *vp = &sfte_term_get_active(ctx)->viewport;
     const sfte_window_state *win = &ctx->window;
 
     int16_t cw = vp->cell_width;
@@ -9596,7 +9790,7 @@ static inline uint8_t _sfte_render_box_char(sfte_ctx *ctx, void *px_buf, int32_t
 */
 static inline void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t col,
                                                  int16_t row, int32_t y_off, sfte_cell *vcell) {
-    const sfte_viewport_state *vp = &_sfte_term_get_active(ctx)->viewport;
+    const sfte_viewport_state *vp = &sfte_term_get_active(ctx)->viewport;
 
     int32_t cx = col * vp->cell_width + SFTE_WINDOW_PAD_X;
     int32_t cy = row * vp->cell_height + SFTE_WINDOW_PAD_Y;
@@ -9615,7 +9809,7 @@ static inline void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, in
     Renders the whole grid, contrary to `_sfte_render_bg_cell`.
 */
 static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int32_t y_off) {
-    const sfte_term *term = _sfte_term_get_active(ctx);
+    const sfte_term *term = sfte_term_get_active(ctx);
 #if SFTE_SEARCH
     const sfte_search_state *search = &term->search;
 #endif  // SFTE_SEARCH
@@ -9740,7 +9934,7 @@ static inline void _sfte_render_extract_fg_row(sfte_ctx *ctx, int32_t logical_ro
                                                int16_t vis_col, int16_t vis_row) {
     (void)row, (void)vis_col, (void)vis_row;
     sfte_font_state *font = &ctx->font;
-    const sfte_term *term = _sfte_term_get_active(ctx);
+    const sfte_term *term = sfte_term_get_active(ctx);
     const sfte_render_buffers *render = &term->render;
     const sfte_viewport_state *vp = &term->viewport;
     const sfte_cursor_state *cursor = &term->cursor;
@@ -9780,7 +9974,7 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
                                        int32_t logical_row, int32_t y_off,
                                        sfte_damage_rect *out_dmg) {
     const sfte_window_state *win = &ctx->window;
-    const sfte_term *term = _sfte_term_get_active(ctx);
+    const sfte_term *term = sfte_term_get_active(ctx);
 #if SFTE_SEARCH
     const sfte_search_state *search = &term->search;
 #endif  // SFTE_SEARCH
@@ -9859,7 +10053,7 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
 */
 static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
                                         int16_t vis_row, int32_t y_off, sfte_damage_rect *out_dmg) {
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     const sfte_render_buffers *render = &term->render;
     const sfte_viewport_state *vp = &term->viewport;
 
@@ -9921,17 +10115,41 @@ static inline void _sfte_wayland_title_cb(void *user_data, const char *title) {
 }
 
 static inline void _sfte_wayland_pty_spawn(sfte_wayland_app *app) {
+    sfte_ctx *ctx = app->ctx;
+
+    sfte_term *new_term = sfte_term_spawn(ctx);
+    if (!new_term) return;  // Mux is full
+
+    int8_t idx = sfte_term_get_idx(ctx, new_term);
+
+#if SFTE_MULTIPLEXER
+    uint8_t prev_idx = ctx->mux.active_idx;
+    _SFTE_MUX_SWITCH_FOCUS(ctx, prev_idx, idx);
+#endif  // SFTE_MULTIPLEXER
+
     int32_t *fd;
     pid_t *pid;
     _sfte_wayland_get_pty(app, &fd, &pid);
-    *pid = sfte_posix_pty_spawn(app->ctx, fd, app->width, app->height);
-    SFTE_ASSERT(*pid != -1, "failed to forkpty");
+
+    const sfte_viewport_state *vp = &new_term->viewport;
+    *pid = sfte_posix_pty_spawn(ctx, fd, vp->cols, vp->rows, app->width, app->height);
+
+    if (*pid == -1) {
+        sfte_term_close(ctx, new_term);
+#if SFTE_MULTIPLEXER
+        ctx->mux.active_idx = prev_idx;
+#endif  // SFTE_MULTIPLEXER
+        return;
+    }
 }
 
 static inline void _sfte_wayland_pty_update(sfte_wayland_app *app) {
+    sfte_ctx *ctx = app->ctx;
+    sfte_term *term = sfte_term_get_active(ctx);
+
     int32_t *fd;
     _sfte_wayland_get_pty(app, &fd, NULL);
-    sfte_posix_pty_resize(app->ctx, *fd, app->width, app->height);
+    sfte_posix_pty_resize(term, *fd, app->width, app->height);
 }
 
 #if SFTE_FONT_ZOOM
@@ -9953,9 +10171,12 @@ static inline uint8_t _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *ar
 
 #if SFTE_TERM_SCROLLBACK_CAP
 static inline uint8_t _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg) {
-    sfte_view_scroll(ctx, arg->i);
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->cb.user_data;
+    sfte_term *term = sfte_term_get_active(ctx);
+
+    sfte_view_scroll(term, arg->i);
     app->needs_render = 1;
+
     return 1;
 }
 #endif  // SFTE_TERM_SCROLLBACK_CAP
@@ -10130,7 +10351,9 @@ static inline void _sfte_wayland_pointer_enter(void *data, struct wl_pointer *po
     (void)data, (void)pointer, (void)serial, (void)surface, (void)surface_x, (void)surface_y;
 #if SFTE_INPUT_MOUSE
     sfte_wayland_app *app = (sfte_wayland_app *)data;
-    sfte_mouse_move(app->ctx, wl_fixed_to_int(surface_x), wl_fixed_to_int(surface_y));
+    sfte_ctx *ctx = app->ctx;
+    sfte_term *term = sfte_term_get_active(ctx);
+    sfte_mouse_move(term, wl_fixed_to_int(surface_x), wl_fixed_to_int(surface_y));
     app->needs_render = 1;
 #endif  // SFTE_INPUT_MOUSE
 }
@@ -10146,7 +10369,9 @@ static inline void _sfte_wayland_pointer_motion(void *data, struct wl_pointer *p
     (void)data, (void)pointer, (void)time, (void)surface_x, (void)surface_y;
 #if SFTE_INPUT_MOUSE
     sfte_wayland_app *app = (sfte_wayland_app *)data;
-    sfte_mouse_move(app->ctx, wl_fixed_to_int(surface_x), wl_fixed_to_int(surface_y));
+    sfte_ctx *ctx = app->ctx;
+    sfte_term *term = sfte_term_get_active(ctx);
+    sfte_mouse_move(term, wl_fixed_to_int(surface_x), wl_fixed_to_int(surface_y));
     app->needs_render = 1;
 #endif  // SFTE_INPUT_MOUSE
 }
@@ -10160,7 +10385,7 @@ static inline void _sfte_wayland_pointer_button(void *data, struct wl_pointer *p
 
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     sfte_ctx *ctx = app->ctx;
-    const sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     const sfte_parser_state *parser = &term->parser;
     const sfte_viewport_state *vp = &term->viewport;
 
@@ -10168,7 +10393,7 @@ static inline void _sfte_wayland_pointer_button(void *data, struct wl_pointer *p
     app->serial = serial;
 #endif  // SFTE_CLIPBOARD
 
-    sfte_mouse_click(ctx, SFTE_MOUSE_BUTTON_LEFT, state == WL_POINTER_BUTTON_STATE_PRESSED,
+    sfte_mouse_click(term, SFTE_MOUSE_BUTTON_LEFT, state == WL_POINTER_BUTTON_STATE_PRESSED,
                      parser->mouse_hover_col * vp->cell_width + SFTE_WINDOW_PAD_X,
                      parser->mouse_hover_row * vp->cell_height + SFTE_WINDOW_PAD_Y);
     app->needs_render = 1;
@@ -10187,12 +10412,12 @@ static inline void _sfte_wayland_pointer_axis(void *data, struct wl_pointer *poi
 
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     sfte_ctx *ctx = app->ctx;
-    const sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     const sfte_parser_state *parser = &term->parser;
     const sfte_viewport_state *vp = &term->viewport;
 
     int8_t dir = (wl_fixed_to_double(value) < 0) ? 1 : -1;
-    sfte_mouse_scroll(ctx, dir, parser->mouse_hover_col * vp->cell_width + SFTE_WINDOW_PAD_X,
+    sfte_mouse_scroll(term, dir, parser->mouse_hover_col * vp->cell_width + SFTE_WINDOW_PAD_X,
                       parser->mouse_hover_row * vp->cell_height + SFTE_WINDOW_PAD_Y);
     app->needs_render = 1;
 #endif  // SFTE_INPUT_MOUSE
@@ -10286,8 +10511,9 @@ static inline void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *ke
                                               uint32_t state) {
     (void)data, (void)keyboard, (void)time;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
+    sfte_ctx *ctx = app->ctx;
+    sfte_term *term = sfte_term_get_active(ctx);
 #if SFTE_INPUT_SELECTION
-    sfte_term *term = _sfte_term_get_active(app->ctx);
     const sfte_viewport_state *vp = &term->viewport;
 #endif  // SFTE_INPUT_SELECTION
 
@@ -10348,9 +10574,9 @@ static inline void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *ke
     for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_shortcuts); ++i)
         if ((xkb_keysym_t)_sfte_shortcuts[i].keysym == sym &&
             _sfte_shortcuts[i].mod_mask == active_mods)
-            if (_sfte_shortcuts[i].func(app->ctx, &_sfte_shortcuts[i].arg)) return;
+            if (_sfte_shortcuts[i].func(ctx, &_sfte_shortcuts[i].arg)) return;
 
-    sfte_xkb_process_key(app->ctx, app->xkb_state, keycode);
+    sfte_xkb_process_key(term, app->xkb_state, keycode);
 }
 
 static inline void _sfte_wayland_keyboard_modifiers(void *data, struct wl_keyboard *keyboard,
@@ -10651,7 +10877,7 @@ static inline void _sfte_wayland_osc52_clipboard_cb(void *user_data, char target
 static inline uint8_t _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->cb.user_data;
-    sfte_term *term = _sfte_term_get_active(app->ctx);
+    const sfte_term *term = sfte_term_get_active(ctx);
 
     if (app->data_source) {
         wl_data_source_destroy(app->data_source);
@@ -10664,14 +10890,14 @@ static inline uint8_t _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg
 
     if (!term->mouse.sel_active || !app->data_device_manager || !app->data_device) return 0;
 
-    size_t needed_bytes = sfte_get_selection(app->ctx, NULL, 0);
+    size_t needed_bytes = sfte_get_selection(term, NULL, 0);
     if (needed_bytes == 0) {
         _SFTE_INFO(ctx, CLIPBOARD_EMPTY);
         return 0;
     }
 
     app->selection_text = (char *)SFTE_MALLOC(needed_bytes);
-    sfte_get_selection(app->ctx, app->selection_text, needed_bytes);
+    sfte_get_selection(term, app->selection_text, needed_bytes);
     if (!app->selection_text) return 0;
 
     app->data_source = wl_data_device_manager_create_data_source(app->data_device_manager);
@@ -10687,6 +10913,7 @@ static inline uint8_t _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg
 static inline uint8_t _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->cb.user_data;
+    sfte_term *term = sfte_term_get_active(ctx);
 
     if (!app->data_offer) return 0;
 
@@ -10697,14 +10924,14 @@ static inline uint8_t _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_ar
 
         wl_display_roundtrip(app->display);
 
-        sfte_input_paste_begin(app->ctx);
+        sfte_input_paste_begin(term);
 
         char buf[SFTE_CLIPBOARD_BUF_SIZE];
         ssize_t n;
 
-        while ((n = read(fds[0], buf, sizeof(buf))) > 0) sfte_input_text(app->ctx, buf, n);
+        while ((n = read(fds[0], buf, sizeof(buf))) > 0) sfte_input_text(term, buf, n);
 
-        sfte_input_paste_end(app->ctx);
+        sfte_input_paste_end(term);
 
         close(fds[0]);
     }
@@ -10719,11 +10946,10 @@ static inline uint8_t _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_ar
     shell output events (PTY data), and timer expirations (on cursor blink, key repeat, trail).
 */
 static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
+    sfte_ctx *ctx = app->ctx;
+
     signal(SIGPIPE, SIG_IGN);
     setlocale(LC_ALL, "");
-
-    int32_t *fd;
-    _sfte_wayland_get_pty(app, &fd, NULL);
 
     app->repeat_timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
     int wl_fd = wl_display_get_fd(app->display);
@@ -10732,60 +10958,113 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
         // Dispatch pending Wayland events before polling to prevent deadlock
         wl_display_dispatch_pending(app->display);
         wl_display_flush(app->display);
-        struct pollfd fds[] = {{.fd = wl_fd, .events = POLLIN},
-                               {.fd = *fd, .events = POLLIN},
-                               {.fd = app->repeat_timer_fd, .events = POLLIN}};
 
-        int32_t timeout = sfte_get_timeout_ms(app->ctx);
+#if SFTE_MULTIPLEXER
+        struct pollfd fds[2 + SFTE_MULTIPLEXER_MAX_WINDOWS];
+        sfte_term *term_map[SFTE_MULTIPLEXER_MAX_WINDOWS];
+#else   // !SFTE_MULTIPLEXER
+        struct pollfd fds[3];
+        sfte_term *term_map[1];
+#endif  // !SFTE_MULTIPLEXER
+
+        fds[0] = (struct pollfd){.fd = wl_fd, .events = POLLIN};
+        fds[1] = (struct pollfd){.fd = app->repeat_timer_fd, .events = POLLIN};
+        uint8_t nfds = 2;
+
+#if SFTE_MULTIPLEXER
+        for (uint8_t i = 0; i < SFTE_MULTIPLEXER_MAX_WINDOWS; ++i)
+            if (app->pty_fds[i] >= 0 && ctx->mux.terms[i].is_allocated) {
+                fds[nfds] = (struct pollfd){.fd = app->pty_fds[i], .events = POLLIN};
+                term_map[nfds - 2] = &ctx->mux.terms[i];
+                nfds++;
+            }
+#else   // !SFTE_MULTIPLEXER
+        if (app->pty_fd >= 0) {
+            fds[nfds] = (struct pollfd){.fd = app->pty_fd, .events = POLLIN};
+            term_map[nfds - 2] = term;
+        }
+#endif  // !SFTE_MULTIPLEXER
+
+        int32_t timeout = sfte_get_timeout_ms(ctx);
         if (app->needs_render) timeout = 0;  // Don't sleep if we already know we need to draw
 
         if (poll(fds, _SFTE_ARRAY_LEN(fds), timeout) == -1) break;
 
-        if (sfte_tick(app->ctx)) app->needs_render = 1;
+        if (sfte_tick(ctx)) app->needs_render = 1;
 
         // Handle incoming Wayland events (keys, resizes)
         if (fds[0].revents & (POLLIN | POLLERR | POLLHUP))
             if (wl_display_dispatch(app->display) == -1) app->running = 0;
 
-        // Handle incoming text from the shell
-        if (fds[1].revents & (POLLIN | POLLERR | POLLHUP)) {
+// Handle core stage changes triggered by Wayland events
+#if SFTE_MULTIPLEXER
+        if (ctx->mux.pending_spawn) {
+            ctx->mux.pending_spawn = 0;
+            _sfte_wayland_pty_spawn(app);
+            app->needs_render = 1;
+        }
+#endif  // SFTE_MULTIPLEXER
+
+        // Handle key repeat timer
+        if (fds[1].revents & POLLIN) {
+            uint64_t expirations;
+
+            // Simulate a key press to autorepeat
+            if (read(app->repeat_timer_fd, &expirations, sizeof(expirations)) > 0 &&
+                app->repeating_key != 0)
+                _sfte_wayland_keyboard_key(app, app->keyboard, 0, 0, app->repeating_key,
+                                           WL_KEYBOARD_KEY_STATE_PRESSED);
+        }
+
+        for (uint8_t p = 2; p < nfds; ++p) {
+            if (!(fds[p].revents & (POLLIN | POLLERR | POLLHUP))) continue;
+
+            int32_t cur_fd = fds[p].fd;
+            sfte_term *target_term = term_map[p - 2];
             uint8_t buf[SFTE_TERM_PTY_BUF_SIZE];
             uint8_t did_read = 0;
 
             while (1) {
-                ssize_t n = read(*fd, buf, SFTE_TERM_PTY_BUF_SIZE);
+                ssize_t n = read(cur_fd, buf, SFTE_TERM_PTY_BUF_SIZE);
 
                 if (n > 0) {
-                    sfte_parse(app->ctx, buf, n);
+                    sfte_parse(target_term, buf, n);
                     did_read = 1;
                 } else if (n == 0) {
-                    app->running = 0;  // Shell exited
+                    close(cur_fd);
+
+#if SFTE_MULTIPLEXER
+                    int8_t idx = sfte_term_get_idx(ctx, target_term);
+                    app->pty_fds[idx] = -1;
+                    app->pty_pids[idx] = -1;
+#endif  // !SFTE_MULTIPLEXER
+
+                    if (!sfte_term_close(ctx, target_term)) app->running = 0;
                     break;
-                } else {  // n < 0
-                    // EAGAIN/EWOULDBLOCK means buffer is empty
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-                    // EINTR means its interrupted by signal
-                    else if (errno == EINTR)
-                        continue;
-                    else {
-                        app->running = 0;
-                        break;
-                    }
+                } else if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    break;
+                else if (errno == EINTR)
+                    continue;
+                else {
+                    close(cur_fd);
+
+#if SFTE_MULTIPLEXER
+                    int8_t idx = sfte_term_get_idx(ctx, target_term);
+                    app->pty_fds[idx] = -1;
+                    app->pty_pids[idx] = -1;
+#endif  // !SFTE_MULTIPLEXER
+
+                    if (!sfte_term_close(ctx, target_term)) app->running = 0;
+                    break;
                 }
             }
 
-            if (did_read) app->needs_render = 1;
-        }
-
-        // Handle key repeat timer
-        if (fds[2].revents & POLLIN) {
-            uint64_t expirations;
-            if (read(app->repeat_timer_fd, &expirations, sizeof(expirations)) == 0 ||
-                app->repeating_key == 0)
-                continue;
-            // Simulate a key press to autorepeat
-            _sfte_wayland_keyboard_key(app, app->keyboard, 0, 0, app->repeating_key,
-                                       WL_KEYBOARD_KEY_STATE_PRESSED);
+            if (did_read) {
+#if SFTE_MULTIPLEXER
+                if (sfte_term_get_active(ctx) == target_term)
+#endif  // SFTE_MULTIPLEXER
+                    app->needs_render = 1;
+            }
         }
 
         // Dispatch render pass
@@ -10797,7 +11076,7 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
             target_pxs = app->back_buffer;
 #endif  // SFTE_TERM_DOUBLE_BUFFER
 
-            sfte_render(app->ctx, target_pxs, app->width, app->height, &dmg);
+            sfte_render(ctx, target_pxs, app->width, app->height, &dmg);
 
             if (dmg.w > 0 && dmg.h > 0) {
 #if SFTE_TERM_DOUBLE_BUFFER
@@ -10838,7 +11117,7 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
     sfte_callbacks *cb = &ctx->cb;
     sfte_logger *logger = &ctx->logger;
     sfte_window_state *win = &ctx->window;
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
 #if SFTE_INPUT_MOUSE
     sfte_parser_state *parser = &term->parser;
 #endif  // SFTE_INPUT_MOUSE
@@ -10857,9 +11136,6 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
 #if SFTE_TERM_FOCUS
     win->is_focused = 1;
 #endif  // SFTE_TERM_FOCUS
-
-    _sfte_term_init(term, cb, SFTE_TERM_INIT_COLS, SFTE_TERM_INIT_ROWS);
-    _sfte_grid_resize_tabs(term, 0, SFTE_TERM_INIT_COLS);
 
     return ctx;
 }
@@ -10960,12 +11236,11 @@ void sfte_font_load_file(sfte_ctx *ctx, sfte_font_style style, const char *path)
 }
 
 #ifndef SFTE_NO_POSIX
-pid_t sfte_posix_pty_spawn(sfte_ctx *ctx, int32_t *out_fd, uint16_t px_w, uint16_t px_h) {
-    sfte_term *term = _sfte_term_get_active(ctx);
-
+pid_t sfte_posix_pty_spawn(sfte_ctx *ctx, int32_t *out_fd, uint16_t cols, uint16_t rows,
+                           uint16_t px_w, uint16_t px_h) {
     struct winsize ws = {
-        .ws_row = (unsigned short)term->viewport.rows,
-        .ws_col = (unsigned short)term->viewport.cols,
+        .ws_row = (unsigned short)rows,
+        .ws_col = (unsigned short)cols,
         .ws_xpixel = (unsigned short)px_w,
         .ws_ypixel = (unsigned short)px_h,
     };
@@ -10994,10 +11269,9 @@ pid_t sfte_posix_pty_spawn(sfte_ctx *ctx, int32_t *out_fd, uint16_t px_w, uint16
     return pid;
 }
 
-void sfte_posix_pty_resize(sfte_ctx *ctx, int32_t pty_fd, uint16_t px_w, uint16_t px_h) {
+void sfte_posix_pty_resize(const sfte_term *term, int32_t pty_fd, uint16_t px_w, uint16_t px_h) {
     if (pty_fd <= 0) return;
 
-    sfte_term *term = _sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
 
     struct winsize ws = {
@@ -11014,7 +11288,7 @@ int32_t sfte_get_timeout_ms(sfte_ctx *ctx) {
     if (!ctx) return -1;
 
     const sfte_window_state *win = &ctx->window;
-    const sfte_term *term = _sfte_term_get_active(ctx);
+    const sfte_term *term = sfte_term_get_active(ctx);
     const sfte_cursor_state *cursor = &term->cursor;
 #if SFTE_TERM_SCROLL_SMOOTH
     const sfte_viewport_state *vp = &term->viewport;
@@ -11061,7 +11335,7 @@ uint8_t sfte_tick(sfte_ctx *ctx) {
 #if SFTE_TERM_FOCUS
     sfte_window_state *win = &ctx->window;
 #endif  // SFTE_TERM_FOCUS
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
     sfte_cursor_state *cursor = &term->cursor;
 #if SFTE_SEARCH
@@ -11166,21 +11440,86 @@ int8_t sfte_term_get_idx(sfte_ctx *ctx, sfte_term *term) {
     return 0;
 #endif  // !SFTE_MULTIPLEXER
 }
+
+sfte_term *sfte_term_spawn(sfte_ctx *ctx) {
+#if SFTE_MULTIPLEXER
+    int8_t idx = _sfte_term_get_new_idx(ctx);
+    if (idx == -1) return NULL;
+    sfte_term *term = &ctx->mux.terms[idx];
+#else   // !SFTE_MULTIPLEXER
+    if (ctx->term.is_allocated) return NULL;
+    sfte_term *term = &ctx->term;
+#endif  // !SFTE_MULTIPLEXER
+
+    sfte_term *active_term = sfte_term_get_active(ctx);
+    int16_t cols = active_term ? active_term->viewport.cols : SFTE_TERM_INIT_COLS;
+    int16_t rows = active_term ? active_term->viewport.rows : SFTE_TERM_INIT_ROWS;
+    int16_t cell_w = active_term ? active_term->viewport.cell_width : 0;
+    int16_t cell_h = active_term ? active_term->viewport.cell_height : 0;
+
+    _sfte_term_init(term, &ctx->cb, cols, rows);
+    term->viewport.cell_width = cell_w;
+    term->viewport.cell_height = cell_h;
+
+    return term;
+}
+
+uint8_t sfte_term_close(sfte_ctx *ctx, sfte_term *term) {
+    if (!ctx || !term || !term->is_allocated) return 0;
+
+    _sfte_term_free(term);
+
+#if SFTE_MULTIPLEXER
+    int8_t closed_idx = (int8_t)(term - ctx->mux.terms);
+
+    // If closed the active window, shift focus
+    if (ctx->mux.active_idx == closed_idx) {
+        int8_t next_idx = -1;
+
+        for (int8_t i = closed_idx - 1; i >= 0; i--)
+            if (ctx->mux.terms[i].is_allocated) {
+                next_idx = i;
+                break;
+            }
+
+        if (next_idx == -1)
+            for (int8_t i = closed_idx + 1; i < SFTE_MULTIPLEXER_MAX_WINDOWS; ++i)
+                if (ctx->mux.terms[i].is_allocated) {
+                    next_idx = i;
+                    break;
+                }
+
+        if (next_idx != -1) {
+            _SFTE_MUX_SWITCH_FOCUS(ctx, closed_idx, next_idx);
+            return 1;  // Shifting focus to another window
+        }
+
+        return 0;  // No windows left, closing app
+    }
+
+    return 1;  // Closed a background window, still running
+
+#else  // !SFTE_MULTIPLEXER
+
+    return 0;  // Only one window alive at a time, closing it ends the app
+
+#endif  // !SFTE_MULTIPLEXER
+}
+
 // =================================================================================================
 // >>rendering & parsing
 // =================================================================================================
 
-void sfte_get_ideal_size(sfte_ctx *ctx, int16_t cols, int16_t rows, int32_t *out_w,
+void sfte_get_ideal_size(const sfte_term *term, int16_t cols, int16_t rows, int32_t *out_w,
                          int32_t *out_h) {
-    const sfte_viewport_state *vp = &_sfte_term_get_active(ctx)->viewport;
+    const sfte_viewport_state *vp = &term->viewport;
     if (out_w) *out_w = cols * vp->cell_width + (2 * SFTE_WINDOW_PAD_X);
     if (out_h) *out_h = rows * vp->cell_height + (2 * SFTE_WINDOW_PAD_Y);
 }
 
-void sfte_parse(sfte_ctx *ctx, const uint8_t *data, size_t len) {
+void sfte_parse(sfte_term *term, const uint8_t *data, size_t len) {
     if (len == 0 || !data) return;
 
-    sfte_term *term = _sfte_term_get_active(ctx);
 #if SFTE_TERM_SCROLLBACK_CAP
     sfte_viewport_state *vp = &term->viewport;
 #endif  // SFTE_TERM_SCROLLBACK_CAP
@@ -11193,7 +11532,7 @@ void sfte_parse(sfte_ctx *ctx, const uint8_t *data, size_t len) {
 
 #if SFTE_SEARCH
     // Update the search results if new output arrives
-    if (search->is_active) _sfte_search_exec(ctx, search->query);
+    if (search->is_active) _sfte_search_exec(term, search->query);
 #endif  // SFTE_SEARCH
 #if SFTE_SEARCH && SFTE_TERM_SCROLLBACK_CAP
     else
@@ -11218,7 +11557,7 @@ void sfte_parse(sfte_ctx *ctx, const uint8_t *data, size_t len) {
 
 void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_rect *out_dmg) {
     sfte_window_state *win = &ctx->window;
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
 #if SFTE_TERM_ALT_SCREEN
     sfte_modes_state *modes = &term->modes;
@@ -11234,12 +11573,18 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
     win->width = w;
     win->height = h;
 
-    sfte_pass_info passes[2];
-    uint8_t num_passes = _sfte_render_prepare_passes(ctx, px_buf, passes, out_dmg);
+    if (!vp->cell_width || !vp->cell_height) {
+        out_dmg->w = 0;
+        out_dmg->h = 0;
+        return;
+    }
 
     int16_t new_cols = (w - (2 * SFTE_WINDOW_PAD_X)) / vp->cell_width;
     int16_t new_rows = (h - (2 * SFTE_WINDOW_PAD_Y)) / vp->cell_height;
     if (new_cols != vp->cols || new_rows != vp->rows) _sfte_grid_resize(term, new_cols, new_rows);
+
+    sfte_pass_info passes[2];
+    uint8_t num_passes = _sfte_render_prepare_passes(ctx, px_buf, passes, out_dmg);
 
     int16_t vis_col;
     int16_t vis_row;
@@ -11337,7 +11682,7 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
 void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
     if (w <= 0 || h <= 0) return;
 
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     sfte_window_state *win = &ctx->window;
     const sfte_viewport_state *vp = &term->viewport;
 #if SFTE_CURSOR_TRAIL
@@ -11384,10 +11729,9 @@ void sfte_zoom(sfte_ctx *ctx, float delta) {
 // >>input & interaction
 // =================================================================================================
 
-void sfte_input_text(sfte_ctx *ctx, const char *text, size_t len) {
-    if (!ctx || !text || !len) return;
+void sfte_input_text(sfte_term *term, const char *text, size_t len) {
+    if (!term || !text || !len) return;
 
-    sfte_term *term = _sfte_term_get_active(ctx);
     const sfte_callbacks *cb = term->cb;
 #if SFTE_SEARCH
     sfte_search_state *search = &term->search;
@@ -11404,7 +11748,7 @@ void sfte_input_text(sfte_ctx *ctx, const char *text, size_t len) {
             for (size_t i = query_len; i < query_len + len; ++i)
                 if (search->query[i] > 0 && search->query[i] < 32) search->query[i] = ' ';
 
-            _sfte_search_exec(ctx, search->query);
+            _sfte_search_exec(term, search->query);
             _sfte_grid_dirty_range(term, (vp->rows - 1) * vp->cols, vp->cols);
         }
 
@@ -11422,28 +11766,25 @@ void sfte_input_text(sfte_ctx *ctx, const char *text, size_t len) {
     if (cb->write) cb->write(cb->user_data, text, len);
 }
 
-void sfte_input_paste_begin(sfte_ctx *ctx) {
-    const sfte_term *term = _sfte_term_get_active(ctx);
+void sfte_input_paste_begin(const sfte_term *term) {
     const sfte_callbacks *cb = term->cb;
     const sfte_modes_state *modes = &term->modes;
 
-    if (!ctx || !cb->write || !modes->bracketed_paste) return;
+    if (!term || !cb->write || !modes->bracketed_paste) return;
     cb->write(cb->user_data, "\033[200~", 6);
 }
 
-void sfte_input_paste_end(sfte_ctx *ctx) {
-    const sfte_term *term = _sfte_term_get_active(ctx);
+void sfte_input_paste_end(const sfte_term *term) {
     const sfte_callbacks *cb = term->cb;
     const sfte_modes_state *modes = &term->modes;
 
-    if (!ctx || !cb->write || !modes->bracketed_paste) return;
+    if (!term || !cb->write || !modes->bracketed_paste) return;
     cb->write(cb->user_data, "\033[201~", 6);
 }
 
-void sfte_input_key(sfte_ctx *ctx, sfte_key key, uint32_t mod_mask) {
-    if (!ctx) return;
+void sfte_input_key(sfte_term *term, sfte_key key, uint32_t mod_mask) {
+    if (!term) return;
 
-    sfte_term *term = _sfte_term_get_active(ctx);
 #if SFTE_SEARCH
     sfte_search_state *search = &term->search;
 #endif  // SFTE_SEARCH
@@ -11462,7 +11803,7 @@ void sfte_input_key(sfte_ctx *ctx, sfte_key key, uint32_t mod_mask) {
                     }
                 }
 
-                _sfte_search_exec(ctx, search->query);
+                _sfte_search_exec(term, search->query);
             }
         }
         return;
@@ -11476,7 +11817,7 @@ void sfte_input_key(sfte_ctx *ctx, sfte_key key, uint32_t mod_mask) {
     uint32_t codepoint = 0;
     size = _sfte_kitty_kb_encode(term, key, codepoint, mod_mask, buf, sizeof(buf));
     if (size > 0) {
-        sfte_input_text(ctx, buf, size);
+        sfte_input_text(term, buf, size);
         return;
     }
 #endif  // SFTE_INPUT_KITTY
@@ -11677,12 +12018,11 @@ void sfte_input_key(sfte_ctx *ctx, sfte_key key, uint32_t mod_mask) {
         size++;
     }
 
-    sfte_input_text(ctx, buf, size);
+    sfte_input_text(term, buf, size);
 }
 
 #if SFTE_INPUT_MOUSE
-void sfte_mouse_move(sfte_ctx *ctx, int32_t px_x, int32_t px_y) {
-    sfte_term *term = _sfte_term_get_active(ctx);
+void sfte_mouse_move(sfte_term *term, int32_t px_x, int32_t px_y) {
     const sfte_viewport_state *vp = &term->viewport;
     sfte_parser_state *parser = &term->parser;
     sfte_mouse_state *mouse = &term->mouse;
@@ -11713,9 +12053,8 @@ void sfte_mouse_move(sfte_ctx *ctx, int32_t px_x, int32_t px_y) {
 #endif  // SFTE_INPUT_SELECTION
 }
 
-void sfte_mouse_click(sfte_ctx *ctx, sfte_mouse_button btn, uint8_t pressed, int32_t px_x,
+void sfte_mouse_click(sfte_term *term, sfte_mouse_button btn, uint8_t pressed, int32_t px_x,
                       int32_t px_y) {
-    sfte_term *term = _sfte_term_get_active(ctx);
     const sfte_callbacks *cb = term->cb;
     const sfte_viewport_state *vp = &term->viewport;
     sfte_parser_state *parser = &term->parser;
@@ -11727,7 +12066,7 @@ void sfte_mouse_click(sfte_ctx *ctx, sfte_mouse_button btn, uint8_t pressed, int
 
 #if SFTE_INPUT_HYPERLINKS
     if (pressed && btn == SFTE_MOUSE_BUTTON_LEFT && cb->open_link) {
-        const char *uri = sfte_get_link_at(ctx, c, logical_r);
+        const char *uri = sfte_get_link_at(term, c, logical_r);
         if (uri) {
             cb->open_link(cb->user_data, uri);
             return;
@@ -11772,8 +12111,7 @@ void sfte_mouse_click(sfte_ctx *ctx, sfte_mouse_button btn, uint8_t pressed, int
 #endif  // SFTE_INPUT_SELECTION
 }
 
-void sfte_mouse_scroll(sfte_ctx *ctx, int8_t dir, int32_t px_x, int32_t px_y) {
-    sfte_term *term = _sfte_term_get_active(ctx);
+void sfte_mouse_scroll(sfte_term *term, int8_t dir, int32_t px_x, int32_t px_y) {
     const sfte_viewport_state *vp = &term->viewport;
     sfte_mouse_state *mouse = &term->mouse;
 
@@ -11786,14 +12124,13 @@ void sfte_mouse_scroll(sfte_ctx *ctx, int8_t dir, int32_t px_x, int32_t px_y) {
     }
 
 #if SFTE_TERM_SCROLLBACK_CAP
-    sfte_view_scroll(ctx, (dir > 0) ? SFTE_TERM_SCROLL_STEP : -SFTE_TERM_SCROLL_STEP);
+    sfte_view_scroll(term, (dir > 0) ? SFTE_TERM_SCROLL_STEP : -SFTE_TERM_SCROLL_STEP);
 #endif  // SFTE_TERM_SCROLLBACK_CAP
 }
 #endif  // SFTE_INPUT_MOUSE
 
 #if SFTE_INPUT_HYPERLINKS
-const char *sfte_get_link_at(sfte_ctx *ctx, int16_t col, int16_t row) {
-    sfte_term *term = _sfte_term_get_active(ctx);
+const char *sfte_get_link_at(sfte_term *term, int16_t col, int16_t row) {
     const sfte_viewport_state *vp = &term->viewport;
     const sfte_link_state *links = &term->links;
 
@@ -11807,8 +12144,7 @@ const char *sfte_get_link_at(sfte_ctx *ctx, int16_t col, int16_t row) {
 #endif  // SFTE_INPUT_HYPERLINKS
 
 #if SFTE_INPUT_SELECTION
-size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes) {
-    sfte_term *term = _sfte_term_get_active(ctx);
+size_t sfte_get_selection(const sfte_term *term, char *out_buf, size_t max_bytes) {
     const sfte_viewport_state *vp = &term->viewport;
     const sfte_mouse_state *mouse = &term->mouse;
 
@@ -11890,8 +12226,7 @@ size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes) {
 #endif  // SFTE_INPUT_SELECTION
 
 #if SFTE_TERM_SCROLLBACK_CAP
-void sfte_view_scroll(sfte_ctx *ctx, int32_t delta) {
-    sfte_term *term = _sfte_term_get_active(ctx);
+void sfte_view_scroll(sfte_term *term, int32_t delta) {
 #if SFTE_TERM_ALT_SCREEN
     const sfte_modes_state *modes = &term->modes;
 #endif  // SFTE_TERM_ALT_SCREEN
@@ -11919,8 +12254,8 @@ void sfte_view_scroll(sfte_ctx *ctx, int32_t delta) {
 #endif  // SFTE_TERM_SCROLLBACK_CAP
 
 #ifdef SFTE_XKB_COMMON
-void sfte_xkb_process_key(sfte_ctx *ctx, struct xkb_state *state, uint32_t keycode) {
-    if (!ctx || !state) return;
+void sfte_xkb_process_key(sfte_term *term, struct xkb_state *state, uint32_t keycode) {
+    if (!term || !state) return;
 
     xkb_keysym_t sym = xkb_state_key_get_one_sym(state, keycode);
 
@@ -11977,18 +12312,18 @@ void sfte_xkb_process_key(sfte_ctx *ctx, struct xkb_state *state, uint32_t keyco
 
     if (key_id != SFTE_KEY_NONE)
         // Mapped control key
-        sfte_input_key(ctx, key_id, active_mods);
+        sfte_input_key(term, key_id, active_mods);
     else {
         uint32_t cp = xkb_keysym_to_utf32(sym);
 
         if (cp > 0 && (active_mods & (SFTE_MOD_CTRL | SFTE_MOD_ALT | SFTE_MOD_SUPER)))
             // Modified text
-            sfte_input_key(ctx, (sfte_key)cp, active_mods);
+            sfte_input_key(term, (sfte_key)cp, active_mods);
         else {
             // Pure typing
             char buf[64];
             int8_t size = (int8_t)xkb_state_key_get_utf8(state, keycode, buf, sizeof(buf));
-            if (size > 0) sfte_input_text(ctx, buf, size);
+            if (size > 0) sfte_input_text(term, buf, size);
         }
     }
 }
@@ -11999,13 +12334,15 @@ void sfte_set_focus(sfte_ctx *ctx, uint8_t focused) {
     if (!ctx || ctx->window.is_focused == focused) return;
 
     sfte_window_state *win = &ctx->window;
-    sfte_term *term = _sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
     const sfte_callbacks *cb = term->cb;
     sfte_modes_state *modes = &term->modes;
     sfte_cursor_state *cursor = &term->cursor;
 
     win->is_focused = focused;
+
+    if (!term || !term->is_allocated || !vp->cell_width) return;
 
 #if SFTE_CURSOR_BLINK
     // Force the cursor to be visible when changing focus states
@@ -12042,6 +12379,15 @@ sfte_wayland_app *sfte_wayland_init(void) {
 #endif  // SFTE_INPUT_HYPERLINKS
     app->ctx->cb.title = _sfte_wayland_title_cb;
 
+// The initialization isn't necessary for non-multiplexed config,
+// since then we spawn the ONLY PTY instantly
+#if SFTE_MULTIPLEXER
+    for (uint8_t i = 0; i < SFTE_MULTIPLEXER_MAX_WINDOWS; ++i) {
+        app->pty_fds[i] = -1;
+        app->pty_pids[i] = -1;
+    }
+#endif  // SFTE_MULTIPLIER
+
     _sfte_wayland_pty_spawn(app);
     _sfte_wayland_load(app);
 
@@ -12053,6 +12399,9 @@ sfte_ctx *sfte_wayland_get_ctx(sfte_wayland_app *app) {
 }
 
 int sfte_wayland_run(sfte_wayland_app *app) {
+    sfte_ctx *ctx = app->ctx;
+    sfte_term *term = sfte_term_get_active(ctx);
+
 #ifdef SFTE_FONT_BOLD
     SFTE_ASSERT(app->ctx->font.bold.glyphs && app->ctx->font.bold.atlas_pxs,
                 "if SFTE_FONT_BOLD is defined, a bold font must be provided using "
@@ -12070,17 +12419,17 @@ int sfte_wayland_run(sfte_wayland_app *app) {
 #endif  // SFTE_FONT_BOLD_ITALIC
 
     int32_t ideal_w, ideal_h;
-    sfte_get_ideal_size(app->ctx, SFTE_TERM_INIT_COLS, SFTE_TERM_INIT_ROWS, &ideal_w, &ideal_h);
+    sfte_get_ideal_size(term, SFTE_TERM_INIT_COLS, SFTE_TERM_INIT_ROWS, &ideal_w, &ideal_h);
     app->width = ideal_w;
     app->height = ideal_h;
-    sfte_resize(app->ctx, app->width, app->height);
+    sfte_resize(ctx, app->width, app->height);
     if (!app->buffer) _sfte_wayland_create_buffer(app);
     _sfte_wayland_pty_update(app);
 
     _sfte_wayland_loop(app);
 
     _sfte_wayland_unload(app);
-    sfte_free(app->ctx);
+    sfte_free(ctx);
     SFTE_FREE(app);
     return 0;
 }
