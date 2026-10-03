@@ -2573,6 +2573,7 @@ struct sfte_wayland_app {
 
     int32_t width, height;
     int32_t pending_width, pending_height;
+    int32_t mouse_x, mouse_y;
 #if SFTE_MULTIPLEXER
     int32_t pty_fds[SFTE_MULTIPLEXER_MAX_WINDOWS];  // Master file descriptor to read/write from
     pid_t pty_pids[SFTE_MULTIPLEXER_MAX_WINDOWS];   // PID of shell
@@ -10373,7 +10374,9 @@ static inline void _sfte_wayland_pointer_motion(void *data, struct wl_pointer *p
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     sfte_ctx *ctx = app->ctx;
     sfte_term *term = sfte_term_get_active(ctx);
-    sfte_mouse_move(term, wl_fixed_to_int(surface_x), wl_fixed_to_int(surface_y));
+    app->mouse_x = wl_fixed_to_int(surface_x);
+    app->mouse_y = wl_fixed_to_int(surface_y);
+    sfte_mouse_move(term, app->mouse_x, app->mouse_y);
     app->needs_render = 1;
 #endif  // SFTE_INPUT_MOUSE
 }
@@ -10388,16 +10391,13 @@ static inline void _sfte_wayland_pointer_button(void *data, struct wl_pointer *p
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     sfte_ctx *ctx = app->ctx;
     sfte_term *term = sfte_term_get_active(ctx);
-    const sfte_parser_state *parser = &term->parser;
-    const sfte_viewport_state *vp = &term->viewport;
 
 #if SFTE_CLIPBOARD
     app->serial = serial;
 #endif  // SFTE_CLIPBOARD
 
     sfte_mouse_click(term, SFTE_MOUSE_BUTTON_LEFT, state == WL_POINTER_BUTTON_STATE_PRESSED,
-                     parser->mouse_hover_col * vp->cell_width + SFTE_WINDOW_PAD_X,
-                     parser->mouse_hover_row * vp->cell_height + SFTE_WINDOW_PAD_Y);
+                     app->mouse_x, app->mouse_y);
     app->needs_render = 1;
 
 #if SFTE_CLIPBOARD && SFTE_INPUT_SELECTION
@@ -10415,12 +10415,9 @@ static inline void _sfte_wayland_pointer_axis(void *data, struct wl_pointer *poi
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     sfte_ctx *ctx = app->ctx;
     sfte_term *term = sfte_term_get_active(ctx);
-    const sfte_parser_state *parser = &term->parser;
-    const sfte_viewport_state *vp = &term->viewport;
 
     int8_t dir = (wl_fixed_to_double(value) < 0) ? 1 : -1;
-    sfte_mouse_scroll(term, dir, parser->mouse_hover_col * vp->cell_width + SFTE_WINDOW_PAD_X,
-                      parser->mouse_hover_row * vp->cell_height + SFTE_WINDOW_PAD_Y);
+    sfte_mouse_scroll(term, dir, app->mouse_x, app->mouse_y);
     app->needs_render = 1;
 #endif  // SFTE_INPUT_MOUSE
 }
