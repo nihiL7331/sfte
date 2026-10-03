@@ -1607,6 +1607,25 @@ int32_t sfte_get_timeout_ms(sfte_ctx *ctx);
 */
 uint8_t sfte_tick(sfte_ctx *ctx);
 
+/*
+    Returns the terminal of a given index.
+    If SFTE_MULTIPLEXER is not defined, returns the only (main) terminal struct.
+    Returns NULL if terminal under the provided index is not allocated/out of bounds.
+*/
+sfte_term *sfte_term_get_at(sfte_ctx *ctx, uint8_t idx);
+
+/*
+    Returns the currently active terminal.
+    If SFTE_MULTIPLEXER is not defined, returns the only (main) terminal struct.
+*/
+sfte_term *sfte_term_get_active(sfte_ctx *ctx);
+
+/*
+    Returns the index of provided `term` in the multiplexer array.
+    If `ctx` or `term` is NULL, returns -1.
+    If SFTE_MULTIPLEXER is not defined, returns 0.
+*/
+int8_t sfte_term_get_idx(sfte_ctx *ctx, sfte_term *term);
 // =================================================================================================
 // >>rendering & parsing
 // =================================================================================================
@@ -11122,6 +11141,31 @@ uint8_t sfte_tick(sfte_ctx *ctx) {
     return needs_render;
 }
 
+sfte_term *sfte_term_get_at(sfte_ctx *ctx, uint8_t idx) {
+#if SFTE_MULTIPLEXER
+    if (idx >= SFTE_MULTIPLEXER_MAX_WINDOWS || !ctx->mux.terms[idx].is_allocated) return NULL;
+    return &ctx->mux.terms[idx];
+#else   // !SFTE_MULTIPLEXER
+    return &ctx->term;
+#endif  // !SFTE_MULTIPLEXER
+}
+
+sfte_term *sfte_term_get_active(sfte_ctx *ctx) {
+#if SFTE_MULTIPLEXER
+    return &ctx->mux.terms[ctx->mux.active_idx];
+#else   // !SFTE_MULTIPLEXER
+    return &ctx->term;
+#endif  // !SFTE_MULTIPLEXER
+}
+
+int8_t sfte_term_get_idx(sfte_ctx *ctx, sfte_term *term) {
+    if (!ctx || !term) return -1;
+#if SFTE_MULTIPLEXER
+    return (int8_t)(term - ctx->mux.terms);
+#else   // !SFTE_MULTIPLEXER
+    return 0;
+#endif  // !SFTE_MULTIPLEXER
+}
 // =================================================================================================
 // >>rendering & parsing
 // =================================================================================================
