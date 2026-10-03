@@ -255,6 +255,7 @@ typedef struct sfte_font_backend_info sfte_font_backend_info;
 // =================================================================================================
 
 typedef struct sfte_ctx sfte_ctx;
+typedef struct sfte_term sfte_term;
 typedef struct sfte_stack sfte_stack;
 
 // Full declaration of these values are placed in the implementation layer as an enum.
@@ -2333,7 +2334,7 @@ typedef struct sfte_render_buffers {
 /*
     Core terminal emulation state machine and grid bounds.
 */
-typedef struct sfte_term {
+struct sfte_term {
     sfte_cell *cells;
     uint8_t *tab_stops;
 #if SFTE_TERM_SCROLLBACK_CAP
@@ -2385,7 +2386,7 @@ typedef struct sfte_term {
 #endif  // SFTE_TERM_ANIMATE_SCREEN
 
     uint8_t is_allocated;
-} sfte_term;
+};
 
 #if SFTE_MULTIPLEXER
 /*
