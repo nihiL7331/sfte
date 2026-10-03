@@ -10982,7 +10982,8 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
 #else   // !SFTE_MULTIPLEXER
         if (app->pty_fd >= 0) {
             fds[nfds] = (struct pollfd){.fd = app->pty_fd, .events = POLLIN};
-            term_map[nfds - 2] = term;
+            term_map[nfds - 2] = &ctx->term;
+            nfds++;
         }
 #endif  // !SFTE_MULTIPLEXER
 
