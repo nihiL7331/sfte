@@ -11422,6 +11422,7 @@ sfte_term *sfte_term_get_at(sfte_ctx *ctx, uint8_t idx) {
     if (idx >= SFTE_MULTIPLEXER_MAX_WINDOWS || !ctx->mux.terms[idx].is_allocated) return NULL;
     return &ctx->mux.terms[idx];
 #else   // !SFTE_MULTIPLEXER
+    (void)idx;
     return &ctx->term;
 #endif  // !SFTE_MULTIPLEXER
 }
