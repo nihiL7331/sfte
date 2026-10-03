@@ -10121,9 +10121,8 @@ static inline void _sfte_wayland_pty_spawn(sfte_wayland_app *app) {
     sfte_term *new_term = sfte_term_spawn(ctx);
     if (!new_term) return;  // Mux is full
 
-    int8_t idx = sfte_term_get_idx(ctx, new_term);
-
 #if SFTE_MULTIPLEXER
+    int8_t idx = sfte_term_get_idx(ctx, new_term);
     uint8_t prev_idx = ctx->mux.active_idx;
     _SFTE_MUX_SWITCH_FOCUS(ctx, prev_idx, idx);
 #endif  // SFTE_MULTIPLEXER
