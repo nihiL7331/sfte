@@ -4048,7 +4048,7 @@ static inline void _sfte_search_jump(sfte_term *term, int8_t delta) {
 
     if (!search->match_cnt) return;
 
-    search->active_match_idx += search->active_match_idx + delta + search->match_cnt;
+    search->active_match_idx += delta + search->match_cnt;
     search->active_match_idx %= search->match_cnt;
 
     int32_t match_logical_r = search->matches[search->active_match_idx].logical_r;
