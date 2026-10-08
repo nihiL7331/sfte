@@ -6978,6 +6978,7 @@ static inline void _sfte_csi_exec_il(sfte_term *term, uint16_t *p) {
     }
 
     _sfte_grid_clear_rows(term, cursor->row, n);
+    _sfte_grid_dirty_rows(term, cursor->row, vp->scroll_bot);
 }
 
 /*
@@ -7003,6 +7004,7 @@ static inline void _sfte_csi_exec_dl(sfte_term *term, uint16_t *p) {
     }
 
     _sfte_grid_clear_rows(term, vp->scroll_bot - n + 1, n);
+    _sfte_grid_dirty_rows(term, cursor->row, vp->scroll_bot);
 }
 
 /*
