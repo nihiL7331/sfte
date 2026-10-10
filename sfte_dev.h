@@ -436,7 +436,7 @@ _SFTE_ENSURE_RANGE(SFTE_TERM_INIT_ROWS, 1, INT16_MAX);
     Number of bytes read from the PTY per poll event.
 */
 #ifndef SFTE_TERM_PTY_BUF_SIZE
-#define SFTE_TERM_PTY_BUF_SIZE 4096
+#define SFTE_TERM_PTY_BUF_SIZE UINT16_MAX
 #endif  // SFTE_TERM_PTY_BUF_SIZE
 _SFTE_ENSURE_RANGE(SFTE_TERM_PTY_BUF_SIZE, 1, UINT16_MAX);
 
@@ -502,7 +502,7 @@ _SFTE_ENSURE_RANGE(SFTE_TERM_DOUBLE_BUFFER, 0, 1);
 #define SFTE_TERM_ANIMATE_SCREEN 0
 #endif  // SFTE_TERM_ANIMATE_SCREEN
 _SFTE_ENSURE_RANGE(SFTE_TERM_ANIMATE_SCREEN, 0, 1);
-_SFTE_ENSURE_DEPS(SFTE_TERM_ANIMATE_SCREEN, SFTE_TERM_ALT_SCREEN &&SFTE_TERM_DOUBLE_BUFFER);
+_SFTE_ENSURE_DEPS(SFTE_TERM_ANIMATE_SCREEN, SFTE_TERM_ALT_SCREEN);
 
 /*
     Duration of the scrolling animation on TUI open/close (alt screen toggle).
@@ -1237,6 +1237,7 @@ _SFTE_ENSURE_RANGE(SFTE_MUX, 0, 1);
 #ifndef SFTE_MUX_BAR
 #define SFTE_MUX_BAR 0
 #endif  // SFTE_MUX_BAR
+_SFTE_ENSURE_RANGE(SFTE_MUX_BAR, 0, 1);
 _SFTE_ENSURE_DEPS(SFTE_MUX_BAR, SFTE_MUX);
 
 /*
@@ -1248,6 +1249,7 @@ _SFTE_ENSURE_DEPS(SFTE_MUX_BAR, SFTE_MUX);
 #ifndef SFTE_MUX_BAR_HOVER
 #define SFTE_MUX_BAR_HOVER 0
 #endif  // SFTE_MUX_BAR_HOVER
+_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_HOVER, 0, 1);
 
 /*
     If enabled, the multiplexer bar is placed at the top of the window.
@@ -1255,6 +1257,7 @@ _SFTE_ENSURE_DEPS(SFTE_MUX_BAR, SFTE_MUX);
 #ifndef SFTE_MUX_BAR_PLACEMENT_TOP
 #define SFTE_MUX_BAR_PLACEMENT_TOP 0
 #endif  // SFTE_MUX_BAR_PLACEMENT_TOP
+_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_PLACEMENT_TOP, 0, 1);
 _SFTE_ENSURE_DEPS(SFTE_MUX_BAR_PLACEMENT_TOP, SFTE_MUX_BAR);
 
 /*
@@ -1279,12 +1282,6 @@ _SFTE_ENSURE_DEPS(SFTE_MUX_BAR_PLACEMENT_TOP, SFTE_MUX_BAR);
     Defines the character used to draw the left and right edge of each window on the bar.
     If set to 0, no character is drawn.
 
-    NOTE:
-    If you want to paste in a Unicode character, remember to prefix ' with U, so it looks like this:
-    U''
-    instead of this:
-    ''
-
     WARN:
     Using characters outside of ASCII range with SFTE_TERM_ASCII_CHARSET
     defined will result in '?' rendered instead.
@@ -1292,10 +1289,12 @@ _SFTE_ENSURE_DEPS(SFTE_MUX_BAR_PLACEMENT_TOP, SFTE_MUX_BAR);
 #ifndef SFTE_MUX_BAR_EDGE_LEFT
 #define SFTE_MUX_BAR_EDGE_LEFT 0
 #endif  // SFTE_MUX_BAR_EDGE_LEFT
+_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_EDGE_LEFT, 0, INT32_MAX);
 
 #ifndef SFTE_MUX_BAR_EDGE_RIGHT
 #define SFTE_MUX_BAR_EDGE_RIGHT 0
 #endif  // SFTE_MUX_BAR_EDGE_RIGHT
+_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_EDGE_RIGHT, 0, INT32_MAX);
 
 /*
     Background color for active multiplexer window on the bar (RGB8888).
@@ -1303,6 +1302,7 @@ _SFTE_ENSURE_DEPS(SFTE_MUX_BAR_PLACEMENT_TOP, SFTE_MUX_BAR);
 #ifndef SFTE_MUX_BAR_BG_ACTIVE
 #define SFTE_MUX_BAR_BG_ACTIVE 0xFF444444
 #endif  // SFTE_MUX_BAR_BG_ACTIVE
+_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_BG_ACTIVE, 0x00000000, 0xFFFFFFFF);
 
 /*
     Background color for inactive multiplexer window on the bar (RGB8888).
@@ -1310,6 +1310,7 @@ _SFTE_ENSURE_DEPS(SFTE_MUX_BAR_PLACEMENT_TOP, SFTE_MUX_BAR);
 #ifndef SFTE_MUX_BAR_BG_INACTIVE
 #define SFTE_MUX_BAR_BG_INACTIVE 0xFF000000
 #endif  // SFTE_MUX_BAR_BG_INACTIVE
+_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_BG_INACTIVE, 0x00000000, 0xFFFFFFFF);
 
 /*
     Background color for hovered multiplexer window on the bar (RGB8888).
@@ -1317,6 +1318,7 @@ _SFTE_ENSURE_DEPS(SFTE_MUX_BAR_PLACEMENT_TOP, SFTE_MUX_BAR);
 #ifndef SFTE_MUX_BAR_BG_HOVER
 #define SFTE_MUX_BAR_BG_HOVER 0xFF222222
 #endif  // SFTE_MUX_BAR_BG_HOVER
+_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_BG_HOVER, 0x00000000, 0xFFFFFFFF);
 
 /*
     Foreground color for active multiplexer window on the bar (RGB888).
@@ -1324,6 +1326,7 @@ _SFTE_ENSURE_DEPS(SFTE_MUX_BAR_PLACEMENT_TOP, SFTE_MUX_BAR);
 #ifndef SFTE_MUX_BAR_FG_ACTIVE
 #define SFTE_MUX_BAR_FG_ACTIVE 0xFFFFFF
 #endif  // SFTE_MUX_BAR_FG_ACTIVE
+_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_FG_ACTIVE, 0x000000, 0xFFFFFF);
 
 /*
     Foreground color for active multiplexer window on the bar (RGB888).
@@ -1331,6 +1334,7 @@ _SFTE_ENSURE_DEPS(SFTE_MUX_BAR_PLACEMENT_TOP, SFTE_MUX_BAR);
 #ifndef SFTE_MUX_BAR_FG_INACTIVE
 #define SFTE_MUX_BAR_FG_INACTIVE 0x888888
 #endif  // SFTE_MUX_BAR_FG_INACTIVE
+_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_FG_INACTIVE, 0x000000, 0xFFFFFF);
 
 /*
     Foreground color for hovered multiplexer window on the bar (RGB888).
@@ -1338,6 +1342,7 @@ _SFTE_ENSURE_DEPS(SFTE_MUX_BAR_PLACEMENT_TOP, SFTE_MUX_BAR);
 #ifndef SFTE_MUX_BAR_FG_HOVER
 #define SFTE_MUX_BAR_FG_HOVER 0xAAAAAA
 #endif  // SFTE_MUX_BAR_FG_HOVER
+_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_FG_HOVER, 0x000000, 0xFFFFFF);
 
 /*
     Attributes applied to an active multiplexer window text on the bar.
@@ -1393,6 +1398,7 @@ _SFTE_ENSURE_RANGE(SFTE_MUX_BAR_ATTR_INACTIVE, SFTE_ATTR_NONE,
 #ifndef SFTE_MUX_BAR_ALIGN
 #define SFTE_MUX_BAR_ALIGN SFTE_MUX_BAR_ALIGN_LEFT
 #endif  // SFTE_MUX_BAR_ALIGN
+_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_ALIGN, SFTE_MUX_BAR_ALIGN_LEFT, SFTE_MUX_BAR_ALIGN_FILL);
 
 /*
     Defines the horizontal padding (in cells) between each tab on the multiplexer bar.
@@ -1400,6 +1406,7 @@ _SFTE_ENSURE_RANGE(SFTE_MUX_BAR_ATTR_INACTIVE, SFTE_ATTR_NONE,
 #ifndef SFTE_MUX_BAR_PAD
 #define SFTE_MUX_BAR_PAD 1
 #endif  // SFTE_MUX_BAR_PAD
+_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_PAD, 0, 16);
 
 /*
     Defines the horizontal margin (in cells) on the left and right side of the multiplexer tab.
@@ -1408,14 +1415,72 @@ _SFTE_ENSURE_RANGE(SFTE_MUX_BAR_ATTR_INACTIVE, SFTE_ATTR_NONE,
 #ifndef SFTE_MUX_BAR_MARGIN
 #define SFTE_MUX_BAR_MARGIN 1
 #endif  // SFTE_MUX_BAR_MARGIN
+_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_MARGIN, 0, 1);
 
 /*
-
+    If enabled, renders a preview of available windows when prefix is clicked.
+    They are rendered as a vertical list, each block showing the bottom each window.
+    A window in that mode can be picked using keyboard numbers (0-9).
 */
-#ifndef SFTE_MUX_PREVIEW
-#define SFTE_MUX_PREVIEW 1
-#endif  // SFTE_MUX_PREVIEW
-_SFTE_ENSURE_RANGE(SFTE_MUX_PREVIEW, 0, 1);
+#ifndef SFTE_MUX_PREFIX_PREVIEW
+#define SFTE_MUX_PREFIX_PREVIEW 0
+#endif  // SFTE_MUX_PREFIX_PREVIEW
+_SFTE_ENSURE_RANGE(SFTE_MUX_PREFIX_PREVIEW, 0, 1);
+_SFTE_ENSURE_DEPS(SFTE_MUX_PREFIX_PREVIEW, SFTE_MUX);
+
+/*
+    Defines the horizontal margin (in cells)
+    on the left and right side of the prefix preview window.
+*/
+#ifndef SFTE_MUX_PREVIEW_MARGIN
+#define SFTE_MUX_PREVIEW_MARGIN 6
+#endif  // SFTE_MUX_PREVIEW_MARGIN
+
+/*
+    Set of characters used to render borders for the prefix preview.
+*/
+#ifndef SFTE_MUX_PREVIEW_BORDER_LR
+#define SFTE_MUX_PREVIEW_BORDER_LR 0x2500   // ─
+#define SFTE_MUX_PREVIEW_BORDER_TB 0x2502   // │
+#define SFTE_MUX_PREVIEW_BORDER_BR 0x250C   // ┌
+#define SFTE_MUX_PREVIEW_BORDER_BL 0x2510   // ┐
+#define SFTE_MUX_PREVIEW_BORDER_TR 0x2514   // └
+#define SFTE_MUX_PREVIEW_BORDER_TL 0x2518   // ┘
+#define SFTE_MUX_PREVIEW_BORDER_TBR 0x251C  // ├
+#define SFTE_MUX_PREVIEW_BORDER_TBL 0x2524  // ┤
+#endif                                      // SFTE_MUX_PREVIEW_BORDER_LR
+
+/*
+    Foreground color of the borders for the prefix preview. (RGB888)
+*/
+#ifndef SFTE_MUX_PREVIEW_BORDER_FG
+#define SFTE_MUX_PREVIEW_BORDER_FG 0xFFFFFF
+#endif  // SFTE_MUX_PREVIEW_BORDER_FG
+_SFTE_ENSURE_RANGE(SFTE_MUX_PREVIEW_BORDER_FG, 0x000000, 0xFFFFFF);
+
+/*
+    Background color for the prefix preview window badge/index (RGB8888).
+*/
+#ifndef SFTE_MUX_PREVIEW_BADGE_BG
+#define SFTE_MUX_PREVIEW_BADGE_BG 0xFF555555
+#endif  // SFTE_MUX_PREVIEW_BADGE_BG
+_SFTE_ENSURE_RANGE(SFTE_MUX_PREVIEW_BADGE_BG, 0x00000000, 0xFFFFFFFF);
+
+/*
+    Background color BEHIND the prefix preview window (RGB8888).
+*/
+#ifndef SFTE_MUX_PREVIEW_BG
+#define SFTE_MUX_PREVIEW_BG 0x44000000
+#endif  // SFTE_MUX_PREVIEW_BG
+_SFTE_ENSURE_RANGE(SFTE_MUX_PREVIEW_BG, 0x00000000, 0xFFFFFFFF);
+
+/*
+    Background color of the hovered prefix preview window (RGB888).
+*/
+#ifndef SFTE_MUX_PREVIEW_HOVER_BG
+#define SFTE_MUX_PREVIEW_HOVER_BG 0x222222
+#endif  // SFTE_MUX_PREVIEW_HOVER_BG
+_SFTE_ENSURE_RANGE(SFTE_MUX_PREVIEW_HOVER_BG, 0x000000, 0xFFFFFF);
 
 /*
     The maximum number concurrent windows the multiplexer can hold.
