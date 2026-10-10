@@ -2760,7 +2760,10 @@ typedef struct sfte_mux {
     uint8_t active_idx;
     int16_t hovered_idx;
     uint8_t is_prefix_active;
-    uint8_t is_preview_active;
+#if SFTE_MUX_PREFIX_PREVIEW
+    uint8_t was_prefix_active;
+    uint8_t preview_selected_idx;
+#endif  // SFTE_MUX_PREFIX_PREVIEW
     uint8_t pending_spawn;
     uint8_t pending_close;
     int8_t pending_reorder;  // -1 for left, 1 for right
@@ -2995,13 +2998,6 @@ static inline int8_t _sfte_term_get_new_idx(sfte_ctx *ctx);
 static inline void _sfte_term_init(sfte_term *term, const sfte_callbacks *cb, int16_t cols,
                                    int16_t rows);
 static inline void _sfte_term_free(sfte_term *term);
-
-// -------------------------------------------------------------------------------------------------
-// >mux
-// -------------------------------------------------------------------------------------------------
-#if SFTE_MUX
-static inline void _sfte_mux_render_preview(sfte_ctx *ctx);
-#endif  // SFTE_MUX
 
 // -------------------------------------------------------------------------------------------------
 // >b64
@@ -3331,6 +3327,9 @@ static inline void _sfte_render_search_overlay(sfte_ctx *ctx, void *px_buf,
 #if SFTE_MUX_BAR
 static inline void _sfte_render_mux_bar(sfte_ctx *ctx, void *px_buf, sfte_damage_rect *out_dmg);
 #endif  // SFTE_MUX_BAR
+#if SFTE_MUX_PREFIX_PREVIEW
+static inline void _sfte_render_mux_preview(sfte_ctx *ctx, void *px_buf, sfte_damage_rect *out_dmg);
+#endif  // SFTE_MUX_PREFIX_PREVIEW
 #if SFTE_CURSOR_TRAIL
 static inline void _sfte_render_update_trail(sfte_ctx *ctx);
 static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, int32_t y_off,
@@ -3546,8 +3545,10 @@ static inline void _sfte_log(sfte_log_func log_func, _sfte_log_item log_item,
 */
 static inline int8_t _sfte_term_get_new_idx(sfte_ctx *ctx) {
 #if SFTE_MUX
+    sfte_mux *mux = &ctx->mux;
+
     for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i)
-        if (!ctx->mux.terms[i].is_allocated) return i;
+        if (!mux->terms[i].is_allocated) return i;
     return -1;
 #else   // !SFTE_MUX
     (void)ctx;
@@ -3745,7 +3746,13 @@ static inline uint8_t _sfte_mux_prefix_shortcut(sfte_ctx *ctx, const sfte_arg *a
     (void)arg;
     sfte_mux *mux = &ctx->mux;
 
-    mux->is_prefix_active = 1;
+    if (!mux->is_prefix_active) {
+        mux->is_prefix_active = 1;
+#if SFTE_MUX_PREFIX_PREVIEW
+        mux->preview_selected_idx = mux->active_idx;
+#endif  // STE_MUX_PREFIX_PREVIEW
+        mux->ui_dirty = 1;
+    }
 
     return 2;
 }
@@ -3753,7 +3760,7 @@ static inline uint8_t _sfte_mux_prefix_shortcut(sfte_ctx *ctx, const sfte_arg *a
 /*
     Spawns a new terminal window.
     For it to be supported on custom backends,
-    logic checking whether spawn is pending via `ctx->mux.pending_spawn` needs to be implemented.
+    logic checking whether spawn is pending via `mux->pending_spawn` needs to be implemented.
     See `_sfte_wayland_loop` for an example.
 */
 static inline uint8_t _sfte_mux_spawn_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
@@ -3764,6 +3771,7 @@ static inline uint8_t _sfte_mux_spawn_shortcut(sfte_ctx *ctx, const sfte_arg *ar
 
     mux->is_prefix_active = 0;
     mux->pending_spawn = 1;
+    mux->ui_dirty = 1;
 
     return 1;
 }
@@ -3771,7 +3779,7 @@ static inline uint8_t _sfte_mux_spawn_shortcut(sfte_ctx *ctx, const sfte_arg *ar
 /*
     Closes the currently open terminal window.
     For it to be supported on custom backends,
-    logic checking whether spawn is pending via `ctx->mux.pending_close` needs to be implemented.
+    logic checking whether spawn is pending via `mux->pending_close` needs to be implemented.
     See `_sfte_wayland_loop` for an example.
 */
 static inline uint8_t _sfte_mux_close_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
@@ -3782,6 +3790,7 @@ static inline uint8_t _sfte_mux_close_shortcut(sfte_ctx *ctx, const sfte_arg *ar
 
     mux->is_prefix_active = 0;
     mux->pending_close = 1;
+    mux->ui_dirty = 1;
 
     return 1;
 }
@@ -3811,6 +3820,8 @@ static inline uint8_t _sfte_mux_jump_shortcut(sfte_ctx *ctx, const sfte_arg *arg
         }
     }
 
+    mux->ui_dirty = 1;
+
     return 1;
 }
 
@@ -3831,6 +3842,8 @@ static inline uint8_t _sfte_mux_goto_shortcut(sfte_ctx *ctx, const sfte_arg *arg
         mux->terms[target_idx].is_allocated) {
         _SFTE_MUX_SWITCH_FOCUS(ctx, mux->active_idx, target_idx);
     }
+
+    mux->ui_dirty = 1;
 
     return 1;
 }
@@ -3869,11 +3882,6 @@ static inline uint8_t _sfte_mux_reorder_shortcut(sfte_ctx *ctx, const sfte_arg *
 
     return 1;
 }
-
-/*
-
-*/
-static inline void _sfte_mux_render_preview(sfte_ctx *ctx) {}
 #endif  // SFTE_MUX
 // =================================================================================================
 // >>b64
@@ -4778,9 +4786,9 @@ static inline void _sfte_grid_from_px(const sfte_viewport_state *vp, int32_t px_
                                       int16_t *out_col, int32_t *out_logical_row,
                                       int16_t *out_screen_row) {
     int32_t off_y = 0;
-#if SFTE_MUX_BAR_PLACEMENT_TOP
+#if SFTE_MUX_BAR_PLACEMENT_TOP && !SFTE_MUX_BAR_HOVER
     off_y = vp->cell_height;
-#endif  // SFTE_MUX_BAR_PLACEMENT_TOP
+#endif  // SFTE_MUX_BAR_PLACEMENT_TOP && !SFTE_MUX_BAR_HOVER
 
     int16_t c = _SFTE_CLAMP((px_x - SFTE_WINDOW_PAD_X) / vp->cell_width, 0, vp->cols - 1);
     int16_t r = _SFTE_CLAMP((px_y - SFTE_WINDOW_PAD_Y - off_y) / vp->cell_height, 0, vp->rows - 1);
@@ -5363,9 +5371,9 @@ static inline void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf) {
     int32_t h = win->height;
     int32_t grid_w = vp->cols * vp->cell_width;
     int32_t grid_h = vp->rows * vp->cell_height;
-#if SFTE_MUX_BAR
+#if SFTE_MUX_BAR && !SFTE_MUX_BAR_HOVER
     grid_h += vp->cell_height;
-#endif  // SFTE_MUX_BAR
+#endif  // SFTE_MUX_BAR && !SFTE_MUX_BAR_HOVER
     uint32_t bg = (SFTE_COLOR_BG_OPACITY << 24) | (SFTE_COLOR_BG & ~SFTE_COLOR_ALPHA_MASK);
 
 #if SFTE_WINDOW_PAD_Y
@@ -9088,6 +9096,9 @@ static inline void _sfte_font_resolve_rune(sfte_font_cache *cache, sfte_rune run
     Must be called on startup, and whenever the DPI or font size changes.
 */
 static inline void _sfte_font_reset_cache(sfte_ctx *ctx) {
+#if SFTE_MUX
+    sfte_mux *mux = &ctx->mux;
+#endif  // SFTE_MUX
     sfte_font_state *font = &ctx->font;
     sfte_term *term = sfte_term_get_active(ctx);
     sfte_stack *stack = &term->stack;
@@ -9129,8 +9140,8 @@ static inline void _sfte_font_reset_cache(sfte_ctx *ctx) {
 
 #if SFTE_MUX
     for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i)
-        if (ctx->mux.terms[i].is_allocated) {
-            sfte_viewport_state *vp = &ctx->mux.terms[i].viewport;
+        if (mux->terms[i].is_allocated) {
+            sfte_viewport_state *vp = &mux->terms[i].viewport;
             vp->cell_width = cell_w;
             vp->cell_height = cell_h;
         }
@@ -9343,9 +9354,9 @@ static inline void _sfte_render_search_overlay(sfte_ctx *ctx, void *px_buf,
     int32_t r = vp->rows - 1;
 #endif  // !SFTE_SEARCH_PLACEMENT_TOP
     int32_t y_off = 0;
-#if SFTE_MUX_BAR_PLACEMENT_TOP
+#if SFTE_MUX_BAR_PLACEMENT_TOP && !SFTE_MUX_BAR_HOVER
     y_off += vp->cell_height;
-#endif  // SFTE_MUX_BAR_PLACEMENT_TOP
+#endif  // SFTE_MUX_BAR_PLACEMENT_TOP && !SFTE_MUX_BAR_HOVER
     int32_t start_y = r * vp->cell_height + SFTE_WINDOW_PAD_Y + y_off;
 
     char right_buf[64];
@@ -9647,6 +9658,146 @@ static inline void _sfte_render_mux_bar(sfte_ctx *ctx, void *px_buf, sfte_damage
 }
 #endif  // SFTE_MUX_BAR
 
+#if SFTE_MUX_PREFIX_PREVIEW
+static inline void _sfte_render_mux_preview(sfte_ctx *ctx, void *px_buf,
+                                            sfte_damage_rect *out_dmg) {
+    const sfte_window_state *win = &ctx->window;
+    sfte_mux *mux = &ctx->mux;
+    sfte_term *term = sfte_term_get_active(ctx);
+    const sfte_viewport_state *vp = &term->viewport;
+
+    int16_t num_tabs = 0;
+    for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i)
+        if (mux->terms[i].is_allocated) num_tabs++;
+
+    if (num_tabs == 0) return;
+
+    for (int32_t y = 0; y < win->height; ++y)
+        for (int32_t x = 0; x < win->width; ++x)
+            SFTE_COLOR_BLEND_PIXEL(px_buf, x, y, win->width,
+                                   SFTE_MUX_PREVIEW_BG & ~SFTE_COLOR_ALPHA_MASK,
+                                   (uint8_t)(SFTE_MUX_PREVIEW_BG & SFTE_COLOR_ALPHA_MASK) >> 24);
+    _sfte_render_damage_add(out_dmg, 0, 0, win->width, win->height);
+
+    int16_t modal_cols = vp->cols - SFTE_MUX_PREVIEW_MARGIN * 2;
+    if (modal_cols < 0) modal_cols = vp->cols;
+    int16_t start_c = (vp->cols - modal_cols) / 2;
+    int16_t end_c = start_c + modal_cols - 1;
+
+    int16_t avail_rows = vp->rows - (num_tabs - 1) - 2;  // -2 for top/bot borders
+    if (avail_rows < num_tabs) return;
+    int16_t preview_rows = avail_rows / num_tabs;
+
+    // Window views + separators + top/bot borders
+    int16_t modal_rows = (preview_rows * num_tabs) + (num_tabs - 1) + 2;
+
+    int16_t start_r = (vp->rows - modal_rows) / 2;
+
+    sfte_font_cache *font = _sfte_font_get_cache(ctx, SFTE_FONT_STYLE_REGULAR);
+
+#define DRAW_BORDER(_c, _r, _rune)                                                                 \
+    do {                                                                                           \
+        _sfte_render_bg_cell(ctx, px_buf, _c, _r, 0, SFTE_COLOR_BG);                               \
+        uint8_t _font_idx = 0;                                                                     \
+        uint16_t _glyph_id = 0;                                                                    \
+        _sfte_font_resolve_rune(font, _rune, &_font_idx, &_glyph_id);                              \
+        _sfte_render_fg_cell(ctx, px_buf, _c, _r, 0, _rune, _glyph_id, _font_idx,                  \
+                             SFTE_MUX_PREVIEW_BORDER_FG, font);                                    \
+    } while (0)
+
+    int16_t cur_r = start_r;
+    uint8_t real_active_idx = mux->active_idx;
+
+    // Top border rendering
+    for (int16_t c = start_c; c <= end_c; ++c) {
+        sfte_rune rune = (c == start_c) ? SFTE_MUX_PREVIEW_BORDER_BR
+                         : (c == end_c) ? SFTE_MUX_PREVIEW_BORDER_BL
+                                        : SFTE_MUX_PREVIEW_BORDER_LR;
+        DRAW_BORDER(c, cur_r, rune);
+    }
+    cur_r++;
+
+    // Content rendering
+    for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) {
+        if (!mux->terms[i].is_allocated) continue;
+        sfte_term *cur_term = &mux->terms[i];
+        mux->active_idx = i;
+
+        int16_t term_start_row = cur_term->viewport.rows - preview_rows;
+        if (term_start_row < 0) term_start_row = 0;
+
+        for (int16_t term_r = term_start_row; term_r < cur_term->viewport.rows; ++term_r) {
+            int32_t logical_r = _sfte_grid_vis2log(&cur_term->viewport, term_r);
+            _sfte_render_extract_fg_row(ctx, logical_r, term_r, 0, 0);
+
+            // Left border rendering
+            DRAW_BORDER(start_c, cur_r, SFTE_MUX_PREVIEW_BORDER_TB);
+
+            // Text grid rendering
+            char idx_str[16];
+            uint8_t idx_len = snprintf(idx_str, sizeof(idx_str), " %d ", i + 1);
+
+            uint32_t line_bg = (mux->preview_selected_idx == i) ? SFTE_MUX_PREVIEW_HOVER_BG
+                                                                : SFTE_COLOR_BG;
+
+            for (int16_t c = start_c + 1; c < end_c; ++c) {
+                int16_t text_c = c - (start_c + 1);
+                uint8_t is_badge = (term_r == term_start_row && text_c < idx_len);
+
+                uint32_t cell_bg = is_badge ? SFTE_MUX_PREVIEW_BADGE_BG : line_bg;
+                _sfte_render_bg_cell(ctx, px_buf, c, cur_r, 0, cell_bg);
+
+                if (is_badge) {
+                    sfte_rune b_char = (uint8_t)idx_str[text_c];
+                    uint8_t font_idx = 0;
+                    uint16_t glyph_id = 0;
+                    _sfte_font_resolve_rune(font, b_char, &font_idx, &glyph_id);
+                    _sfte_render_fg_cell(ctx, px_buf, c, cur_r, 0, b_char, glyph_id, font_idx,
+                                         SFTE_COLOR_FG, font);
+                } else if (text_c < cur_term->viewport.cols) {
+                    sfte_cell *vcell = _sfte_grid_get_cell(cur_term, text_c, logical_r);
+                    sfte_rune r_char = vcell->rune ? vcell->rune : ' ';
+                    uint32_t fg = _sfte_grid_get_fg(vcell);
+
+                    const sfte_render_buffers *render = &cur_term->render;
+                    _sfte_render_fg_cell(ctx, px_buf, c, cur_r, 0, r_char, render->ids[text_c],
+                                         render->font_indices[text_c], fg,
+                                         render->target_caches[text_c]);
+                }
+            }
+
+            // Right border rendering
+            DRAW_BORDER(end_c, cur_r, SFTE_MUX_PREVIEW_BORDER_TB);
+            cur_r++;
+        }
+
+        num_tabs--;
+        if (num_tabs > 0) {
+            // Separator rendering
+            for (int16_t c = start_c; c <= end_c; ++c) {
+                sfte_rune rune = (c == start_c) ? SFTE_MUX_PREVIEW_BORDER_TBR
+                                 : (c == end_c) ? SFTE_MUX_PREVIEW_BORDER_TBL
+                                                : SFTE_MUX_PREVIEW_BORDER_LR;
+                DRAW_BORDER(c, cur_r, rune);
+            }
+            cur_r++;
+        }
+    }
+
+    // Bottom border rendering
+    for (int16_t c = start_c; c <= end_c; ++c) {
+        sfte_rune rune = (c == start_c) ? SFTE_MUX_PREVIEW_BORDER_TR
+                         : (c == end_c) ? SFTE_MUX_PREVIEW_BORDER_TL
+                                        : SFTE_MUX_PREVIEW_BORDER_LR;
+        DRAW_BORDER(c, cur_r, rune);
+    }
+
+#undef DRAW_BORDER
+
+    mux->active_idx = real_active_idx;
+}
+#endif  // SFTE_MUX_PREFIX_PREVIEW
+
 #if SFTE_CURSOR_TRAIL
 /*
     Updates the cursor trail positions.
@@ -9910,8 +10061,8 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
     passes[0].y_off = (int32_t)vp->scroll_y_off;
 #endif  // SFTE_TERM_SCROLL_SMOOTH
 
-    // Shift all passes down by the height of the multiplexer bar if it's at the top of the window
-    // and not hovering.
+    // Shift all passes down by the height of the multiplexer bar if it's at the top of the
+    // window and not hovering.
 #if SFTE_MUX_BAR_PLACEMENT_TOP && !SFTE_MUX_BAR_HOVER
     for (uint8_t p = 0; p < passes_cnt; ++p) passes[p].y_off += vp->cell_height;
 #endif  // SFTE_MUX_BAR_PLACEMENT_TOP && !SFTE_MUX_BAR_HOVER
@@ -10093,8 +10244,8 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int3
 
 /*
     Returns the RENDERED position of the cursor.
-    Do not mistake it for the cursor position for the shell - while they're equal 99% of the time,
-    they differ when search mode is on.
+    Do not mistake it for the cursor position for the shell - while they're equal 99% of the
+   time, they differ when search mode is on.
 
     To ensure that even when search mode is on ongoing sequences render properly,
     these two values are separate.
@@ -10755,6 +10906,12 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
         else {
             _sfte_render_shape_fg_row(term, logical_r);
             render->row_hashes[cache_idx] = row_hash;
+
+            // Dirty any cells that had their shapes changed due to ligatures
+            for (int16_t c = 0; c < vp->cols; ++c)
+                if (render->shaper_ids[c] != memo_ids[c])
+                    _sfte_grid_get_cell(term, c, logical_r)->dirty = 1;
+
             memcpy(memo_ids, render->shaper_ids, vp->cols * sizeof(uint16_t));
         }
 #endif  // SFTE_FONT_LIGATURES
@@ -10801,13 +10958,16 @@ static inline void _sfte_wayland_write_cb(void *user_data, const char *data, siz
 
 static inline void _sfte_wayland_pty_spawn(sfte_wayland_app *app) {
     sfte_ctx *ctx = app->ctx;
+#if SFTE_MUX
+    sfte_mux *mux = &ctx->mux;
+#endif  // SFTE_MUX
 
     sfte_term *new_term = sfte_term_spawn(ctx);
     if (!new_term) return;  // Mux is full
 
 #if SFTE_MUX
     int8_t idx = sfte_term_get_idx(ctx, new_term);
-    uint8_t prev_idx = ctx->mux.active_idx;
+    uint8_t prev_idx = mux->active_idx;
     _SFTE_MUX_SWITCH_FOCUS(ctx, prev_idx, idx);
 #endif  // SFTE_MUX
 
@@ -10881,7 +11041,7 @@ static inline void _sfte_wayland_pty_spawn(sfte_wayland_app *app) {
     if (*pid == -1) {
         sfte_term_close(ctx, new_term);
 #if SFTE_MUX
-        ctx->mux.active_idx = prev_idx;
+        mux->active_idx = prev_idx;
 #endif  // SFTE_MUX
         return;
     }
@@ -11965,7 +12125,9 @@ void sfte_free(sfte_ctx *ctx) {
     if (!ctx) return;
 
 #if SFTE_MUX
-    for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) _sfte_term_free(&ctx->mux.terms[i]);
+    sfte_mux *mux = &ctx->mux;
+
+    for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) _sfte_term_free(&mux->terms[i]);
 #else   // !SFTE_MUX
     _sfte_term_free(&ctx->term);
 #endif  // !SFTE_MUX
@@ -12247,8 +12409,10 @@ uint8_t sfte_tick(sfte_ctx *ctx) {
 
 sfte_term *sfte_term_get_at(sfte_ctx *ctx, uint8_t idx) {
 #if SFTE_MUX
-    if (idx >= SFTE_MUX_MAX_WINDOWS || !ctx->mux.terms[idx].is_allocated) return NULL;
-    return &ctx->mux.terms[idx];
+    sfte_mux *mux = &ctx->mux;
+
+    if (idx >= SFTE_MUX_MAX_WINDOWS || !mux->terms[idx].is_allocated) return NULL;
+    return &mux->terms[idx];
 #else   // !SFTE_MUX
     (void)idx;
     return &ctx->term;
@@ -12257,7 +12421,9 @@ sfte_term *sfte_term_get_at(sfte_ctx *ctx, uint8_t idx) {
 
 sfte_term *sfte_term_get_active(sfte_ctx *ctx) {
 #if SFTE_MUX
-    return &ctx->mux.terms[ctx->mux.active_idx];
+    sfte_mux *mux = &ctx->mux;
+
+    return &mux->terms[mux->active_idx];
 #else   // !SFTE_MUX
     return &ctx->term;
 #endif  // !SFTE_MUX
@@ -12266,7 +12432,9 @@ sfte_term *sfte_term_get_active(sfte_ctx *ctx) {
 int8_t sfte_term_get_idx(sfte_ctx *ctx, sfte_term *term) {
     if (!ctx || !term) return -1;
 #if SFTE_MUX
-    return (int8_t)(term - ctx->mux.terms);
+    sfte_mux *mux = &ctx->mux;
+
+    return (int8_t)(term - mux->terms);
 #else   // !SFTE_MUX
     return 0;
 #endif  // !SFTE_MUX
@@ -12274,9 +12442,11 @@ int8_t sfte_term_get_idx(sfte_ctx *ctx, sfte_term *term) {
 
 sfte_term *sfte_term_spawn(sfte_ctx *ctx) {
 #if SFTE_MUX
+    sfte_mux *mux = &ctx->mux;
+
     int8_t idx = _sfte_term_get_new_idx(ctx);
     if (idx == -1) return NULL;
-    sfte_term *term = &ctx->mux.terms[idx];
+    sfte_term *term = &mux->terms[idx];
 #else   // !SFTE_MUX
     if (ctx->term.is_allocated) return NULL;
     sfte_term *term = &ctx->term;
@@ -12299,24 +12469,28 @@ sfte_term *sfte_term_spawn(sfte_ctx *ctx) {
 uint8_t sfte_term_close(sfte_ctx *ctx, sfte_term *term) {
     if (!ctx || !term || !term->is_allocated) return 0;
 
+#if SFTE_MUX
+    sfte_mux *mux = &ctx->mux;
+#endif  // SFTE_MUX
+
     _sfte_term_free(term);
 
 #if SFTE_MUX
-    int8_t closed_idx = (int8_t)(term - ctx->mux.terms);
+    int8_t closed_idx = sfte_term_get_idx(ctx, term);
 
     // If closed the active window, shift focus
-    if (ctx->mux.active_idx == closed_idx) {
+    if (mux->active_idx == closed_idx) {
         int8_t next_idx = -1;
 
         for (int8_t i = closed_idx - 1; i >= 0; i--)
-            if (ctx->mux.terms[i].is_allocated) {
+            if (mux->terms[i].is_allocated) {
                 next_idx = i;
                 break;
             }
 
         if (next_idx == -1)
             for (int8_t i = closed_idx + 1; i < SFTE_MUX_MAX_WINDOWS; ++i)
-                if (ctx->mux.terms[i].is_allocated) {
+                if (mux->terms[i].is_allocated) {
                     next_idx = i;
                     break;
                 }
@@ -12392,6 +12566,9 @@ void sfte_parse(sfte_term *term, const uint8_t *data, size_t len) {
 }
 
 void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_rect *out_dmg) {
+#if SFTE_MUX
+    sfte_mux *mux = &ctx->mux;
+#endif  // SFTE_MUX
     sfte_window_state *win = &ctx->window;
     sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
@@ -12458,6 +12635,12 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
     _sfte_grid_dirty_rows(term, vp->rows - 1, vp->rows - 1);
 #endif  // !SFTE_MUX_BAR_PLACEMENT_TOP
 #endif  // SFTE_MUX_BAR && SFTE_MUX_BAR_HOVER
+#if SFTE_MUX_PREFIX_PREVIEW
+    if (mux->is_prefix_active || mux->was_prefix_active) {
+        _sfte_grid_dirty_rows(term, 0, vp->rows - 1);
+        mux->was_prefix_active = mux->is_prefix_active;
+    }
+#endif  // SFTE_MUX_PREFIX_PREVIEW
 #if SFTE_CURSOR_TRAIL
     _sfte_grid_dirty_trail(trail, term);
 #endif  // SFTE_CURSOR_TRAIL
@@ -12502,7 +12685,12 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
 #endif  // SFTE_TERM_ALT_SCREEN
 
 #if SFTE_MUX_BAR
-    _sfte_render_mux_bar(ctx, px_buf, out_dmg);
+#if SFTE_MUX_PREFIX_PREVIEW
+    if (mux->is_prefix_active)
+        _sfte_render_mux_preview(ctx, px_buf, out_dmg);
+    else
+#endif  // SFTE_MUX_PREFIX_PREVIEW
+        _sfte_render_mux_bar(ctx, px_buf, out_dmg);
 #endif  // SFTE_MUX_BAR
 
 #if SFTE_SEARCH
@@ -12629,6 +12817,10 @@ void sfte_input_text(sfte_ctx *ctx, const char *text, size_t len) {
 }
 
 uint8_t sfte_input_shortcut(sfte_ctx *ctx, sfte_key key, uint32_t mod_mask) {
+#if SFTE_MUX
+    sfte_mux *mux = &ctx->mux;
+#endif  // SFTE_MUX
+
     uint8_t handled = 0;
 
     for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_shortcuts); ++i)
@@ -12640,8 +12832,8 @@ uint8_t sfte_input_shortcut(sfte_ctx *ctx, sfte_key key, uint32_t mod_mask) {
 #if SFTE_MUX
     // If the shortcut returned 2, it's explicitly asking to keep the prefix active.
     // 2 is only returned by `_sfte_mux_prefix_shortcut`.
-    if (ctx->mux.is_prefix_active && handled != 2) {
-        ctx->mux.is_prefix_active = 0;
+    if (mux->is_prefix_active && handled != 2) {
+        mux->is_prefix_active = 0;
         if (handled == 0) handled = 1;  // Consume invalid post-prefix input
     }
 #endif  // SFTE_MUX
