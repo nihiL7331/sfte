@@ -60,21 +60,21 @@ static uint8_t install_target(void) {
     if (!nob_mkdir_if_not_exists(desktop.items)) return 1;
     if (!nob_mkdir_if_not_exists(icon.items)) return 1;
 
-    const char *bin_path = nob_temp_sprintf("%s/sfte-present", bin.items);
+    const char *bin_path = nob_temp_sprintf("%s/sfte", bin.items);
     remove(bin_path);  // Unlink the binary before replacing
-    if (!nob_copy_file("sfte-present", bin_path)) return 1;
+    if (!nob_copy_file("sfte", bin_path)) return 1;
 
     const char *desktop_content = "[Desktop Entry]\n"
                                   "Type=Application\n"
-                                  "Name=sfte-present\n"
+                                  "Name=sfte\n"
                                   "GenericName=Terminal Emulator\n"
                                   "Comment=single-file terminal emulator\n"
-                                  "Exec=sfte-present\n"
-                                  "Icon=sfte-present\n"
+                                  "Exec=sfte\n"
+                                  "Icon=sfte\n"
                                   "Terminal=false\n"
                                   "Categories=System;TerminalEmulator;Utility;\n"
                                   "StartupNotify=true\n";
-    const char *desktop_path = nob_temp_sprintf("%s/sfte-present.desktop", desktop.items);
+    const char *desktop_path = nob_temp_sprintf("%s/sfte.desktop", desktop.items);
     if (!nob_write_entire_file(desktop_path, desktop_content, strlen(desktop_content))) return 1;
 
     const char *icon_content = "<?xml version='1.0' encoding='UTF-8' ?>\n"
@@ -165,7 +165,7 @@ static uint8_t install_target(void) {
                                "<rect x='31' y='28' width='1' height='1' fill='#847E87' />\n"
                                "<rect x='1' y='29' width='30' height='1' fill='#847E87' />\n"
                                "</svg>\n";
-    const char *icon_path = nob_temp_sprintf("%s/sfte-present.svg", icon.items);
+    const char *icon_path = nob_temp_sprintf("%s/sfte.svg", icon.items);
     if (!nob_write_entire_file(icon_path, icon_content, strlen(icon_content))) return 1;
 
     nob_log(NOB_INFO, "Installation complete.");
@@ -283,9 +283,9 @@ int main(int argc, char **argv) {
         if (!nob_copy_file("config.def.c", "config.c")) return 1;
     }
 
-    nob_cmd_append(&cmd, "clang", "-Wall", "-Wextra", "-march=native", "config.c", "-o",
-                   "sfte-present", "-lwayland-client", "-lrt", "-lm", "-D_GNU_SOURCE", "-lutil",
-                   "-lxkbcommon", "-std=c11");
+    nob_cmd_append(&cmd, "clang", "-Wall", "-Wextra", "-march=native", "config.c", "-o", "sfte",
+                   "-lwayland-client", "-lrt", "-lm", "-D_GNU_SOURCE", "-lutil", "-lxkbcommon",
+                   "-std=c11");
 
     if (mode == MODE_DEV)
         nob_cmd_append(&cmd, "-DSFTE_DEV_ENV", "-O0", "-g", "-fno-omit-frame-pointer",

@@ -1496,6 +1496,15 @@ _SFTE_ENSURE_RANGE(SFTE_MUX_PREVIEW_HOVER_BG, 0x000000, 0xFFFFFF);
 #endif  // SFTE_MUX_MAX_WINDOWS
 _SFTE_ENSURE_RANGE(SFTE_MUX_MAX_WINDOWS, 0, 99);
 
+/*
+    If multiplexer is disabled,
+    treat the terminal as a one-window multiplexed terminal.
+*/
+#if !SFTE_MUX
+#undef SFTE_MUX_MAX_WINDOWS
+#define SFTE_MUX_MAX_WINDOWS 1
+#endif // !SFTE_MUX
+
 // =================================================================================================
 // >>input macros
 // =================================================================================================
@@ -2748,7 +2757,6 @@ struct sfte_term {
     uint8_t is_allocated;
 };
 
-#if SFTE_MUX
 /*
     Terminal windows state for the multiplexer.
 */
@@ -2775,7 +2783,6 @@ typedef struct sfte_mux {
     int8_t pending_reorder;  // -1 for left, 1 for right
     uint8_t ui_dirty;
 } sfte_mux;
-#endif  // SFTE_MUX
 
 /*
     Central typography metrics and caching.
@@ -2811,17 +2818,10 @@ typedef struct sfte_window_state {
     Main context for the emulator core.
 */
 struct sfte_ctx {
-#if SFTE_MUX
     sfte_mux mux;
-#else   // !SFTE_MUX
-    sfte_term term;
-#endif  // !SFTE_MUX
-
     sfte_font_state font;
-
     sfte_callbacks cb;
     sfte_window_state window;
-
 #ifndef SFTE_NO_LOGGING
     sfte_logger logger;
 #endif  // !SFTE_NO_LOGGING
@@ -2867,19 +2867,11 @@ struct sfte_wayland_app {
     int32_t width, height;
     int32_t pending_width, pending_height;
     int32_t mouse_x, mouse_y;
-#if SFTE_MUX
     int32_t pty_fds[SFTE_MUX_MAX_WINDOWS];  // Master file descriptor to read/write from
     pid_t pty_pids[SFTE_MUX_MAX_WINDOWS];   // PID of shell
 #if SFTE_TERM_RESURRECT
     int32_t log_fds[SFTE_MUX_MAX_WINDOWS];
 #endif  // SFTE_TERM_RESURRECT
-#else   // !SFTE_MUX
-    int32_t pty_fd;
-    pid_t pty_pid;
-#if SFTE_TERM_RESURRECT
-    int32_t log_fd;
-#endif  // SFTE_TERM_RESURRECT
-#endif  // !SFTE_MUX
 
     int32_t repeat_timer_fd;
     int32_t repeat_rate;
@@ -3551,16 +3543,10 @@ static inline void _sfte_log(sfte_log_func log_func, _sfte_log_item log_item,
     Returns -1 if none is found.
 */
 static inline int8_t _sfte_term_get_new_idx(sfte_ctx *ctx) {
-#if SFTE_MUX
     sfte_mux *mux = &ctx->mux;
-
     for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i)
         if (!mux->terms[i].is_allocated) return i;
     return -1;
-#else   // !SFTE_MUX
-    (void)ctx;
-    return 0;
-#endif  // !SFTE_MUX
 }
 
 /*
@@ -9154,9 +9140,7 @@ static inline void _sfte_font_resolve_rune(sfte_font_cache *cache, sfte_rune run
     Must be called on startup, and whenever the DPI or font size changes.
 */
 static inline void _sfte_font_reset_cache(sfte_ctx *ctx) {
-#if SFTE_MUX
     sfte_mux *mux = &ctx->mux;
-#endif  // SFTE_MUX
     sfte_font_state *font = &ctx->font;
     sfte_term *term = sfte_term_get_active(ctx);
     sfte_stack *stack = &term->stack;
@@ -9196,18 +9180,12 @@ static inline void _sfte_font_reset_cache(sfte_ctx *ctx) {
     sfte_glyph *m = _sfte_font_get_glyph(stack, &font->regular, m_glyph_id, m_font_idx);
     int16_t cell_w = m->xadvance;
 
-#if SFTE_MUX
     for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i)
         if (mux->terms[i].is_allocated) {
             sfte_viewport_state *vp = &mux->terms[i].viewport;
             vp->cell_width = cell_w;
             vp->cell_height = cell_h;
         }
-#else   // !SFTE_MUX
-    sfte_viewport_state *vp = &ctx->term.viewport;
-    vp->cell_width = cell_w;
-    vp->cell_height = cell_h;
-#endif  // !SFTE_MUX
 }
 // =================================================================================================
 // >>render
@@ -10993,7 +10971,6 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
 */
 static inline void _sfte_wayland_get_pty(sfte_wayland_app *app, int32_t **out_fd,
                                          int32_t **out_log_fd, pid_t **out_pid) {
-#if SFTE_MUX
     sfte_ctx *ctx = app->ctx;
     sfte_mux *mux = &ctx->mux;
     if (out_fd) *out_fd = &app->pty_fds[mux->active_idx];
@@ -11001,13 +10978,6 @@ static inline void _sfte_wayland_get_pty(sfte_wayland_app *app, int32_t **out_fd
     if (out_log_fd) *out_log_fd = &app->log_fds[mux->active_idx];
 #endif  // SFTE_TERM_RESURRECT
     if (out_pid) *out_pid = &app->pty_pids[mux->active_idx];
-#else  // !SFTE_MUX
-    if (out_fd) *out_fd = &app->pty_fd;
-#if SFTE_TERM_RESURRECT
-    if (out_log_fd) *out_log_fd = &app->log_fd;
-#endif  // SFTE_TERM_RESURRECT
-    if (out_pid) *out_pid = &app->pty_pid;
-#endif  // !SFTE_MUX
 }
 
 /*
@@ -11113,18 +11083,10 @@ static inline void _sfte_wayland_pty_spawn(sfte_wayland_app *app) {
 
 static inline void _sfte_wayland_pty_update(sfte_wayland_app *app) {
     sfte_ctx *ctx = app->ctx;
-#if SFTE_MUX
     sfte_mux *mux = &ctx->mux;
     for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i)
         if (mux->terms[i].is_allocated && app->pty_fds[i] >= 0)
             sfte_posix_pty_resize(&mux->terms[i], app->pty_fds[i], app->width, app->height);
-#else   // !SFTE_MUX
-    sfte_term *term = sfte_term_get_active(ctx);
-
-    int32_t *fd;
-    _sfte_wayland_get_pty(app, &fd, NULL, NULL);
-    sfte_posix_pty_resize(term, *fd, app->width, app->height);
-#endif  // !SFTE_MUX
 }
 
 #if SFTE_FONT_ZOOM
@@ -11917,9 +11879,7 @@ static inline uint8_t _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_ar
 */
 static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
     sfte_ctx *ctx = app->ctx;
-#if SFTE_MUX
     sfte_mux *mux = &ctx->mux;
-#endif  // SFTE_MUX
 
     signal(SIGPIPE, SIG_IGN);
     setlocale(LC_ALL, "");
@@ -11932,32 +11892,19 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
         wl_display_dispatch_pending(app->display);
         wl_display_flush(app->display);
 
-#if SFTE_MUX
         struct pollfd fds[2 + SFTE_MUX_MAX_WINDOWS];
         sfte_term *term_map[SFTE_MUX_MAX_WINDOWS];
-#else   // !SFTE_MUX
-        struct pollfd fds[3];
-        sfte_term *term_map[1];
-#endif  // !SFTE_MUX
 
         fds[0] = (struct pollfd){.fd = wl_fd, .events = POLLIN};
         fds[1] = (struct pollfd){.fd = app->repeat_timer_fd, .events = POLLIN};
         uint8_t nfds = 2;
 
-#if SFTE_MUX
         for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i)
             if (app->pty_fds[i] >= 0 && mux->terms[i].is_allocated) {
                 fds[nfds] = (struct pollfd){.fd = app->pty_fds[i], .events = POLLIN};
                 term_map[nfds - 2] = &mux->terms[i];
                 nfds++;
             }
-#else   // !SFTE_MUX
-        if (app->pty_fd >= 0) {
-            fds[nfds] = (struct pollfd){.fd = app->pty_fd, .events = POLLIN};
-            term_map[nfds - 2] = &ctx->term;
-            nfds++;
-        }
-#endif  // !SFTE_MUX
 
         int32_t timeout = sfte_get_timeout_ms(ctx);
         if (app->needs_render) timeout = 0;  // Don't sleep if we already know we need to draw
@@ -12083,11 +12030,7 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
 
                 if (n > 0) {
 #if SFTE_TERM_RESURRECT
-#if SFTE_MUX
                     if (app->log_fds[p - 2] >= 0) write(app->log_fds[p - 2], buf, n);
-#else   // !SFTE_MUX
-                    if (app->log_fd >= 0) write(app->log_fd, buf, n);
-#endif  // !SFTE_MUX
 #endif  // SFTE_TERM_RESURRECT
 
                     sfte_parse(target_term, buf, n);
@@ -12095,7 +12038,6 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
                 } else if (n == 0) {
                     close(cur_fd);
 
-#if SFTE_MUX
                     int8_t idx = sfte_term_get_idx(ctx, target_term);
                     app->pty_fds[idx] = -1;
                     app->pty_pids[idx] = -1;
@@ -12108,12 +12050,6 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
                     snprintf(log_path, sizeof(log_path), "/tmp/sfte_tab_%d.log", idx);
                     unlink(log_path);
 #endif  // SFTE_TERM_RESURRECT
-#else   // !SFTE_MUX
-#if SFTE_TERM_RESURRECT
-                    if (app->log_fd >= 0) close(app->log_fd);
-                    app->log_fd = -1;
-#endif  // SFTE_TERM_RESURRECT
-#endif  // !SFTE_MUX
 
                     if (!sfte_term_close(ctx, target_term)) app->running = 0;
                     break;
@@ -12124,23 +12060,17 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
                 else {
                     close(cur_fd);
 
-#if SFTE_MUX
                     int8_t idx = sfte_term_get_idx(ctx, target_term);
                     app->pty_fds[idx] = -1;
                     app->pty_pids[idx] = -1;
-#endif  // !SFTE_MUX
 
                     if (!sfte_term_close(ctx, target_term)) app->running = 0;
                     break;
                 }
             }
 
-            if (did_read) {
-#if SFTE_MUX
-                if (sfte_term_get_active(ctx) == target_term)
-#endif  // SFTE_MUX
-                    app->needs_render = 1;
-            }
+            if (did_read && sfte_term_get_active(ctx) == target_term)
+                app->needs_render = 1;
         }
 
         // Dispatch render pass
@@ -12219,13 +12149,8 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
 void sfte_free(sfte_ctx *ctx) {
     if (!ctx) return;
 
-#if SFTE_MUX
     sfte_mux *mux = &ctx->mux;
-
     for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) _sfte_term_free(&mux->terms[i]);
-#else   // !SFTE_MUX
-    _sfte_term_free(&ctx->term);
-#endif  // !SFTE_MUX
 
     sfte_font_state *font = &ctx->font;
 
@@ -12543,49 +12468,28 @@ uint8_t sfte_tick(sfte_ctx *ctx) {
 }
 
 sfte_term *sfte_term_get_at(sfte_ctx *ctx, uint8_t idx) {
-#if SFTE_MUX
-    sfte_mux *mux = &ctx->mux;
-
-    if (idx >= SFTE_MUX_MAX_WINDOWS || !mux->terms[idx].is_allocated) return NULL;
-    return &mux->terms[idx];
-#else   // !SFTE_MUX
-    (void)idx;
-    return &ctx->term;
-#endif  // !SFTE_MUX
+    if (idx >= SFTE_MUX_MAX_WINDOWS) return NULL;
+    sfte_term *term = &ctx->mux.terms[idx];
+    return term->is_allocated ? term : NULL;
 }
 
 sfte_term *sfte_term_get_active(sfte_ctx *ctx) {
-#if SFTE_MUX
     sfte_mux *mux = &ctx->mux;
-
     return &mux->terms[mux->active_idx];
-#else   // !SFTE_MUX
-    return &ctx->term;
-#endif  // !SFTE_MUX
 }
 
 int8_t sfte_term_get_idx(sfte_ctx *ctx, sfte_term *term) {
     if (!ctx || !term) return -1;
-#if SFTE_MUX
     sfte_mux *mux = &ctx->mux;
-
     return (int8_t)(term - mux->terms);
-#else   // !SFTE_MUX
-    return 0;
-#endif  // !SFTE_MUX
 }
 
 sfte_term *sfte_term_spawn(sfte_ctx *ctx) {
-#if SFTE_MUX
     sfte_mux *mux = &ctx->mux;
 
     int8_t idx = _sfte_term_get_new_idx(ctx);
     if (idx == -1) return NULL;
     sfte_term *term = &mux->terms[idx];
-#else   // !SFTE_MUX
-    if (ctx->term.is_allocated) return NULL;
-    sfte_term *term = &ctx->term;
-#endif  // !SFTE_MUX
 
     sfte_term *active_term = sfte_term_get_active(ctx);
     if (active_term && !active_term->is_allocated) active_term = NULL;
@@ -12875,7 +12779,6 @@ void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
 #endif  // SFTE_MUX_BAR && !SFTE_MUX_BAR_HOVER
     if (new_rows < 1) new_rows = 1;
 
-#if SFTE_MUX
     sfte_mux *mux = &ctx->mux;
     for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) {
         sfte_term *t = &mux->terms[i];
@@ -12891,17 +12794,6 @@ void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
                                   -t->viewport.sb_off + t->viewport.rows - 1);
         }
     }
-#else   // !SFTE_MUX
-    if (new_cols != vp->cols || new_rows != vp->rows) {
-        _sfte_grid_resize(term, new_cols, new_rows);
-
-#if SFTE_CURSOR_TRAIL
-        term->cursor.trail.warp_tail = 1;
-#endif  // SFTE_CURSOR_TRAIL
-    } else {
-        _sfte_grid_dirty_rows(term, -vp->sb_off, -vp->sb_off + vp->rows - 1);
-    }
-#endif  // !SFTE_MUX
 }
 
 #if SFTE_FONT_ZOOM
@@ -13733,9 +13625,6 @@ sfte_wayland_app *sfte_wayland_init(void) {
     app->ctx->cb.open_link = _sfte_wayland_open_link_cb;
 #endif  // SFTE_INPUT_HYPERLINKS
 
-// The initialization isn't necessary for non-multiplexed config,
-// since then we spawn the ONLY PTY instantly
-#if SFTE_MUX
     for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) {
         app->pty_fds[i] = -1;
         app->pty_pids[i] = -1;
@@ -13743,7 +13632,6 @@ sfte_wayland_app *sfte_wayland_init(void) {
         app->log_fds[i] = -1;
 #endif  // SFTE_TERM_RESURRECT
     }
-#endif  // SFTE_MULTIPLIER
 
     _sfte_wayland_load(app);
     _sfte_wayland_pty_spawn(app);
@@ -13757,9 +13645,7 @@ sfte_ctx *sfte_wayland_get_ctx(sfte_wayland_app *app) {
 
 int sfte_wayland_run(sfte_wayland_app *app) {
     sfte_ctx *ctx = app->ctx;
-#if SFTE_MUX
     sfte_mux *mux = &ctx->mux;
-#endif  // SFTE_MUX
     sfte_term *term = sfte_term_get_active(ctx);
 
 #ifdef SFTE_FONT_BOLD
@@ -13785,8 +13671,8 @@ int sfte_wayland_run(sfte_wayland_app *app) {
     sfte_resize(ctx, app->width, app->height);
     if (!app->buffer) _sfte_wayland_create_buffer(app);
 
-#if SFTE_TERM_RESURRECT && SFTE_MUX
-    for (uint8_t i = 1; i < SFTE_MUX_MAX_WINDOWS; ++i) {
+#if SFTE_TERM_RESURRECT
+    for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) {
         char log_path[128];
         snprintf(log_path, sizeof(log_path), "/tmp/sfte_tab_%d.log", i);
         if (access(log_path, F_OK) == 0) _sfte_wayland_pty_spawn(app);
