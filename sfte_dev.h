@@ -2554,6 +2554,7 @@ typedef struct sfte_parser_state {
     uint16_t params[16];
     uint8_t param_idx;
     uint8_t dec_priv;
+    uint8_t csi_inter;
 
     char *osc_payload;
     size_t osc_len;
@@ -2690,6 +2691,7 @@ typedef struct sfte_render_buffers {
 struct sfte_term {
     sfte_cell *cells;
     uint8_t *tab_stops;
+    uint8_t tab_width;
 #if SFTE_TERM_SCROLLBACK_CAP
     sfte_cell *scrollback;
 #endif  // SFTE_TERM_SCROLLBACK_CAP
@@ -3581,6 +3583,7 @@ static inline void _sfte_term_init(sfte_term *term, const sfte_callbacks *cb, in
     void *stack_back_buf = SFTE_MALLOC(SFTE_MEM_STACK_SIZE);
     _sfte_mem_stack_init(stack, stack_back_buf, SFTE_MEM_STACK_SIZE);
 
+    term->tab_width = SFTE_TERM_TAB_WIDTH;
     _sfte_grid_resize_tabs(term, 0, cols);
 
     term->is_allocated = 1;
@@ -5174,11 +5177,12 @@ static inline void _sfte_grid_resize_tabs(sfte_term *term, int16_t old_cols, int
     uint8_t *new_tabs = (uint8_t *)SFTE_MALLOC(new_cols);
     SFTE_ASSERT(new_tabs, "failed to allocate new tab stops");
 
+    uint8_t tw = term->tab_width ? term->tab_width : SFTE_TERM_TAB_WIDTH;
     for (int16_t i = 0; i < new_cols; ++i) {
         if (i < old_cols)
             new_tabs[i] = term->tab_stops[i];
         else
-            new_tabs[i] = (i % SFTE_TERM_TAB_WIDTH == 0);
+            new_tabs[i] = (i % tw == 0);
     }
 
     SFTE_FREE(term->tab_stops);
@@ -7602,6 +7606,8 @@ static inline void _sfte_csi_exec_decstr(sfte_term *term, int16_t col) {
     sgr->bg = _SFTE_COLOR_BG_DEFAULT;
     sgr->attr = 0;
     cursor->hidden = 0;
+    term->tab_width = SFTE_TERM_TAB_WIDTH;
+    _sfte_grid_resize_tabs(term, vp->cols, 0);
     _sfte_grid_get_cell(term, col, cursor->row)->dirty = 1;
 }
 
@@ -7827,6 +7833,12 @@ static inline void _sfte_csi_dispatch(sfte_term *term, uint8_t cmd) {
         cursor->col = _SFTE_CLAMP(_SFTE_P_IDX(p[1]), 0, vp->cols - 1);
         cursor->row = _SFTE_CLAMP(_SFTE_P_IDX(p[0]), 0, vp->rows - 1);
         break;
+    case 'I':  // CHT / Cursor Forward Tabulation
+        for (int16_t i = 0, n = _SFTE_P(p[0]); i < n; ++i) {
+            while (cursor->col < vp->cols - 1)
+                if (term->tab_stops[++cursor->col]) break;
+        }
+        break;
     case 'J':
         if (parser->dec_priv == 0)
             for (int i = 0; i < cnt; ++i) _sfte_csi_exec_ed(term, p[i], col);
@@ -7840,9 +7852,22 @@ static inline void _sfte_csi_dispatch(sfte_term *term, uint8_t cmd) {
     case 'P': _sfte_csi_exec_dch(term, p, col); break;
     case 'S': _sfte_grid_scroll(term, _SFTE_P(p[0])); break;
     case 'T': _sfte_grid_scroll(term, -_SFTE_P(p[0])); break;
+    case 'W':  // DECST8C / Set Tab at Every 8 Columns
+        if (parser->dec_priv == 1 && p[0] == 5) {
+            term->tab_width = 8;
+            for (int16_t i = 0; i < vp->cols; ++i) term->tab_stops[i] = (i % 8 == 0);
+        }
+        break;
     case 'X': _sfte_csi_exec_ech(term, p, col); break;
+    case 'Z':  // CBT / Cursor Backward Tabulation
+        for (int16_t i = 0, n = _SFTE_P(p[0]); i < n; ++i) {
+            if (cursor->col >= vp->cols) cursor->col = vp->cols - 1;
+            while (cursor->col > 0)
+                if (term->tab_stops[--cursor->col]) break;
+        }
+        break;
     case 'c':
-        if (parser->dec_priv == 0) _sfte_csi_exec_da(term);
+        if (parser->dec_priv == 0 || parser->dec_priv == 2) _sfte_csi_exec_da(term);
         break;
     case 'd': _sfte_csi_exec_vpa(term, p); break;
     case 'f': _sfte_csi_exec_hvp(term, p);
@@ -7857,12 +7882,18 @@ static inline void _sfte_csi_dispatch(sfte_term *term, uint8_t cmd) {
         if (parser->dec_priv == 0) _sfte_csi_exec_sgr(sgr, p, cnt);
         break;
     case 'n': _sfte_csi_exec_dsr(term, p); break;
-    case 'p': _sfte_csi_exec_decstr(term, col);
+    case 'p':
+        if (parser->dec_priv == 0 && (parser->csi_inter == 0 || parser->csi_inter == '!')) {
+            _sfte_csi_exec_decstr(term, col);
 #if SFTE_CURSOR_TRAIL
-        trail->last_move_ms = 0;
+            trail->last_move_ms = 0;
 #endif  // SFTE_CURSOR_TRAIL
+        }
         break;
-    case 'q': _sfte_csi_exec_decscusr(term, p, col); break;
+    case 'q':
+        if (parser->dec_priv == 0 && (parser->csi_inter == 0 || parser->csi_inter == ' '))
+            _sfte_csi_exec_decscusr(term, p, col);
+        break;
     case 'r': _sfte_csi_exec_decstbm(term, p, cnt); break;
     case 's':
         if (parser->dec_priv == 0) _sfte_csi_exec_scosc(term, p);
@@ -8002,7 +8033,7 @@ static inline void _sfte_parser_c0_ht(sfte_term *term) {
     sfte_cursor_state *cursor = &term->cursor;
 
     while (cursor->col < vp->cols - 1)
-        if (term->tab_stops[cursor->col++]) break;
+        if (term->tab_stops[++cursor->col]) break;
 }
 
 /*
@@ -8014,6 +8045,8 @@ static inline void _sfte_parser_esc_ris(sfte_term *term) {
     const sfte_viewport_state *vp = &term->viewport;
     sfte_cursor_state *cursor = &term->cursor;
 
+    term->parser.dec_priv = 0;
+    term->parser.csi_inter = 0;
     _sfte_csi_dispatch(term, 'p');
     cursor->col = 0, cursor->row = 0;
     _sfte_grid_clear_cells(term, 0, vp->cols * vp->rows);
@@ -8338,6 +8371,7 @@ static inline void _sfte_parser_feed_byte(sfte_term *term, uint8_t b) {
             parser->state = VT_CSI_ENTRY;
             parser->param_idx = 0;
             parser->dec_priv = 0;
+            parser->csi_inter = 0;
             memset(parser->params, 0, sizeof(parser->params));
         } else if (b == ']') {
             parser->state = VT_OSC;
@@ -8368,6 +8402,9 @@ static inline void _sfte_parser_feed_byte(sfte_term *term, uint8_t b) {
             parser->state = VT_GROUND;
         } else if (b == 'E') {
             _sfte_parser_esc_nel(term);
+            parser->state = VT_GROUND;
+        } else if (b == 'H') {
+            term->tab_stops[_SFTE_CLAMP(cursor->col, 0, term->viewport.cols - 1)] = 1;
             parser->state = VT_GROUND;
         } else
             parser->state = VT_GROUND;
@@ -8443,6 +8480,9 @@ static inline void _sfte_parser_feed_byte(sfte_term *term, uint8_t b) {
             parser->params[parser->param_idx] += (b - '0');
         } else if (b == ';' || b == ':') {
             if (parser->param_idx < 15) parser->param_idx++;  // Move to next parameter
+        } else if (b >= 0x20 && b <= 0x2F) {
+            parser->state = VT_CSI_PARAM;
+            parser->csi_inter = b;
         } else if (b >= 0x40 && b <= 0x7E) {
             _sfte_csi_dispatch(term, b);
             parser->state = VT_GROUND;
