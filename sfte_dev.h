@@ -3731,9 +3731,9 @@ static inline void _sfte_term_free(sfte_term *term) {
 #define _SFTE_MUX_SWITCH_FOCUS(ctx_ptr, old_idx, new_idx)                                          \
     do {                                                                                           \
         sfte_term *_new = &(ctx_ptr)->mux.terms[new_idx];                                          \
-        for (int _j = 0; _j < _new->viewport.cols * _new->viewport.rows; ++_j) {                   \
-            _new->cells[_j].dirty = 1;                                                             \
-        }                                                                                          \
+        _sfte_grid_dirty_rows(_new, -_new->viewport.sb_off,                                        \
+                              -_new->viewport.sb_off + _new->viewport.rows - 1);                   \
+        (ctx_ptr)->window.pad_dirty = 1;                                                           \
         (ctx_ptr)->mux.active_idx = (new_idx);                                                     \
     } while (0)
 #endif
@@ -3839,8 +3839,6 @@ static inline uint8_t _sfte_mux_goto_shortcut(sfte_ctx *ctx, const sfte_arg *arg
 
     mux->is_prefix_active = 0;
     int target_idx = arg->i;
-
-    fprintf(stderr, "setting to: %d", target_idx);
 
     if (target_idx >= 0 && target_idx < SFTE_MUX_MAX_WINDOWS &&
         mux->terms[target_idx].is_allocated) {
@@ -9717,7 +9715,7 @@ static inline void _sfte_render_mux_preview(sfte_ctx *ctx, void *px_buf,
         for (int32_t x = 0; x < win->width; ++x)
             SFTE_COLOR_BLEND_PIXEL(px_buf, x, y, win->width,
                                    SFTE_MUX_PREVIEW_BG & ~SFTE_COLOR_ALPHA_MASK,
-                                   (uint8_t)(SFTE_MUX_PREVIEW_BG & SFTE_COLOR_ALPHA_MASK) >> 24);
+                                   (uint8_t)((SFTE_MUX_PREVIEW_BG & SFTE_COLOR_ALPHA_MASK) >> 24));
     _sfte_render_damage_add(out_dmg, 0, 0, win->width, win->height);
 
     int16_t modal_cols = vp->cols - SFTE_MUX_PREVIEW_MARGIN * 2;
@@ -10338,6 +10336,10 @@ static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col,
 #endif  // SFTE_SEARCH
     const sfte_viewport_state *vp = &term->viewport;
     const sfte_cursor_state *cursor = &term->cursor;
+
+#if SFTE_MUX_PREFIX_PREVIEW
+    if (mux->is_prefix_active) return;
+#endif  // SFTE_MUX_PREFIX_PREVIEW
 
 #if SFTE_CURSOR_TRAIL
     _sfte_render_update_trail(ctx);
@@ -12349,6 +12351,9 @@ int32_t sfte_get_timeout_ms(sfte_ctx *ctx) {
 #if SFTE_CURSOR_TRAIL
     if (trail->is_trailing) return frame_ms;
 #endif  // SFTE_CURSOR_TRAIL
+#if SFTE_INPUT_MOUSE && SFTE_INPUT_SELECTION && SFTE_TERM_SCROLLBACK_CAP
+    if (mouse->sel_dragging && mouse->sel_scroll_dir != 0) return frame_ms;
+#endif  // SFTE_INPUT_MOUSE && SFTE_INPUT_SELECTION && SFTE_TERM_SCROLLBACK_CAP
 
     int32_t timeout = -1;
 
@@ -12694,7 +12699,7 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
 #endif  // SFTE_MUX_BAR && SFTE_MUX_BAR_HOVER
 #if SFTE_MUX_PREFIX_PREVIEW
     if (mux->is_prefix_active || mux->was_prefix_active) {
-        _sfte_grid_dirty_rows(term, 0, vp->rows - 1);
+        _sfte_grid_dirty_rows(term, -vp->sb_off, -vp->sb_off + vp->rows - 1);
         mux->was_prefix_active = mux->is_prefix_active;
     }
 #endif  // SFTE_MUX_PREFIX_PREVIEW
@@ -12800,6 +12805,23 @@ void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
 #endif  // SFTE_MUX_BAR && !SFTE_MUX_BAR_HOVER
     if (new_rows < 1) new_rows = 1;
 
+#if SFTE_MUX
+    sfte_mux *mux = &ctx->mux;
+    for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) {
+        sfte_term *t = &mux->terms[i];
+        if (!t->is_allocated) continue;
+
+        if (new_cols != t->viewport.cols || new_rows != t->viewport.rows) {
+            _sfte_grid_resize(t, new_cols, new_rows);
+#if SFTE_CURSOR_TRAIL
+            t->cursor.trail.warp_tail = 1;
+#endif  // SFTE_CURSOR_TRAIL
+        } else {
+            _sfte_grid_dirty_rows(t, -t->viewport.sb_off,
+                                  -t->viewport.sb_off + t->viewport.rows - 1);
+        }
+    }
+#else   // !SFTE_MUX
     if (new_cols != vp->cols || new_rows != vp->rows) {
         _sfte_grid_resize(term, new_cols, new_rows);
 
@@ -13205,11 +13227,16 @@ void sfte_mouse_move(sfte_ctx *ctx, int32_t px_x, int32_t px_y) {
             mux->ui_dirty = 1;
         }
 
+#if SFTE_INPUT_SELECTION
+        if (!mouse->sel_dragging)
+#endif  // SFTE_INPUT_SELECTION
+        {
 #if SFTE_MUX_BAR_HOVER
-        if (hit_idx != -1) return;
+            if (hit_idx != -1) return;
 #else   // !SFTE_MUX_BAR_HOVER
-        return;
+            return;
 #endif  // !SFTE_MUX_BAR_HOVER
+        }
     } else if (mux->hovered_idx != -1) {
         mux->hovered_idx = -1;
         mux->ui_dirty = 1;
@@ -13219,6 +13246,18 @@ void sfte_mouse_move(sfte_ctx *ctx, int32_t px_x, int32_t px_y) {
     int16_t c, screen_r;
     int32_t logical_r;
     _sfte_grid_from_px(vp, px_x, px_y, &c, &logical_r, &screen_r);
+
+#if SFTE_INPUT_SELECTION && SFTE_TERM_SCROLLBACK_CAP
+    if (mouse->sel_dragging && !mouse->mode) {
+        int8_t new_dir = (screen_r <= 0) ? 1 : (screen_r >= vp->rows - 1) ? -1 : 0;
+        if (new_dir != mouse->sel_scroll_dir) {
+            mouse->sel_scroll_dir = new_dir;
+            mouse->sel_last_scroll_ms = 0;
+        }
+    } else {
+        mouse->sel_scroll_dir = 0;
+    }
+#endif  // SFTE_INPUT_SELECTION && SFTE_TERM_SCROLLBACK_CAP
 
     if (parser->mouse_hover_col == c && parser->mouse_hover_row == screen_r) return;
 
@@ -13236,6 +13275,7 @@ void sfte_mouse_move(sfte_ctx *ctx, int32_t px_x, int32_t px_y) {
     if (mouse->sel_end_col == parser->mouse_hover_col && mouse->sel_end_row == logical_r) return;
 
     _sfte_grid_dirty_rows(term, mouse->sel_start_row, mouse->sel_end_row);
+    mouse->sel_active = 1;
     mouse->sel_end_col = parser->mouse_hover_col;
     mouse->sel_end_row = logical_r;
     _sfte_grid_dirty_rows(term, mouse->sel_start_row, mouse->sel_end_row);
@@ -13322,10 +13362,16 @@ void sfte_mouse_click(sfte_ctx *ctx, sfte_mouse_button btn, uint8_t pressed, int
         mouse->sel_end_row = logical_r;
         mouse->sel_active = 1;
         mouse->sel_dragging = 1;
+#if SFTE_TERM_SCROLLBACK_CAP
+        mouse->sel_scroll_dir = 0;
+#endif  // SFTE_TERM_SCROLLBACK_CAP
 
         _sfte_grid_dirty_rows(term, mouse->sel_start_row, mouse->sel_end_row);
     } else {
         mouse->sel_dragging = 0;
+#if SFTE_TERM_SCROLLBACK_CAP
+        mouse->sel_scroll_dir = 0;
+#endif  // SFTE_TERM_SCROLLBACK_CAP
         if (mouse->sel_start_col == mouse->sel_end_col &&
             mouse->sel_start_row == mouse->sel_end_row) {
             mouse->sel_active = 0;
