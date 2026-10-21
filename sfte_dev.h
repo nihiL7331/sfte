@@ -2843,6 +2843,7 @@ struct sfte_wayland_app {
     struct wl_data_device *data_device;
     struct wl_data_source *data_source;
     struct wl_data_offer *data_offer;
+    char data_offer_mime[64];
     char *selection_text;
 #endif  // SFTE_CLIPBOARD
 #if SFTE_INPUT_SELECTION || SFTE_CLIPBOARD
@@ -11175,8 +11176,13 @@ static const struct wl_callback_listener _sfte_wayland_callback_listener = {
 static inline void _sfte_wayland_data_offer_offer(void *data, struct wl_data_offer *offer,
                                                   const char *mime_type) {
     sfte_wayland_app *app = (sfte_wayland_app *)data;
-    if (strcmp(mime_type, "text/plain;charset=utf-8") == 0 ||
-        strcmp(mime_type, "text/plain") == 0) {
+    if (strcmp(mime_type, "text/plain;charset=utf-8") == 0) {
+        snprintf(app->data_offer_mime, sizeof(app->data_offer_mime), "%s", mime_type);
+        wl_data_offer_accept(offer, app->serial, mime_type);
+    } else if (strcmp(mime_type, "UTF8_STRING") == 0 || strcmp(mime_type, "text/plain") == 0 ||
+               strcmp(mime_type, "STRING") == 0 || strcmp(mime_type, "TEXT") == 0) {
+        if (strcmp(app->data_offer_mime, "text/plain;charset=utf-8") != 0)
+            snprintf(app->data_offer_mime, sizeof(app->data_offer_mime), "%s", mime_type);
         wl_data_offer_accept(offer, app->serial, mime_type);
     }
 }
@@ -11200,6 +11206,8 @@ static const struct wl_data_offer_listener _sfte_wayland_data_offer_listener = {
 static inline void _sfte_wayland_data_device_data_offer(void *data, struct wl_data_device *device,
                                                         struct wl_data_offer *offer) {
     (void)device;
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+    app->data_offer_mime[0] = '\0';
     wl_data_offer_add_listener(offer, &_sfte_wayland_data_offer_listener, data);
 }
 
@@ -11296,7 +11304,9 @@ static inline void _sfte_wayland_pointer_enter(void *data, struct wl_pointer *po
 #if SFTE_INPUT_MOUSE
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     sfte_ctx *ctx = app->ctx;
-    sfte_mouse_move(ctx, wl_fixed_to_int(surface_x), wl_fixed_to_int(surface_y));
+    app->mouse_x = wl_fixed_to_int(surface_x);
+    app->mouse_y = wl_fixed_to_int(surface_y);
+    sfte_mouse_move(ctx, app->mouse_x, app->mouse_y);
     app->needs_render = 1;
 #endif  // SFTE_INPUT_MOUSE
 }
@@ -11440,7 +11450,13 @@ static inline void _sfte_wayland_keyboard_enter(void *data, struct wl_keyboard *
 
 static inline void _sfte_wayland_keyboard_leave(void *data, struct wl_keyboard *keyboard,
                                                 uint32_t serial, struct wl_surface *surface) {
-    (void)data, (void)keyboard, (void)serial, (void)surface;
+    (void)keyboard, (void)serial, (void)surface;
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+    if (app->repeat_timer_fd > 0) {
+        struct itimerspec its = {0};
+        timerfd_settime(app->repeat_timer_fd, 0, &its, NULL);
+    }
+    app->repeating_key = 0;
 }
 
 static inline void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
@@ -11449,10 +11465,6 @@ static inline void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *ke
     (void)data, (void)keyboard, (void)time;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     sfte_ctx *ctx = app->ctx;
-    sfte_term *term = sfte_term_get_active(ctx);
-#if SFTE_INPUT_SELECTION
-    const sfte_viewport_state *vp = &term->viewport;
-#endif  // SFTE_INPUT_SELECTION
 
 #if SFTE_CLIPBOARD
     app->serial = serial;
@@ -11467,16 +11479,14 @@ static inline void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *ke
 
     if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !app->xkb_state) return;
 
-// Clear selection on key press
-#if SFTE_INPUT_SELECTION
-    if (term->mouse.sel_active) {
-        term->mouse.sel_active = 0;
-        _sfte_grid_dirty_range(term, 0, vp->cols * vp->rows);
-        app->needs_render = 1;
-    }
-#endif  // SFTE_INPUT_SELECTION
+    xkb_keycode_t keycode = key + 8;  // WARN: evdev codes are offset by 8 from xkb keycodes
+    xkb_keysym_t sym = xkb_state_key_get_one_sym(app->xkb_state, keycode);
+    uint8_t is_mod = (sym >= XKB_KEY_Shift_L && sym <= XKB_KEY_Hyper_R) ||
+                     sym == XKB_KEY_ISO_Level3_Shift || sym == XKB_KEY_Mode_switch;
+    uint8_t can_repeat = !is_mod &&
+                         (!app->xkb_keymap || xkb_keymap_key_repeats(app->xkb_keymap, keycode));
 
-    if (app->repeat_rate > 0 && app->repeating_key != key) {
+    if (can_repeat && app->repeat_rate > 0 && app->repeating_key != key) {
         struct itimerspec its;
         its.it_value.tv_sec = app->repeat_delay / 1000;
         its.it_value.tv_nsec = (app->repeat_delay % 1000) * 1000000;
@@ -11490,8 +11500,8 @@ static inline void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *ke
         app->repeating_key = key;
     }
 
-    xkb_keycode_t keycode = key + 8;  // WARN: evdev codes are offset by 8 from xkb keycodes
     sfte_xkb_process_key(ctx, app->xkb_state, keycode);
+    app->needs_render = 1;
 }
 
 static inline void _sfte_wayland_keyboard_modifiers(void *data, struct wl_keyboard *keyboard,
@@ -11803,14 +11813,6 @@ static inline uint8_t _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg
         app->selection_text = NULL;
     }
 
-    if (!term->mouse.sel_active || !app->data_device_manager || !app->data_device) return 0;
-
-    size_t needed_bytes = sfte_get_selection(term, NULL, 0);
-    if (needed_bytes == 0) {
-        _SFTE_INFO(ctx, CLIPBOARD_EMPTY);
-        return 0;
-    }
-
     app->selection_text = (char *)SFTE_MALLOC(needed_bytes);
     sfte_get_selection(term, app->selection_text, needed_bytes);
     if (!app->selection_text) return 0;
@@ -11818,7 +11820,10 @@ static inline uint8_t _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg
     app->data_source = wl_data_device_manager_create_data_source(app->data_device_manager);
     wl_data_source_add_listener(app->data_source, &_sfte_wayland_data_source_listener, app);
     wl_data_source_offer(app->data_source, "text/plain;charset=utf-8");
+    wl_data_source_offer(app->data_source, "UTF8_STRING");
     wl_data_source_offer(app->data_source, "text/plain");
+    wl_data_source_offer(app->data_source, "STRING");
+    wl_data_source_offer(app->data_source, "TEXT");
     wl_data_device_set_selection(app->data_device, app->data_source, app->serial);
 
     return 1;
@@ -11830,14 +11835,26 @@ static inline uint8_t _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_ar
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->cb.user_data;
     sfte_term *term = sfte_term_get_active(ctx);
 
+    if (app->selection_text) {
+        size_t len = strlen(app->selection_text);
+        if (len > 0) {
+            sfte_input_paste_begin(term);
+            sfte_input_text(ctx, app->selection_text, len);
+            sfte_input_paste_end(term);
+        }
+        return 1;
+    }
+
     if (!app->data_offer) return 0;
+
+    const char *mime = app->data_offer_mime[0] ? app->data_offer_mime : "text/plain;charset=utf-8";
 
     int fds[2];
     if (pipe(fds) == 0) {
-        wl_data_offer_receive(app->data_offer, "text/plain;charset=utf-8", fds[1]);
+        wl_data_offer_receive(app->data_offer, mime, fds[1]);
         close(fds[1]);
 
-        wl_display_roundtrip(app->display);
+        wl_display_flush(app->display);
 
         sfte_input_paste_begin(term);
 
