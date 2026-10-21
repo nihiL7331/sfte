@@ -2456,10 +2456,14 @@ typedef struct sfte_mouse_state {
     uint16_t mode;  // 0=off, 1000=normal, 1002=button-event, 1003=any-event
     uint16_t ext;   // 0=off, 1006=SGR
 #if SFTE_INPUT_SELECTION
-    int16_t sel_start_col, sel_start_row;
-    int16_t sel_end_col, sel_end_row;
+    int16_t sel_start_col, sel_end_col;
+    int32_t sel_start_row, sel_end_row;
     uint8_t sel_active;
     uint8_t sel_dragging;
+#if SFTE_TERM_SCROLLBACK_CAP
+    int8_t sel_scroll_dir;
+    uint64_t sel_last_scroll_ms;
+#endif  // SFTE_TERM_SCROLLBACK_CAP
 #endif  // SFTE_INPUT_SELECTION
 } sfte_mouse_state;
 #endif  // SFTE_INPUT_MOUSE
@@ -3124,7 +3128,7 @@ static inline void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf);
 // -------------------------------------------------------------------------------------------------
 #if SFTE_INPUT_SELECTION
 static inline uint8_t _sfte_input_is_selected(const sfte_mouse_state *mouse, int16_t col,
-                                              int16_t row);
+                                              int32_t row);
 #endif  // SFTE_INPUT_SELECTION
 #if SFTE_INPUT_MOUSE
 static inline void _sfte_input_send_mouse_event(sfte_term *term, uint8_t btn, uint8_t is_release,
@@ -3719,12 +3723,14 @@ static inline void _sfte_term_free(sfte_term *term) {
     do {                                                                                           \
         sfte_term *_old = &(ctx_ptr)->mux.terms[old_idx];                                          \
         sfte_term *_new = &(ctx_ptr)->mux.terms[new_idx];                                          \
-        _new->cursor.trail = _old->cursor.trail;                                                   \
-        _new->cursor.trail.is_trailing = 1;                                                        \
-        _new->cursor.trail.last_move_ms = SFTE_TIME_MS();                                          \
-        for (int _j = 0; _j < _new->viewport.cols * _new->viewport.rows; ++_j) {                   \
-            _new->cells[_j].dirty = 1;                                                             \
+        if ((old_idx) != (new_idx)) {                                                              \
+            _new->cursor.trail = _old->cursor.trail;                                               \
+            _new->cursor.trail.is_trailing = 1;                                                    \
+            _new->cursor.trail.last_move_ms = SFTE_TIME_MS();                                      \
         }                                                                                          \
+        _sfte_grid_dirty_rows(_new, -_new->viewport.sb_off,                                        \
+                              -_new->viewport.sb_off + _new->viewport.rows - 1);                   \
+        (ctx_ptr)->window.pad_dirty = 1;                                                           \
         (ctx_ptr)->mux.active_idx = (new_idx);                                                     \
     } while (0)
 #else
@@ -5297,6 +5303,18 @@ static inline void _sfte_grid_resize(sfte_term *term, int16_t new_cols, int16_t 
     term->viewport.scroll_top = 0;
     term->viewport.scroll_bot = new_rows - 1;
 
+#if SFTE_INPUT_MOUSE && SFTE_INPUT_SELECTION
+    int32_t min_sel_r = 0;
+#if SFTE_TERM_SCROLLBACK_CAP
+    min_sel_r = -vp->sb_len;
+#endif  // SFTE_TERM_SCROLLBACK_CAP
+    term->mouse.sel_start_col = _SFTE_CLAMP(term->mouse.sel_start_col, 0, new_cols - 1);
+    term->mouse.sel_end_col = _SFTE_CLAMP(term->mouse.sel_end_col, 0, new_cols - 1);
+    term->mouse.sel_start_row = _SFTE_CLAMP(term->mouse.sel_start_row, min_sel_r, new_rows - 1);
+    term->mouse.sel_end_row = _SFTE_CLAMP(term->mouse.sel_end_row, min_sel_r, new_rows - 1);
+    if (!term->mouse.sel_dragging) term->mouse.sel_active = 0;
+#endif  // SFTE_INPUT_MOUSE && SFTE_INPUT_SELECTION
+
     _sfte_grid_resize_tabs(term, old_cols, new_cols);
     _sfte_grid_dirty_range(term, 0, new_cols * new_rows);
 }
@@ -5408,19 +5426,20 @@ static inline void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf) {
     Evaluates against logical rows, meaning selections correclty scroll with text history.
 */
 static inline uint8_t _sfte_input_is_selected(const sfte_mouse_state *mouse, int16_t col,
-                                              int16_t row) {
+                                              int32_t row) {
     if (!mouse->sel_active) return 0;
 
     int16_t start_col = mouse->sel_start_col;
-    int16_t start_row = mouse->sel_start_row;
+    int32_t start_row = mouse->sel_start_row;
     int16_t end_col = mouse->sel_end_col;
-    int16_t end_row = mouse->sel_end_row;
+    int32_t end_row = mouse->sel_end_row;
 
     // Normalize backward drags
     if (start_row > end_row || (start_row == end_row && start_col > end_col)) {
-        int16_t tmp = start_row;
-        start_row = end_row, end_row = tmp;
-        tmp = start_col, start_col = end_col, end_col = tmp;
+        int32_t tmp_row = start_row;
+        start_row = end_row, end_row = tmp_row;
+        int16_t tmp_col = start_col;
+        start_col = end_col, end_col = tmp_col;
     }
 
     if (row < start_row || row > end_row) return 0;
@@ -10707,7 +10726,7 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int32_t y_o
             uint8_t attr = vcell->attr;
 
 #if SFTE_INPUT_SELECTION
-            if (_sfte_input_is_selected(mouse, c, logical_r)) attr |= _SFTE_ATTR_REVERSE;
+            if (_sfte_input_is_selected(mouse, c, logical_r)) attr ^= _SFTE_ATTR_REVERSE;
 #endif  // SFTE_INPUT_SELECTION
 
 #if SFTE_SEARCH
@@ -10857,6 +10876,9 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
 #if SFTE_SEARCH
     const sfte_search_state *search = &term->search;
 #endif  // SFTE_SEARCH
+#if SFTE_INPUT_SELECTION
+    const sfte_mouse_state *mouse = &term->mouse;
+#endif  // SFTE_INPUT_SELECTION
     const sfte_render_buffers *render = &term->render;
     const sfte_viewport_state *vp = &term->viewport;
 
@@ -10878,6 +10900,10 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
         sfte_rune rune = vcell->rune ? vcell->rune : ' ';
         uint32_t fg = _sfte_grid_get_fg(vcell);
 
+#if SFTE_INPUT_SELECTION
+        if (_sfte_input_is_selected(mouse, c, logical_row)) attr ^= _SFTE_ATTR_REVERSE;
+#endif  // SFTE_INPUT_SELECTION
+
 #if SFTE_SEARCH
         uint8_t search_res = _sfte_search_is_highlighted(search, vp, c, logical_row);
         // If `search_res` is 0 it isn't highlighted and we continue,
@@ -10892,14 +10918,9 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
         }
 #endif  // SFTE_SEARCH
 
-        if (attr & _SFTE_ATTR_REVERSE
-#if SFTE_TERM_FOCUS
-            && ctx->window.is_focused
-#endif  // SFTE_TERM_FOCUS
-        )
-            fg = _sfte_grid_get_bg(vcell);
+        if (attr & _SFTE_ATTR_REVERSE) fg = _sfte_grid_get_bg(vcell);
 #ifdef SFTE_BOLD_WHITE
-        if (attr & _SFTE_ATTR_BOLD) fg = SFTE_COLOR_FG;
+        if ((attr & _SFTE_ATTR_BOLD) && !(attr & _SFTE_ATTR_REVERSE)) fg = SFTE_COLOR_FG;
 #endif
 
 #if SFTE_FONT_LIGATURES
@@ -11092,11 +11113,18 @@ static inline void _sfte_wayland_pty_spawn(sfte_wayland_app *app) {
 
 static inline void _sfte_wayland_pty_update(sfte_wayland_app *app) {
     sfte_ctx *ctx = app->ctx;
+#if SFTE_MUX
+    sfte_mux *mux = &ctx->mux;
+    for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i)
+        if (mux->terms[i].is_allocated && app->pty_fds[i] >= 0)
+            sfte_posix_pty_resize(&mux->terms[i], app->pty_fds[i], app->width, app->height);
+#else   // !SFTE_MUX
     sfte_term *term = sfte_term_get_active(ctx);
 
     int32_t *fd;
     _sfte_wayland_get_pty(app, &fd, NULL, NULL);
     sfte_posix_pty_resize(term, *fd, app->width, app->height);
+#endif  // !SFTE_MUX
 }
 
 #if SFTE_FONT_ZOOM
@@ -11806,6 +11834,14 @@ static inline uint8_t _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->cb.user_data;
     const sfte_term *term = sfte_term_get_active(ctx);
 
+    if (!term->mouse.sel_active || !app->data_device_manager || !app->data_device) return 0;
+
+    size_t needed_bytes = sfte_get_selection(term, NULL, 0);
+    if (needed_bytes <= 1) {
+        _SFTE_INFO(ctx, CLIPBOARD_EMPTY);
+        return 0;
+    }
+
     if (app->data_source) {
         wl_data_source_destroy(app->data_source);
         app->data_source = NULL;
@@ -12330,14 +12366,30 @@ int32_t sfte_get_timeout_ms(sfte_ctx *ctx) {
     if (!ctx) return -1;
 
     const sfte_window_state *win = &ctx->window;
+#if SFTE_MUX
+    const sfte_mux *mux = &ctx->mux;
+#endif  // SFTE_MUX
     const sfte_term *term = sfte_term_get_active(ctx);
     const sfte_cursor_state *cursor = &term->cursor;
+#if SFTE_SEARCH
+    const sfte_search_state *search = &term->search;
+#endif  // SFTE_SEARCH
 #if SFTE_TERM_SCROLL_SMOOTH
     const sfte_viewport_state *vp = &term->viewport;
 #endif  // SFTE_TERM_SCROLL_SMOOTH
 #if SFTE_CURSOR_TRAIL
     const sfte_trail_state *trail = &cursor->trail;
 #endif  // SFTE_CURSOR_TRAIL
+#if SFTE_INPUT_MOUSE && SFTE_INPUT_SELECTION && SFTE_TERM_SCROLLBACK_CAP
+    const sfte_mouse_state *mouse = &term->mouse;
+#endif  // SFTE_INPUT_MOUSE && SFTE_INPUT_SELECTION && SFTE_TERM_SCROLLBACK_CAP
+
+#if SFTE_MUX
+    if (mux->ui_dirty) return 0;
+#endif  // SFTE_MUX
+#if SFTE_SEARCH
+    if (search->ui_dirty) return 0;
+#endif  // SFTE_SEARCH
 
     int32_t frame_ms = 1000 / SFTE_TERM_REFRESH_RATE;
     if (frame_ms < 1) frame_ms = 1;
@@ -12392,8 +12444,29 @@ uint8_t sfte_tick(sfte_ctx *ctx) {
 #if SFTE_CURSOR_TRAIL
     sfte_trail_state *trail = &cursor->trail;
 #endif  // SFTE_CURSOR_TRAIL
+#if SFTE_INPUT_MOUSE && SFTE_INPUT_SELECTION && SFTE_TERM_SCROLLBACK_CAP
+    sfte_mouse_state *mouse = &term->mouse;
+#endif  // SFTE_INPUT_MOUSE && SFTE_INPUT_SELECTION && SFTE_TERM_SCROLLBACK_CAP
 
     uint8_t needs_render = 0;
+
+#if SFTE_INPUT_MOUSE && SFTE_INPUT_SELECTION && SFTE_TERM_SCROLLBACK_CAP
+    if (mouse->sel_dragging && mouse->sel_scroll_dir != 0) {
+        uint64_t now = SFTE_TIME_MS();
+        if (now - mouse->sel_last_scroll_ms >= 50) {
+            mouse->sel_last_scroll_ms = now;
+            int32_t old_sb_off = vp->sb_off;
+            sfte_view_scroll(term, mouse->sel_scroll_dir);
+            if (vp->sb_off != old_sb_off) {
+                int16_t edge_r = (mouse->sel_scroll_dir > 0) ? 0 : vp->rows - 1;
+                _sfte_grid_dirty_rows(term, mouse->sel_start_row, mouse->sel_end_row);
+                mouse->sel_end_row = _sfte_grid_vis2log(vp, edge_r);
+                _sfte_grid_dirty_rows(term, mouse->sel_start_row, mouse->sel_end_row);
+                needs_render = 1;
+            }
+        }
+    }
+#endif  // SFTE_INPUT_MOUSE && SFTE_INPUT_SELECTION && SFTE_TERM_SCROLLBACK_CAP
 
 #if SFTE_SEARCH
     if (search->ui_dirty) {
@@ -12774,7 +12847,7 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
         out_dmg->h = _SFTE_CLAMP(out_dmg->h, 0, h);
         for (int32_t r = 0; r < vp->rows; ++r) {
             int32_t logical_r = _sfte_grid_vis2log(vp, r);
-            if (logical_r >= 0 && logical_r < vp->rows)
+            if (logical_r < vp->rows)
                 for (int16_t c = 0; c < vp->cols; ++c)
                     _sfte_grid_get_cell(term, c, logical_r)->dirty = 0;
         }
@@ -12788,9 +12861,6 @@ void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
     sfte_term *term = sfte_term_get_active(ctx);
     sfte_window_state *win = &ctx->window;
     const sfte_viewport_state *vp = &term->viewport;
-#if SFTE_CURSOR_TRAIL
-    sfte_trail_state *trail = &term->cursor.trail;
-#endif  // SFTE_CURSOR_TRAIL
 
     win->width = w;
     win->height = h;
@@ -12826,9 +12896,12 @@ void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
         _sfte_grid_resize(term, new_cols, new_rows);
 
 #if SFTE_CURSOR_TRAIL
-        trail->warp_tail = 1;
+        term->cursor.trail.warp_tail = 1;
 #endif  // SFTE_CURSOR_TRAIL
+    } else {
+        _sfte_grid_dirty_rows(term, -vp->sb_off, -vp->sb_off + vp->rows - 1);
     }
+#endif  // !SFTE_MUX
 }
 
 #if SFTE_FONT_ZOOM
@@ -13420,15 +13493,15 @@ size_t sfte_get_selection(const sfte_term *term, char *out_buf, size_t max_bytes
 
     if (!mouse->sel_active) return 0;
 
-    int16_t sc = mouse->sel_start_col, sr = mouse->sel_start_row;
-    int16_t ec = mouse->sel_end_col, er = mouse->sel_end_row;
+    int16_t sc = mouse->sel_start_col, ec = mouse->sel_end_col;
+    int32_t sr = mouse->sel_start_row, er = mouse->sel_end_row;
 
     // Normalize if dragging backwards
     if (sr > er || (sr == er && sc > ec)) {
-        int16_t tmp = sr;
-        sr = er, er = tmp;
-        tmp = sc, sc = ec;
-        ec = tmp;
+        int32_t tmp_r = sr;
+        sr = er, er = tmp_r;
+        int16_t tmp_c = sc;
+        sc = ec, ec = tmp_c;
     }
 
     size_t pos = 0;
@@ -13439,10 +13512,9 @@ size_t sfte_get_selection(const sfte_term *term, char *out_buf, size_t max_bytes
         pos++;                                                                                     \
     } while (0)
 
-    for (int16_t r = sr; r <= er; ++r) {
-        int16_t row_start = (r == sr) ? sc : 0;
-        int16_t row_end = (r == er) ? ec : vp->cols - 1;
-        int32_t logical_r = _sfte_grid_vis2log(vp, r);
+    for (int32_t logical_r = sr; logical_r <= er; ++logical_r) {
+        int16_t row_start = (logical_r == sr) ? sc : 0;
+        int16_t row_end = (logical_r == er) ? ec : vp->cols - 1;
 
         // Trim trailing spaces if the user selected past the end of text
         int16_t actual_end = row_end;
@@ -13481,7 +13553,7 @@ size_t sfte_get_selection(const sfte_term *term, char *out_buf, size_t max_bytes
         }
 
         // Inject newlines for multi-line selections, unless the line soft-wrapped
-        if (r < er) {
+        if (logical_r < er) {
 #if SFTE_TERM_REFLOW
             if (!_sfte_grid_get_cell(term, vp->cols - 1, logical_r)->wrapped)
 #endif
