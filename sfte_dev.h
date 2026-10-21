@@ -2762,6 +2762,8 @@ struct sfte_term {
 */
 typedef struct sfte_mux {
     sfte_term terms[SFTE_MUX_MAX_WINDOWS];
+    uint8_t tab_order[SFTE_MUX_MAX_WINDOWS]; // Vis ord -> slot idx
+    uint8_t tab_cnt;                         // # of curr open tabs
 
     sfte_text_input_state text_input;
     int16_t rename_cursor_col;
@@ -3544,9 +3546,10 @@ static inline void _sfte_log(sfte_log_func log_func, _sfte_log_item log_item,
 */
 static inline int8_t _sfte_term_get_new_idx(sfte_ctx *ctx) {
     sfte_mux *mux = &ctx->mux;
+
     for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i)
-        if (!mux->terms[i].is_allocated) return i;
-    return -1;
+        if (!mux->terms[i].is_allocated)
+            return (int8_t)i;
 }
 
 /*
@@ -3731,6 +3734,16 @@ static inline void _sfte_term_free(sfte_term *term) {
 #endif
 
 /*
+    Returns the visual position of `slot` in `tab_order`, or -1 if not found.
+*/
+static inline int8_t _sfte_mux_slot_to_pos(const sfte_mux *mux, uint8_t slot) {
+    for (uint8_t pos = 0; pos < mux->tab_cnt; ++pos)
+        if (mux->tab_order[pos] == slot)
+            return (int8_t)pos;
+    return -1;
+}
+
+/*
     Toggled when the prefix keys are pressed.
     Next key will be consumed to determine the action.
 
@@ -3802,19 +3815,14 @@ static inline uint8_t _sfte_mux_jump_shortcut(sfte_ctx *ctx, const sfte_arg *arg
 
     mux->is_prefix_active = 0;
     int step = arg->i;
-    if (step == 0) return 1;
+    if (step == 0 || mux->tab_cnt == 0) return 1;
 
-    int target = mux->active_idx;
+    int8_t cur_pos = _sfte_mux_slot_to_pos(mux, mux->active_idx);
+    if (cur_pos < 0) return 1;
 
-    for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) {
-        target += step + SFTE_MUX_MAX_WINDOWS;
-        target %= SFTE_MUX_MAX_WINDOWS;
-
-        if (mux->terms[target].is_allocated) {
-            _SFTE_MUX_SWITCH_FOCUS(ctx, mux->active_idx, target);
-            break;
-        }
-    }
+    int8_t target_pos = ((cur_pos + step) % mux->tab_cnt + mux->tab_cnt) % mux->tab_cnt;
+    uint8_t target_slot = mux->tab_order[target_pos];
+    _SFTE_MUX_SWITCH_FOCUS(ctx, mux->active_idx, target_slot);
 
     mux->ui_dirty = 1;
 
@@ -3830,11 +3838,11 @@ static inline uint8_t _sfte_mux_goto_shortcut(sfte_ctx *ctx, const sfte_arg *arg
     if (!mux->is_prefix_active) return 0;
 
     mux->is_prefix_active = 0;
-    int target_idx = arg->i;
+    int8_t target_pos = arg->i;
 
-    if (target_idx >= 0 && target_idx < SFTE_MUX_MAX_WINDOWS &&
-        mux->terms[target_idx].is_allocated) {
-        _SFTE_MUX_SWITCH_FOCUS(ctx, mux->active_idx, target_idx);
+    if (target_pos >= 0 && target_pos < mux->tab_cnt) {
+        uint8_t target_slot = mux->tab_order[target_pos];
+        _SFTE_MUX_SWITCH_FOCUS(ctx, mux->active_idx, target_slot);
     }
 
     mux->ui_dirty = 1;
@@ -9495,9 +9503,6 @@ static inline void _sfte_render_mux_bar(sfte_ctx *ctx, void *px_buf, sfte_damage
     char labels[SFTE_MUX_MAX_WINDOWS][32];
     uint16_t label_lens[SFTE_MUX_MAX_WINDOWS];
     uint16_t bar_len = 0;
-#if SFTE_MUX_BAR_ALIGN == SFTE_MUX_BAR_ALIGN_FILL
-    uint8_t num_tabs = 0;
-#endif  // SFTE_MUX_BAR_ALIGN == SFTE_MUX_BAR_ALIGN_FILL
 
     uint16_t pad_l = 0, pad_r = 0;
 #if SFTE_MUX_BAR_EDGE_LEFT
@@ -9507,18 +9512,15 @@ static inline void _sfte_render_mux_bar(sfte_ctx *ctx, void *px_buf, sfte_damage
     pad_r++;
 #endif  // SFTE_MUX_BAR_EDGE_RIGHT
 
-    for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) {
-        if (!mux->terms[i].is_allocated) continue;
-#if SFTE_MUX_BAR_ALIGN == SFTE_MUX_BAR_ALIGN_FILL
-        num_tabs++;
-#endif  // SFTE_MUX_BAR_ALIGN == SFTE_MUX_BAR_ALIGN_FILL
+    for (uint8_t pos = 0; pos < mux->tab_cnt; ++pos) {
+        uint8_t i = mux->tab_order[pos];
 
         uint16_t c = 0;
         const char *fmt = SFTE_MUX_BAR_FORMAT;
 
         while (*fmt && c < sizeof(labels[i]) - 1)
             if (fmt[0] == '%' && fmt[1] == 'u') {
-                c += snprintf(labels[i] + c, sizeof(labels[i]) - c, "%u", i + 1);
+                c += snprintf(labels[i] + c, sizeof(labels[i]) - c, "%u", pos + 1);
                 fmt += 2;
             } else if (fmt[0] == '%' && fmt[1] == 's') {
                 const char *term_title = mux->terms[i].title;
@@ -9559,8 +9561,8 @@ static inline void _sfte_render_mux_bar(sfte_ctx *ctx, void *px_buf, sfte_damage
         int32_t total_pad = (num_tabs - 1) * SFTE_MUX_BAR_PAD;
         int32_t avail_cols = vp->cols - total_pad;
         if (avail_cols < 0) avail_cols = 0;
-        base_tab_cols = avail_cols / num_tabs;
-        leftover_cols = avail_cols % num_tabs;
+        base_tab_cols = avail_cols / mux->tab_cnt;
+        leftover_cols = avail_cols % mux->tab_cnt;
     }
 #endif  // SFTE_MUX_BAR_ALIGN == SFTE_MUX_BAR_ALIGN_FILL
 
@@ -9575,8 +9577,8 @@ static inline void _sfte_render_mux_bar(sfte_ctx *ctx, void *px_buf, sfte_damage
 #endif  // !SFTE_MUX_BAR_HOVER
 
     // Render windows
-    for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) {
-        if (!mux->terms[i].is_allocated) continue;
+    for (uint8_t pos = 0; pos < mux->tab_cnt; ++pos) {
+        uint8_t i = mux->tab_order[pos];
 
 #if SFTE_MUX_BAR_ALIGN == SFTE_MUX_BAR_ALIGN_FILL
         // Add 1 extra column to this tab if we still have leftover remainder columns
@@ -9614,12 +9616,6 @@ static inline void _sfte_render_mux_bar(sfte_ctx *ctx, void *px_buf, sfte_damage
             style = SFTE_FONT_STYLE_ITALIC;
 #endif  // defined(SFTE_FONT_ITALIC) && (SFTE_MUX_ATTR_ACTIVE & SFTE_ATTR_ITALIC)
         } else {
-#if SFTE_MUX_BAR_ATTR_INACTIVE & SFTE_ATTR_REVERSE
-            uint32_t col_tmp = col_bg;
-            col_bg = col_fg;
-            col_fg = col_tmp;
-#endif  // SFTE_MUX_BAR_ATTR_INACTIVE & SFTE_ATTR_REVERSE
-
 #if SFTE_MUX_BAR_ATTR_INACTIVE & SFTE_ATTR_REVERSE
             uint32_t col_tmp = col_bg;
             col_bg = col_fg;
@@ -9697,16 +9693,12 @@ static inline void _sfte_render_mux_bar(sfte_ctx *ctx, void *px_buf, sfte_damage
 #if SFTE_MUX_PREFIX_PREVIEW
 static inline void _sfte_render_mux_preview(sfte_ctx *ctx, void *px_buf,
                                             sfte_damage_rect *out_dmg) {
+    if (mux->tab_cnt == 0) return;
+
     const sfte_window_state *win = &ctx->window;
     sfte_mux *mux = &ctx->mux;
     sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
-
-    int16_t num_tabs = 0;
-    for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i)
-        if (mux->terms[i].is_allocated) num_tabs++;
-
-    if (num_tabs == 0) return;
 
     for (int32_t y = 0; y < win->height; ++y)
         for (int32_t x = 0; x < win->width; ++x)
@@ -9720,12 +9712,12 @@ static inline void _sfte_render_mux_preview(sfte_ctx *ctx, void *px_buf,
     int16_t start_c = (vp->cols - modal_cols) / 2;
     int16_t end_c = start_c + modal_cols - 1;
 
-    int16_t avail_rows = vp->rows - (num_tabs - 1) - 2;  // -2 for top/bot borders
-    if (avail_rows < num_tabs) return;
-    int16_t preview_rows = avail_rows / num_tabs;
+    int16_t avail_rows = vp->rows - (mux->tab_cnt - 1) - 2;  // -2 for top/bot borders
+    if (avail_rows < mux->tab_cnt) return;
+    int16_t preview_rows = avail_rows / mux->tab_cnt;
 
     // Window views + separators + top/bot borders
-    int16_t modal_rows = (preview_rows * num_tabs) + (num_tabs - 1) + 2;
+    int16_t modal_rows = (preview_rows * mux->tab_cnt) + (mux->tab_cnt - 1) + 2;
 
     int16_t start_r = (vp->rows - modal_rows) / 2;
 
@@ -9754,8 +9746,8 @@ static inline void _sfte_render_mux_preview(sfte_ctx *ctx, void *px_buf,
     cur_r++;
 
     // Content rendering
-    for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) {
-        if (!mux->terms[i].is_allocated) continue;
+    for (uint8_t pos = 0; pos < mux->tab_cnt; ++pos) {
+        uint8_t i = mux->tab_order[pos];
         sfte_term *cur_term = &mux->terms[i];
         mux->active_idx = i;
 
@@ -11956,51 +11948,16 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
             int8_t step = mux->pending_reorder;
             mux->pending_reorder = 0;
 
-            int8_t target_idx = mux->active_idx;
+            // Find cur active slots vis pos
+            int8_t cur_pos = _sfte_mux_slot_to_pos(mux, mux->active_idx);
 
-            if (step > 0) {
-                for (int8_t i = mux->active_idx + 1; i < SFTE_MUX_MAX_WINDOWS; ++i)
-                    if (mux->terms[i].is_allocated) {
-                        target_idx = i;
-                        break;
-                    }
-            } else {
-                for (int8_t i = mux->active_idx - 1; i >= 0; --i)
-                    if (mux->terms[i].is_allocated) {
-                        target_idx = i;
-                        break;
-                    }
-            }
+            int8_t target_pos = cur_pos + step;
+            if (cur_pos != -1 && target_pos >= 0 && target_pos < mux->tab_cnt) {
+                // Swap vis pos
+                uint8_t tmp = mux->tab_order[cur_pos];
+                mux->tab_order[cur_pos] = mux->tab_order[target_pos];
+                mux->tab_order[target_pos] = tmp;
 
-            if (target_idx != mux->active_idx) {
-                sfte_term tmp_term = mux->terms[mux->active_idx];
-                mux->terms[mux->active_idx] = mux->terms[target_idx];
-                mux->terms[target_idx] = tmp_term;
-
-                int32_t tmp_fd = app->pty_fds[mux->active_idx];
-                app->pty_fds[mux->active_idx] = app->pty_fds[target_idx];
-                app->pty_fds[target_idx] = tmp_fd;
-
-                pid_t tmp_pid = app->pty_pids[mux->active_idx];
-                app->pty_pids[mux->active_idx] = app->pty_pids[target_idx];
-                app->pty_pids[target_idx] = tmp_pid;
-
-#if SFTE_TERM_RESURRECT
-                int32_t tmp_log_fd = app->log_fds[mux->active_idx];
-                app->log_fds[mux->active_idx] = app->log_fds[target_idx];
-                app->log_fds[target_idx] = tmp_log_fd;
-
-                char old_path[128], new_path[128], tmp_path[128];
-                snprintf(old_path, sizeof(old_path), "/tmp/sfte_tab_%d.log", mux->active_idx);
-                snprintf(new_path, sizeof(new_path), "/tmp/sfte_tab_%d.log", target_idx);
-                snprintf(tmp_path, sizeof(tmp_path), "/tmp/sfte_tab_swap.log");
-
-                rename(old_path, tmp_path);
-                rename(new_path, old_path);
-                rename(tmp_path, new_path);
-#endif  // SFTE_TERM_RESURRECT
-
-                mux->active_idx = target_idx;
                 app->needs_render = 1;
             }
         }
@@ -12123,6 +12080,7 @@ sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data) {
     sfte_callbacks *cb = &ctx->cb;
     sfte_logger *logger = &ctx->logger;
     sfte_window_state *win = &ctx->window;
+    sfte_mux *mux = &ctx->mux;
     sfte_term *term = sfte_term_get_active(ctx);
 #if SFTE_INPUT_MOUSE
     sfte_parser_state *parser = &term->parser;
@@ -12501,6 +12459,7 @@ sfte_term *sfte_term_spawn(sfte_ctx *ctx) {
     _sfte_term_init(term, &ctx->cb, cols, rows);
     term->viewport.cell_width = cell_w;
     term->viewport.cell_height = cell_h;
+    mux->tab_order[mux->tab_cnt++] = idx;
 
     return term;
 }
@@ -12516,6 +12475,15 @@ uint8_t sfte_term_close(sfte_ctx *ctx, sfte_term *term) {
 
 #if SFTE_MUX
     int8_t closed_idx = sfte_term_get_idx(ctx, term);
+
+    // Update tab order
+    uint8_t pos = 0;
+    for (; pos < mux->tab_cnt; ++pos) // Find where closed tab is in tab_order
+        if (mux->tab_order[pos] == closed_idx)
+            break;
+    for (; pos + 1 < mux->tab_cnt; ++pos) // Shift subsequent tabs left by 1
+        mux->tab_order[pos] = mux->tab_order[pos + 1];
+    mux->tab_cnt--;
 
     // If closed the active window, shift focus
     if (mux->active_idx == closed_idx) {
