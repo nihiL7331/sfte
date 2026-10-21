@@ -12879,12 +12879,17 @@ uint8_t sfte_input_shortcut(sfte_ctx *ctx, sfte_key key, uint32_t mod_mask) {
 #endif  // SFTE_MUX
 
     uint8_t handled = 0;
+    sfte_key lower_key = (key >= 'A' && key <= 'Z') ? (sfte_key)(key + ('a' - 'A')) : key;
 
-    for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_shortcuts); ++i)
-        if (_sfte_shortcuts[i].key == key && _sfte_shortcuts[i].mod_mask == mod_mask) {
+    for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_shortcuts); ++i) {
+        sfte_key sc_key = _sfte_shortcuts[i].key;
+        sfte_key lower_sc_key = (sc_key >= 'A' && sc_key <= 'Z') ? (sfte_key)(sc_key + ('a' - 'A'))
+                                                                 : sc_key;
+        if (lower_sc_key == lower_key && _sfte_shortcuts[i].mod_mask == mod_mask) {
             handled = _sfte_shortcuts[i].func(ctx, &_sfte_shortcuts[i].arg);
             break;
         }
+    }
 
 #if SFTE_MUX
     // If the shortcut returned 2, it's explicitly asking to keep the prefix active.
@@ -13479,7 +13484,9 @@ void sfte_xkb_process_key(sfte_ctx *ctx, struct xkb_state *state, uint32_t keyco
     xkb_keysym_t sym = xkb_state_key_get_one_sym(state, keycode);
 
     // Ignore standalone modifier keys
-    if (sym >= XKB_KEY_Shift_L && sym <= XKB_KEY_Hyper_R) return;
+    if ((sym >= XKB_KEY_Shift_L && sym <= XKB_KEY_Hyper_R) || sym == XKB_KEY_ISO_Level3_Shift ||
+        sym == XKB_KEY_Mode_switch)
+        return;
 
     uint8_t ctrl = xkb_state_mod_name_is_active(state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE);
     uint8_t alt = xkb_state_mod_name_is_active(state, XKB_MOD_NAME_ALT, XKB_STATE_MODS_EFFECTIVE);
@@ -13533,6 +13540,14 @@ void sfte_xkb_process_key(sfte_ctx *ctx, struct xkb_state *state, uint32_t keyco
     sfte_key key = (sfte_key)((key_id != SFTE_KEY_NONE) ? key_id : cp);
 
     if (key > 0 && sfte_input_shortcut(ctx, key, active_mods)) return;
+
+#if SFTE_INPUT_SELECTION
+    sfte_term *term = sfte_term_get_active(ctx);
+    if (term && term->mouse.sel_active && !term->mouse.sel_dragging) {
+        term->mouse.sel_active = 0;
+        _sfte_grid_dirty_rows(term, term->mouse.sel_start_row, term->mouse.sel_end_row);
+    }
+#endif  // SFTE_INPUT_SELECTION
 
     if (key_id != SFTE_KEY_NONE)
         // Mapped control key
