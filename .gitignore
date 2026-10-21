@@ -1,7 +1,9 @@
 /nob
 /sfte
+/sfte-present
 /vendor/xdg-shell.c
 /vendor/xdg-shell.h
 /nob.old
 /config.c
 /fuzz_macros.log
+fonts
