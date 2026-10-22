@@ -453,7 +453,7 @@ static inline void _sfte_wayland_keyboard_leave(void *data, struct wl_keyboard *
     }
     app->repeating_key = 0;
 
-    sfte_set_focus(ctx, 1);
+    sfte_set_focus(ctx, 0);
     app->needs_render = 1;
 }
 

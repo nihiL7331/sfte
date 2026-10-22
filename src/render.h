@@ -962,6 +962,45 @@ static inline void _sfte_render_mux_preview(sfte_ctx *ctx, void *px_buf,
 }
 #endif  // SFTE_MUX_PREFIX_PREVIEW
 
+/*
+    Returns the RENDERED position of the cursor.
+    Do not mistake it for the cursor position for the shell - while they're equal 99% of the
+   time, they differ when search mode is on.
+
+    To ensure that even when search mode is on ongoing sequences render properly,
+    these two values are separate.
+
+    This can be later expanded for further terminal modes, e.g. for a theme picker.
+*/
+static inline void _sfte_render_get_cursor_pos(sfte_ctx *ctx, int16_t *out_col, int16_t *out_row) {
+    sfte_term *term = sfte_term_get_active(ctx);
+#if SFTE_MUX
+    sfte_mux *mux = &ctx->mux;
+#endif  // SFTE_MUX
+#if SFTE_SEARCH
+    const sfte_search_state *search = &term->search;
+#endif  // SFTE_SEARCH
+    const sfte_cursor_state *cursor = &term->cursor;
+    const sfte_viewport_state *vp = &term->viewport;
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
+
+    *out_col = _SFTE_CLAMP(cursor->col, 0, vp->cols - 1);
+    *out_row = (int16_t)_sfte_grid_log2vis(vp, cursor->row);
+#if SFTE_MUX_BAR
+    if (mux->is_renaming) {
+        *out_col = mux->rename_cursor_col;
+        *out_row = (layout.bar_y - SFTE_WINDOW_PAD_Y - layout.grid_off_y) / vp->cell_height;
+        return;
+    }
+#endif  // SFTE_MUX_BAR
+#if SFTE_SEARCH
+    if (search->is_active) {
+        *out_col = strlen(SFTE_SEARCH_PREFIX) + search->text_input.cursor_byte_idx;
+        *out_row = SFTE_SEARCH_PLACEMENT_TOP ? 0 : vp->rows - 1;
+    }
+#endif  // SFTE_SEARCH
+}
+
 #if SFTE_CURSOR_TRAIL
 /*
     Updates the cursor trail positions.
@@ -992,6 +1031,27 @@ static inline void _sfte_render_update_trail(sfte_ctx *ctx) {
         trail->last_move_ms = now;
     }
 }
+
+#if SFTE_CURSOR_TRAIL
+/*
+    Flags the AABB of the cursor trail as dirty.
+*/
+static inline void _sfte_grid_dirty_trail(sfte_trail_state *trail, sfte_term *term) {
+    const sfte_viewport_state *vp = &term->viewport;
+    sfte_damage_rect *dmg = &trail->dmg;
+
+    if (dmg->w <= 0 || dmg->h <= 0) return;
+
+    int16_t start_c, end_c;
+    int32_t start_logical_r, end_logical_r;
+    _sfte_grid_from_px(vp, dmg->x, dmg->y, &start_c, &start_logical_r, NULL);
+    _sfte_grid_from_px(vp, dmg->x + dmg->w, dmg->y + dmg->h, &end_c, &end_logical_r, NULL);
+    if (start_logical_r < 0 || end_logical_r < 0) return;
+
+    _sfte_grid_dirty_rect(term, start_c, start_logical_r, (end_c - start_c) + 1,
+                          (end_logical_r - start_logical_r) + 1);
+}
+#endif  // SFTE_CURSOR_TRAIL
 
 /*
     Compositor pass for the cursor trail.
@@ -1332,45 +1392,6 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int3
             }
         }
     }
-}
-
-/*
-    Returns the RENDERED position of the cursor.
-    Do not mistake it for the cursor position for the shell - while they're equal 99% of the
-   time, they differ when search mode is on.
-
-    To ensure that even when search mode is on ongoing sequences render properly,
-    these two values are separate.
-
-    This can be later expanded for further terminal modes, e.g. for a theme picker.
-*/
-static inline void _sfte_render_get_cursor_pos(sfte_ctx *ctx, int16_t *out_col, int16_t *out_row) {
-    sfte_term *term = sfte_term_get_active(ctx);
-#if SFTE_MUX
-    sfte_mux *mux = &ctx->mux;
-#endif  // SFTE_MUX
-#if SFTE_SEARCH
-    const sfte_search_state *search = &term->search;
-#endif  // SFTE_SEARCH
-    const sfte_cursor_state *cursor = &term->cursor;
-    const sfte_viewport_state *vp = &term->viewport;
-    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
-
-    *out_col = _SFTE_CLAMP(cursor->col, 0, vp->cols - 1);
-    *out_row = (int16_t)_sfte_grid_log2vis(vp, cursor->row);
-#if SFTE_MUX_BAR
-    if (mux->is_renaming) {
-        *out_col = mux->rename_cursor_col;
-        *out_row = (layout.bar_y - SFTE_WINDOW_PAD_Y - layout.grid_off_y) / vp->cell_height;
-        return;
-    }
-#endif  // SFTE_MUX_BAR
-#if SFTE_SEARCH
-    if (search->is_active) {
-        *out_col = strlen(SFTE_SEARCH_PREFIX) + search->text_input.cursor_byte_idx;
-        *out_row = SFTE_SEARCH_PLACEMENT_TOP ? 0 : vp->rows - 1;
-    }
-#endif  // SFTE_SEARCH
 }
 
 static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,

@@ -424,27 +424,6 @@ static inline void _sfte_grid_dirty_range(sfte_term *term, uint32_t start_idx, u
     for (uint32_t i = 0; i < cnt; ++i) term->cells[start_idx + i].dirty = 1;
 }
 
-#if SFTE_CURSOR_TRAIL
-/*
-    Flags the AABB of the cursor trail as dirty.
-*/
-static inline void _sfte_grid_dirty_trail(sfte_trail_state *trail, sfte_term *term) {
-    const sfte_viewport_state *vp = &term->viewport;
-    sfte_damage_rect *dmg = &trail->dmg;
-
-    if (dmg->w <= 0 || dmg->h <= 0) return;
-
-    int16_t start_c, end_c;
-    int32_t start_logical_r, end_logical_r;
-    _sfte_grid_from_px(vp, dmg->x, dmg->y, &start_c, &start_logical_r, NULL);
-    _sfte_grid_from_px(vp, dmg->x + dmg->w, dmg->y + dmg->h, &end_c, &end_logical_r, NULL);
-    if (start_logical_r < 0 || end_logical_r < 0) return;
-
-    _sfte_grid_dirty_rect(term, start_c, start_logical_r, (end_c - start_c) + 1,
-                          (end_logical_r - start_logical_r) + 1);
-}
-#endif  // SFTE_CURSOR_TRAIL
-
 /*
     Calculates how many terminal cells are spanned by a given pixel dimension,
     accounting for an arbitrary pixel offset within the starting cell.
