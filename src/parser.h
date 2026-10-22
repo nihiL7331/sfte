@@ -991,26 +991,42 @@ static inline void _sfte_csi_exec_kitty(sfte_term *term, uint16_t *p) {
     s_idx = modes->alt_active;
 #endif  // SFTE_TERM_ALT_SCREEN
 
+    uint16_t cur_flags = kb->stack[s_idx][kb->stack_idx[s_idx]];
+
     if (parser->dec_priv == 1) {  // CSI ? u (query)
         char buf[32];
-        uint16_t flags = kb->stack[s_idx][kb->stack_idx[s_idx]];
-
-        size_t len = snprintf(buf, sizeof(buf), "\033[?%du", flags);
+        size_t len = snprintf(buf, sizeof(buf), "\033[?%du", cur_flags);
         if (cb->write) cb->write(cb->user_data, buf, len);
-    } else if (parser->dec_priv == 2) {  // CSI > flags u (push)
-        if (kb->stack_idx[s_idx] < 15) kb->stack_idx[s_idx]++;
+    } else if (parser->dec_priv == 2) {  // CSI > flags [; mode] u (push)
+        uint16_t flags = p[0];
+        uint16_t mode = p[1];
+        uint16_t new_flags = flags;
+        if (mode == 2)
+            new_flags = cur_flags | flags;
+        else if (mode == 3)
+            new_flags = cur_flags & ~flags;
 
-        kb->stack[s_idx][kb->stack_idx[s_idx]] = p[0];
+        if (kb->stack_idx[s_idx] < 15) kb->stack_idx[s_idx]++;
+        kb->stack[s_idx][kb->stack_idx[s_idx]] = new_flags;
     } else if (parser->dec_priv == 3) {  // CSI < n u (pop)
-        uint8_t pop_cnt = (p[0] > 0) ? p[0] : 1;
-        if (kb->stack_idx[s_idx] >= pop_cnt) {
+        uint8_t pop_cnt = (p[0] > 0) ? (uint8_t)p[0] : 1;
+        // if popping empties the stack reset to 0
+        if (kb->stack_idx[s_idx] > pop_cnt) {
             kb->stack_idx[s_idx] -= pop_cnt;
         } else {
             kb->stack_idx[s_idx] = 0;
             kb->stack[s_idx][0] = 0;
         }
-    } else if (parser->dec_priv == 4)  // CSI = flags u (set/overwrite)
-        kb->stack[s_idx][kb->stack_idx[s_idx]] = p[0];
+    } else if (parser->dec_priv == 4) {  // CSI = flags [; mode] u (set/modify)
+        uint16_t flags = p[0];
+        uint16_t mode = p[1];
+        if (mode == 2)
+            kb->stack[s_idx][kb->stack_idx[s_idx]] = cur_flags | flags;
+        else if (mode == 3)
+            kb->stack[s_idx][kb->stack_idx[s_idx]] = cur_flags & ~flags;
+        else
+            kb->stack[s_idx][kb->stack_idx[s_idx]] = flags;
+    }
 }
 #endif  // SFTE_INPUT_KITTY
 
