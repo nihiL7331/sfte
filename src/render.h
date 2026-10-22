@@ -1246,8 +1246,7 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
         float dt = (float)(now - vp->last_scroll_ms);
         vp->last_scroll_ms = now;
 
-        float decay = dt * SFTE_TERM_SCROLL_DECAY;
-        if (decay > 1.0f) decay = 1.0f;
+        float decay = _SFTE_CLAMP(dt * SFTE_TERM_SCROLL_DECAY, 0.0f, 1.0f);
 
         vp->scroll_y_off -= vp->scroll_y_off * decay;
 
