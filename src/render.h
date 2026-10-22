@@ -1267,12 +1267,11 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
             for (int32_t x = 0; x < win->width; ++x)
                 SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, win->width, win->height, clear_bg);
 
-        for (int32_t i = 0; i < vp->rows * vp->cols; ++i) {
-            term->cells[i].dirty = 1;
+        _sfte_grid_dirty_rows(term, -vp->sb_off, -vp->sb_off + vp->rows - 1);
 #if SFTE_TERM_ALT_SCREEN
-            if (passes_cnt == 2 && term->alt_cells) term->alt_cells[i].dirty = 1;
+        if (passes_cnt == 2 && term->alt_cells)
+            for (int32_t i = 0; i < vp->rows * vp->cols; ++i) term->alt_cells[i].dirty = 1;
 #endif  // SFTE_TERM_ALT_SCREEN
-        }
     }
 
 #if SFTE_TERM_ANIMATE_SCREEN
