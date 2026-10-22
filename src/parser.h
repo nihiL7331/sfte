@@ -575,7 +575,9 @@ static inline void _sfte_csi_reset_mode(sfte_term *term, uint16_t *p, uint16_t c
             if ((p[i] == 1047 || p[i] == 1049) && modes->alt_active) {
                 modes->alt_active = 0;
 #if SFTE_INPUT_KITTY
+                kb->stack_idx[0] = 0;
                 kb->stack_idx[1] = 0;
+                kb->stack[0][0] = 0;
                 kb->stack[1][0] = 0;
 #endif  // SFTE_INPUT_KITTY
 #if SFTE_TERM_ANIMATE_SCREEN
