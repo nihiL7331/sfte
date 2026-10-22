@@ -1,0 +1,4 @@
+-I.
+-std=c11
+-D_GNU_SOURCE
+-DSFTE_DEV_ENV

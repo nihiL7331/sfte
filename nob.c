@@ -19,6 +19,19 @@ typedef enum {
     MODE_DEV,
 } compile_mode;
 
+static const char *inlined_files[128];
+static size_t inlined_files_cnt = 0;
+
+static uint8_t is_inlined(const char *path) {
+    for (size_t i = 0; i < inlined_files_cnt; ++i)
+        if (strcmp(inlined_files[i], path) == 0) return 1;
+    return 0;
+}
+
+static void mark_as_inlined(const char *path) {
+    if (inlined_files_cnt < 128) inlined_files[inlined_files_cnt++] = path;
+}
+
 static uint8_t install_target(void) {
     const char *prefix = getenv("PREFIX");
     Nob_String_Builder bin = {0};
@@ -174,58 +187,79 @@ static uint8_t install_target(void) {
     return 0;
 }
 
+static uint8_t append_amalgamated_file(const char *file_path, Nob_String_Builder *out) {
+    Nob_String_Builder file_buf = {0};
+    if (!nob_read_entire_file(file_path, &file_buf)) {
+        nob_log(NOB_ERROR, "failed to read file for amalgamation: %s", file_path);
+        return 0;
+    }
+
+    Nob_String_View sv = nob_sv_from_parts(file_buf.items, file_buf.count);
+    Nob_String_View inc_pre = nob_sv_from_cstr("#include \"");
+    Nob_String_View inc_suf = nob_sv_from_cstr("\"");
+
+    while (sv.count) {
+        Nob_String_View line = nob_sv_chop_by_delim(&sv, '\n');
+        Nob_String_View trimmed = nob_sv_trim(line);
+
+        // NOTE: make sure there's no comments at the end of includes since it would
+        // break this logic
+        if (nob_sv_starts_with(trimmed, inc_pre) && nob_sv_ends_with(trimmed, inc_suf)) {
+            Nob_String_View path_sv = trimmed;
+            nob_sv_chop_prefix(&path_sv, inc_pre);
+            nob_sv_chop_suffix(&path_sv, inc_suf);
+
+            // inline 'vendor/' and 'src/'
+            if (nob_sv_starts_with(path_sv, nob_sv_from_cstr("vendor/")) ||
+                nob_sv_starts_with(path_sv, nob_sv_from_cstr("src/"))) {
+                const char *rel_path = nob_temp_sprintf("%.*s", (int)path_sv.count, path_sv.data);
+
+                // if was already inlined, skip
+                if (nob_sv_starts_with(path_sv, nob_sv_from_cstr("src/"))) {
+                    if (is_inlined(rel_path)) continue;
+                    mark_as_inlined(rel_path);
+                }
+
+                nob_sb_append_cstr(
+                    out,
+                    nob_temp_sprintf(
+                        "/*=== %s =========================================================*/\n",
+                        rel_path));
+
+                if (!append_amalgamated_file(rel_path, out)) {
+                    nob_sb_free(file_buf);
+                    return 0;
+                }
+
+                nob_sb_append_cstr(out, "\n");
+                continue;
+            }
+        }
+
+        nob_sb_append_buf(out, line.data, line.count);
+        nob_sb_append_cstr(out, "\n");
+    }
+
+    nob_sb_free(file_buf);
+    return 1;
+}
 static uint8_t build_amalgamation(const char *input_path, const char *output_path) {
     Nob_String_Builder out = {0};
 
+    inlined_files_cnt = 0;
+
     nob_sb_append_cstr(&out, "/*\n");
-    nob_sb_append_cstr(&out, " * AMALGAMATED RELEASE BUILD - EDIT sfte_dev.h FOR REPO CHANGES\n");
+    nob_sb_append_cstr(&out, " * AMALGAMATED RELEASE BUILD - EDIT src/ FILES FOR REPO CHANGES\n");
     nob_sb_append_cstr(&out, " */\n\n");
 
-    Nob_String_Builder sfte = {0};
-    if (!nob_read_entire_file(input_path, &sfte)) return false;
-
-    Nob_String_View sfte_sv = nob_sv_from_parts(sfte.items, sfte.count);
-
-    while (sfte_sv.count > 0) {
-        Nob_String_View line = nob_sv_chop_by_delim(&sfte_sv, '\n');
-        Nob_String_View trimmed = nob_sv_trim(line);
-
-        if (nob_sv_eq(trimmed, nob_sv_from_cstr("#include \"vendor/xdg-shell.h\""))) {
-            nob_sb_append_cstr(
-                &out,
-                "/*=== xdg-shell.h =========================================================*/\n");
-            if (!nob_read_entire_file("vendor/xdg-shell.h", &out)) return false;
-        } else if (nob_sv_eq(trimmed, nob_sv_from_cstr("#include \"vendor/xdg-shell.c\""))) {
-            nob_sb_append_cstr(
-                &out,
-                "/*=== xdg-shell.c =========================================================*/\n");
-            if (!nob_read_entire_file("vendor/xdg-shell.c", &out)) return false;
-        } else if (nob_sv_eq(trimmed, nob_sv_from_cstr("#include \"vendor/stb_truetype.h\""))) {
-            nob_sb_append_cstr(
-                &out,
-                "/*=== stb_truetype.h ======================================================*/\n");
-            if (!nob_read_entire_file("vendor/stb_truetype.h", &out)) return false;
-        } else if (nob_sv_eq(trimmed, nob_sv_from_cstr("#include \"vendor/stb_image.h\""))) {
-            nob_sb_append_cstr(
-                &out,
-                "/*=== stb_image.h =========================================================*/\n");
-            if (!nob_read_entire_file("vendor/stb_image.h", &out)) return false;
-        } else if (nob_sv_eq(trimmed, nob_sv_from_cstr("#include \"vendor/re.h\""))) {
-            nob_sb_append_cstr(
-                &out,
-                "/*=== tiny-regex-c ========================================================*/\n");
-            if (!nob_read_entire_file("vendor/re.h", &out)) return false;
-        } else {
-            nob_sb_append_buf(&out, line.data, line.count);
-            nob_sb_append_cstr(&out, "\n");
-        }
+    if (!append_amalgamated_file(input_path, &out)) {
+        nob_sb_free(out);
+        return 0;
     }
 
     nob_log(NOB_INFO, "generating amalgamation to %s", output_path);
     uint8_t ok = nob_write_entire_file(output_path, out.items, out.count);
-
     nob_sb_free(out);
-    nob_sb_free(sfte);
 
     return ok;
 }
@@ -283,9 +317,9 @@ int main(int argc, char **argv) {
         if (!nob_copy_file("config.def.c", "config.c")) return 1;
     }
 
-    nob_cmd_append(&cmd, "clang", "-Wall", "-Wextra", "-march=native", "config.c", "-o", "sfte",
-                   "-lwayland-client", "-lrt", "-lm", "-D_GNU_SOURCE", "-lutil", "-lxkbcommon",
-                   "-std=c11");
+    nob_cmd_append(&cmd, "clang", "-Wall", "-Wextra", "-march=native", "-I.", "config.c", "-o",
+                   "sfte", "-lwayland-client", "-lrt", "-lm", "-D_GNU_SOURCE", "-lutil",
+                   "-lxkbcommon", "-std=c11");
 
     if (mode == MODE_DEV)
         nob_cmd_append(&cmd, "-DSFTE_DEV_ENV", "-O0", "-g", "-fno-omit-frame-pointer",
