@@ -1232,6 +1232,9 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
         vp->scroll_y_off -= sb_diff * vp->cell_height;
         vp->last_sb_off = vp->sb_off;
 
+        float max_scroll_lead = (float)(vp->cell_height * SFTE_TERM_SCROLL_STEP * 2);
+        vp->scroll_y_off = _SFTE_CLAMP(vp->scroll_y_off, -max_scroll_lead, max_scroll_lead);
+
         if (!vp->is_scrolling) {
             vp->is_scrolling = 1;
             vp->last_scroll_ms = SFTE_TIME_MS();
