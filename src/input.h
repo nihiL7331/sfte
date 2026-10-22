@@ -865,7 +865,7 @@ void sfte_set_focus(sfte_ctx *ctx, uint8_t focused) {
 
     sfte_window_state *win = &ctx->window;
     sfte_term *term = sfte_term_get_active(ctx);
-    const sfte_viewport_state *vp = &term->viewport;
+    sfte_viewport_state *vp = &term->viewport;
     const sfte_callbacks *cb = term->cb;
     sfte_modes_state *modes = &term->modes;
     sfte_cursor_state *cursor = &term->cursor;
@@ -879,6 +879,13 @@ void sfte_set_focus(sfte_ctx *ctx, uint8_t focused) {
     cursor->blink_visible = 1;
     cursor->next_blink_ms = SFTE_TIME_MS() + SFTE_CURSOR_BLINK_RATE_MS;
 #endif  // SFTE_CURSOR_BLINK
+
+#if SFTE_TERM_SCROLL_SMOOTH
+    if (!focused) {
+        vp->scroll_y_off = 0.0f;
+        vp->is_scrolling = 0;
+    }
+#endif  // SFTE_TERM_SCROLL_SMOOTH
 
     int16_t vis_col = cursor->col >= vp->cols ? vp->cols - 1 : cursor->col;
     _sfte_grid_get_cell(term, vis_col, cursor->row)->dirty = 1;
