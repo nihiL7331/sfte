@@ -1963,16 +1963,27 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
     }
 
     if (out_dmg->w > 0 && out_dmg->h > 0) {
-        out_dmg->x = _SFTE_CLAMP(out_dmg->x, 0, w);
-        out_dmg->y = _SFTE_CLAMP(out_dmg->y, 0, h);
-        out_dmg->w = _SFTE_CLAMP(out_dmg->w, 0, w);
-        out_dmg->h = _SFTE_CLAMP(out_dmg->h, 0, h);
-        for (int32_t r = 0; r < vp->rows; ++r) {
-            int32_t logical_r = _sfte_grid_vis2log(vp, r);
-            if (logical_r < vp->rows)
-                for (int16_t c = 0; c < vp->cols; ++c)
-                    _sfte_grid_get_cell(term, c, logical_r)->dirty = 0;
+        if (out_dmg->x < 0) {
+            out_dmg->w += out_dmg->x;
+            out_dmg->x = 0;
         }
+        if (out_dmg->y < 0) {
+            out_dmg->h += out_dmg->y;
+            out_dmg->y = 0;
+        }
+        if (out_dmg->x + out_dmg->w > w) out_dmg->w = w - out_dmg->x;
+        if (out_dmg->y + out_dmg->h > h) out_dmg->h = h - out_dmg->y;
+
+        if (out_dmg->w <= 0 || out_dmg->h <= 0) {
+            out_dmg->w = 0;
+            out_dmg->h = 0;
+        } else
+            for (int32_t r = 0; r < vp->rows; ++r) {
+                int32_t logical_r = _sfte_grid_vis2log(vp, r);
+                if (logical_r < vp->rows)
+                    for (int16_t c = 0; c < vp->cols; ++c)
+                        _sfte_grid_get_cell(term, c, logical_r)->dirty = 0;
+            }
     } else
         out_dmg->w = 0, out_dmg->h = 0;
 }
