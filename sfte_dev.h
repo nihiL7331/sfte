@@ -2454,6 +2454,13 @@ typedef struct sfte_link_state {
 } sfte_link_state;
 #endif  // SFTE_INPUT_HYPERLINKS
 
+typedef struct sfte_mux_layout {
+    int32_t grid_off_y;    // px the grid is pushed down (bar on top, not overlayed)
+    int16_t reserved_rows; // rows taken away from the grid (0 or 1)
+    int32_t bar_y;         // absolute px y of the bars top edge
+    uint8_t overlay;       // 1 if the bar draws on top of a grid row
+} sfte_mux_layout;
+
 typedef struct sfte_text_input_state {
     uint16_t len;
     uint16_t cursor_byte_idx;
@@ -3003,6 +3010,12 @@ static inline int8_t _sfte_term_get_new_idx(sfte_ctx *ctx);
 static inline void _sfte_term_init(sfte_term *term, const sfte_callbacks *cb, int16_t cols,
                                    int16_t rows);
 static inline void _sfte_term_free(sfte_term *term);
+
+// -------------------------------------------------------------------------------------------------
+// >mux
+// -------------------------------------------------------------------------------------------------
+static inline int8_t _sfte_mux_slot_to_pos(const sfte_mux *mux, uint8_t slot);
+static inline sfte_mux_layout _sfte_mux_get_layout(const sfte_viewport_state *vp);
 
 // -------------------------------------------------------------------------------------------------
 // >b64
@@ -3745,6 +3758,39 @@ static inline int8_t _sfte_mux_slot_to_pos(const sfte_mux *mux, uint8_t slot) {
         if (mux->tab_order[pos] == slot)
             return (int8_t)pos;
     return -1;
+}
+
+/*
+    Evaluates and returns multiplexer layout information based on bar configuration.
+    Returns 0-ed struct if `SFTE_MUX_BAR` is 0.
+*/
+static inline sfte_mux_layout _sfte_mux_get_layout(const sfte_viewport_state *vp) {
+    sfte_mux_layout l = {0};
+#if SFTE_MUX_BAR
+    int16_t bar_row; // relative to the top of the unshifted grid
+
+#if SFTE_MUX_BAR_HOVER
+    l.overlay = 1;
+#else // !SFTE_MUX_BAR_HOVER
+    l.reserved_rows = 1;
+#if SFTE_MUX_BAR_PLACEMENT_TOP
+    l.grid_off_y = vp->cell_height;
+#endif // SFTE_MUX_BAR_PLACEMENT_TOP
+#endif // !SFTE_MUX_BAR_HOVER
+
+#if SFTE_MUX_BAR_PLACEMENT_TOP
+    bar_row = -1;
+#elif SFTE_MUX_BAR_HOVER
+    bar_row = vp->rows - 2;
+#else // !SFTE_MUX_BAR_PLACEMENT_TOP && !SFTE_MUX_BAR_HOVER
+    bar_row = vp->rows - 1;
+#endif // !SFTE_MUX_BAR_PLACEMENT_TOP && !SFTE_MUX_BAR_HOVER
+
+    l.bar_y = (bar_row + 1) * vp->cell_height + SFTE_WINDOW_PAD_Y;
+#else // !SFTE_MUX_BAR
+    (void)vp;
+#endif // !SFTE_MUX_BAR
+    return l;
 }
 
 /*
@@ -4791,10 +4837,8 @@ static inline uint32_t _sfte_grid_get_ul(sfte_cell *cell) {
 static inline void _sfte_grid_from_px(const sfte_viewport_state *vp, int32_t px_x, int32_t px_y,
                                       int16_t *out_col, int32_t *out_logical_row,
                                       int16_t *out_screen_row) {
-    int32_t off_y = 0;
-#if SFTE_MUX_BAR_PLACEMENT_TOP && !SFTE_MUX_BAR_HOVER
-    off_y = vp->cell_height;
-#endif  // SFTE_MUX_BAR_PLACEMENT_TOP && !SFTE_MUX_BAR_HOVER
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
+    int32_t off_y = layout.grid_off_y;
 
     int16_t c = _SFTE_CLAMP((px_x - SFTE_WINDOW_PAD_X) / vp->cell_width, 0, vp->cols - 1);
     int16_t r = _SFTE_CLAMP((px_y - SFTE_WINDOW_PAD_Y - off_y) / vp->cell_height, 0, vp->rows - 1);
@@ -5385,14 +5429,12 @@ static inline void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf) {
     const sfte_window_state *win = &ctx->window;
     sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
 
     int32_t w = win->width;
     int32_t h = win->height;
     int32_t grid_w = vp->cols * vp->cell_width;
-    int32_t grid_h = vp->rows * vp->cell_height;
-#if SFTE_MUX_BAR && !SFTE_MUX_BAR_HOVER
-    grid_h += vp->cell_height;
-#endif  // SFTE_MUX_BAR && !SFTE_MUX_BAR_HOVER
+    int32_t grid_h = (vp->rows + layout.reserved_rows) * vp->cell_height;
     uint32_t bg = (SFTE_COLOR_BG_OPACITY << 24) | (SFTE_COLOR_BG & ~SFTE_COLOR_ALPHA_MASK);
 
 #if SFTE_WINDOW_PAD_Y
@@ -9392,6 +9434,7 @@ static inline void _sfte_render_search_overlay(sfte_ctx *ctx, void *px_buf,
     const sfte_term *term = sfte_term_get_active(ctx);
     const sfte_search_state *search = &term->search;
     const sfte_viewport_state *vp = &term->viewport;
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
 
     if (!search->is_active) return;
 
@@ -9401,10 +9444,7 @@ static inline void _sfte_render_search_overlay(sfte_ctx *ctx, void *px_buf,
 #else   // !SFTE_SEARCH_PLACEMENT_TOP
     int32_t r = vp->rows - 1;
 #endif  // !SFTE_SEARCH_PLACEMENT_TOP
-    int32_t y_off = 0;
-#if SFTE_MUX_BAR_PLACEMENT_TOP && !SFTE_MUX_BAR_HOVER
-    y_off += vp->cell_height;
-#endif  // SFTE_MUX_BAR_PLACEMENT_TOP && !SFTE_MUX_BAR_HOVER
+    int32_t y_off = layout.grid_off_y;
     int32_t start_y = r * vp->cell_height + SFTE_WINDOW_PAD_Y + y_off;
 
     char right_buf[64];
@@ -9487,22 +9527,12 @@ static inline void _sfte_render_mux_bar(sfte_ctx *ctx, void *px_buf, sfte_damage
     sfte_mux *mux = &ctx->mux;
     sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
 
     if (!term || vp->cell_width == 0) return;
 
-#if SFTE_MUX_BAR_HOVER
-    int16_t bar_row = vp->rows - 2;
-#if SFTE_MUX_BAR_PLACEMENT_TOP
-    bar_row = -1;
-#endif  // SFTE_MUX_BAR_PLACEMENT_TOP
-#else   // !SFTE_MUX_BAR_HOVER
-    int16_t bar_row = vp->rows - 1;  // Placed under the last row of the terminal
-#if SFTE_MUX_BAR_PLACEMENT_TOP
-    bar_row = -1;  // Placed above the first row of the terminal
-#endif  // SFTE_MUX_BAR_PLACEMENT_TOP
-#endif  // !SFTE_MUX_BAR_HOVER
-
-    int32_t bar_y = bar_row * vp->cell_height + SFTE_WINDOW_PAD_Y + vp->cell_height;
+    int32_t bar_y = layout.bar_y;
+    int16_t bar_row = (bar_y - SFTE_WINDOW_PAD_Y) / vp->cell_height - 1;
 
     char labels[SFTE_MUX_MAX_WINDOWS][32];
     uint16_t label_lens[SFTE_MUX_MAX_WINDOWS];
@@ -10014,6 +10044,7 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
     sfte_term *term = sfte_term_get_active(ctx);
     const sfte_cursor_state *cursor = &term->cursor;
     sfte_viewport_state *vp = &term->viewport;
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
 
     passes[0].y_off = 0;
     passes[0].grid = term->cells;
@@ -10095,9 +10126,7 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
 
     // Shift all passes down by the height of the multiplexer bar if it's at the top of the
     // window and not hovering.
-#if SFTE_MUX_BAR_PLACEMENT_TOP && !SFTE_MUX_BAR_HOVER
-    for (uint8_t p = 0; p < passes_cnt; ++p) passes[p].y_off += vp->cell_height;
-#endif  // SFTE_MUX_BAR_PLACEMENT_TOP && !SFTE_MUX_BAR_HOVER
+    for (uint8_t p = 0; p < passes_cnt; ++p) passes[p].y_off += layout.grid_off_y;
 
     return passes_cnt;
 }
@@ -10292,19 +10321,16 @@ static inline void _sfte_render_get_cursor_pos(sfte_ctx *ctx, int16_t *out_col, 
 #if SFTE_SEARCH
     const sfte_search_state *search = &term->search;
 #endif  // SFTE_SEARCH
-    const sfte_viewport_state *vp = &term->viewport;
     const sfte_cursor_state *cursor = &term->cursor;
+    const sfte_viewport_state *vp = &term->viewport;
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
 
     *out_col = _SFTE_CLAMP(cursor->col, 0, vp->cols - 1);
     *out_row = (int16_t)_sfte_grid_log2vis(vp, cursor->row);
 #if SFTE_MUX_BAR
     if (mux->is_renaming) {
         *out_col = mux->rename_cursor_col;
-#if SFTE_MUX_BAR_HOVER
-        *out_row = SFTE_MUX_BAR_PLACEMENT_TOP ? 0 : vp->rows - 1;
-#else   // !SFTE_MUX_BAR_HOVER
-        *out_row = SFTE_MUX_BAR_PLACEMENT_TOP ? -1 : vp->rows;
-#endif  // !SFTE_MUX_BAR_HOVER
+        *out_row = (layout.bar_y - SFTE_WINDOW_PAD_Y - layout.grid_off_y) / vp->cell_height;
         return;
     }
 #endif  // SFTE_MUX_BAR
@@ -12541,12 +12567,10 @@ uint8_t sfte_term_close(sfte_ctx *ctx, sfte_term *term) {
 void sfte_get_ideal_size(const sfte_term *term, int16_t cols, int16_t rows, int32_t *out_w,
                          int32_t *out_h) {
     const sfte_viewport_state *vp = &term->viewport;
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
+
     if (out_w) *out_w = cols * vp->cell_width + (2 * SFTE_WINDOW_PAD_X);
-#if SFTE_MUX_BAR && !SFTE_MUX_BAR_HOVER
-    if (out_h) *out_h = (rows + 1) * vp->cell_height + (2 * SFTE_WINDOW_PAD_Y);
-#else   // !SFTE_MUX_BAR || SFTE_MUX_BAR_HOVER
-    if (out_h) *out_h = rows * vp->cell_height + (2 * SFTE_WINDOW_PAD_Y);
-#endif  // !SFTE_MUX_BAR || SFTE_MUX_BAR_HOVER
+    if (out_h) *out_h = (rows + layout.reserved_rows) * vp->cell_height + 2 * SFTE_WINDOW_PAD_Y;
 }
 
 void sfte_parse(sfte_term *term, const uint8_t *data, size_t len) {
@@ -12593,7 +12617,6 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
 #endif  // SFTE_MUX
     sfte_window_state *win = &ctx->window;
     sfte_term *term = sfte_term_get_active(ctx);
-    const sfte_viewport_state *vp = &term->viewport;
 #if SFTE_TERM_ALT_SCREEN
     sfte_modes_state *modes = &term->modes;
 #endif  // SFTE_TERM_ALT_SCREEN
@@ -12604,6 +12627,8 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
 #if SFTE_CURSOR_TRAIL
     sfte_trail_state *trail = &cursor->trail;
 #endif  // SFTE_CURSOR_TRAIL
+    const sfte_viewport_state *vp = &term->viewport;
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
 
     win->width = w;
     win->height = h;
@@ -12638,6 +12663,7 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
     _sfte_render_propagate_damage(ctx, vis_col, vis_row);
 
 #if SFTE_SEARCH && SFTE_SEARCH_BG_BAR_OPACITY != 0xFF
+
     // Force the text grid row beneath the overlay to completely redraw
     // This is crucial so that alpha blending doesn't break, hence
     // it's hidden behind `SFTE_SEARCH_BAR_BG_OPACITY != 0xFF`.
@@ -12648,21 +12674,21 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
 #endif  // !SFTE_SEARCH_PLACEMENT_TOP
     if (search->is_active) _sfte_grid_dirty_rows(term, search_row, search_row);
 #endif  // SFTE_SEARCH && SFTE_SEARCH_BG_BAR_OPACITY != 0xFF
+
 // Similarly to the search logic, we need to completely redraw the row beneath the overlay
 // if it's hovering above the viewport.
-#if SFTE_MUX_BAR && SFTE_MUX_BAR_HOVER
-#if SFTE_MUX_BAR_PLACEMENT_TOP
-    _sfte_grid_dirty_rows(term, 0, 0);
-#else   // !SFTE_MUX_BAR_PLACEMENT_TOP
-    _sfte_grid_dirty_rows(term, vp->rows - 1, vp->rows - 1);
-#endif  // !SFTE_MUX_BAR_PLACEMENT_TOP
-#endif  // SFTE_MUX_BAR && SFTE_MUX_BAR_HOVER
+    if (layout.overlay) {
+        int16_t r = (layout.bar_y - SFTE_WINDOW_PAD_Y) / vp->cell_height;
+        _sfte_grid_dirty_rows(term, r, r);
+    }
+
 #if SFTE_MUX_PREFIX_PREVIEW
     if (mux->is_prefix_active || mux->was_prefix_active) {
         _sfte_grid_dirty_rows(term, -vp->sb_off, -vp->sb_off + vp->rows - 1);
         mux->was_prefix_active = mux->is_prefix_active;
     }
 #endif  // SFTE_MUX_PREFIX_PREVIEW
+
 #if SFTE_CURSOR_TRAIL
     _sfte_grid_dirty_trail(trail, term);
 #endif  // SFTE_CURSOR_TRAIL
@@ -12748,6 +12774,7 @@ void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
     sfte_term *term = sfte_term_get_active(ctx);
     sfte_window_state *win = &ctx->window;
     const sfte_viewport_state *vp = &term->viewport;
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
 
     win->width = w;
     win->height = h;
@@ -12757,10 +12784,7 @@ void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
     if (new_cols < 1) new_cols = 1;
     int16_t new_rows = (h - (2 * SFTE_WINDOW_PAD_Y)) / (int32_t)vp->cell_height;
     // Reserve space for the multiplexer bar if not floating above viewport
-#if SFTE_MUX_BAR && !SFTE_MUX_BAR_HOVER
-    if (new_rows > 1) new_rows--;
-#endif  // SFTE_MUX_BAR && !SFTE_MUX_BAR_HOVER
-    if (new_rows < 1) new_rows = 1;
+    if (new_rows > layout.reserved_rows) new_rows -= layout.reserved_rows;
 
     sfte_mux *mux = &ctx->mux;
     for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) {
@@ -13144,19 +13168,15 @@ void sfte_input_key(sfte_ctx *ctx, sfte_key key, uint32_t mod_mask) {
 #if SFTE_INPUT_MOUSE
 void sfte_mouse_move(sfte_ctx *ctx, int32_t px_x, int32_t px_y) {
     sfte_term *term = sfte_term_get_active(ctx);
-    const sfte_viewport_state *vp = &term->viewport;
     sfte_parser_state *parser = &term->parser;
     sfte_mouse_state *mouse = &term->mouse;
+    const sfte_viewport_state *vp = &term->viewport;
 
 #if SFTE_MUX_BAR
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
     sfte_mux *mux = &ctx->mux;
 
-#if SFTE_MUX_BAR_HOVER
-    int16_t bar_r = SFTE_MUX_BAR_PLACEMENT_TOP ? -1 : vp->rows - 2;
-#else   // !SFTE_MUX_BAR_HOVER
-    int16_t bar_r = SFTE_MUX_BAR_PLACEMENT_TOP ? -1 : vp->rows - 1;
-#endif  // !SFTE_MUX_BAR_HOVER
-    int32_t bar_y = bar_r * vp->cell_height + SFTE_WINDOW_PAD_Y + vp->cell_height;
+    int32_t bar_y = layout.bar_y;
 
     if (px_y >= bar_y && px_y < bar_y + vp->cell_height) {
         int16_t hit_idx = -1;
@@ -13239,14 +13259,10 @@ void sfte_mouse_click(sfte_ctx *ctx, sfte_mouse_button btn, uint8_t pressed, int
     sfte_mouse_state *mouse = &term->mouse;
 
 #if SFTE_MUX_BAR
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
     sfte_mux *mux = &ctx->mux;
-
-#if SFTE_MUX_BAR_HOVER
-    int16_t bar_r = SFTE_MUX_BAR_PLACEMENT_TOP ? -1 : vp->rows - 2;
-#else   // !SFTE_MUX_BAR_HOVER
-    int16_t bar_r = SFTE_MUX_BAR_PLACEMENT_TOP ? -1 : vp->rows - 1;
-#endif  // !SFTE_MUX_BAR_HOVER
-    int32_t bar_y = bar_r * vp->cell_height + SFTE_WINDOW_PAD_Y + vp->cell_height;
+    
+    int32_t bar_y = layout.bar_y;
 
     if (px_y >= bar_y && px_y < bar_y + vp->cell_height) {
         int16_t hit_idx = -1;
@@ -13663,7 +13679,7 @@ int sfte_wayland_run(sfte_wayland_app *app) {
         if (access(log_path, F_OK) == 0) _sfte_wayland_pty_spawn(app);
     }
     _SFTE_MUX_SWITCH_FOCUS(ctx, mux->active_idx, 0);
-#endif  // SFTE_TERM_RESURRECt && SFTE_MUX
+#endif  // SFTE_TERM_RESURRECT && SFTE_MUX
 
     _sfte_wayland_pty_update(app);
 
