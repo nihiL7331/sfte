@@ -283,7 +283,7 @@ uint8_t sfte_tick(sfte_ctx *ctx) {
         float ty = target_ry - trail->y;
 
         // Snap to target if we're close enough to stop animating
-        if (tx * tx + ty * ty <= 0.5f) {
+        if (tx * tx + ty * ty <= 0.5f || !isfinite(trail->x) || !isfinite(trail->y)) {
             trail->is_trailing = 0;
             trail->x = target_rx;
             trail->y = target_ry;
