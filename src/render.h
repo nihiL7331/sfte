@@ -1183,7 +1183,7 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
 
         vp->scroll_y_off -= vp->scroll_y_off * decay;
 
-        if (fabsf(vp->scroll_y_off) < 0.5f) {
+        if (fabsf(vp->scroll_y_off) < 0.5f || !isfinite(vp->scroll_y_off)) {
             vp->scroll_y_off = 0.0f;
             vp->is_scrolling = 0;
         }
