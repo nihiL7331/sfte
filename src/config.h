@@ -290,6 +290,15 @@ _SFTE_ENSURE_RANGE(SFTE_TERM_ANIM_DUR_MS, 0.0f, FLT_MAX);
 _SFTE_ENSURE_RANGE(SFTE_TERM_REFLOW, 0, 1);
 
 /*
+    Determines whether incoming terminal output snaps the scrollback viewport back to the bottom.
+    By default it preserves scroll position when output happens.
+*/
+#ifndef SFTE_TERM_SCROLL_ON_OUTPUT
+#define SFTE_TERM_SCROLL_ON_OUTPUT 0
+#endif  // SFTE_TERM_SCROLL_ON_OUTPUT
+_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLL_ON_OUTPUT, 0, 1);
+
+/*
     Maximum lines of scrollback history kept in memory.
     Increasing it WILL affect the memory footprint size.
     Setting it to 0 disables scrollback logic entirely.

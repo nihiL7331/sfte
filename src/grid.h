@@ -537,6 +537,11 @@ static inline void _sfte_grid_push_scrollback(sfte_term *term, int16_t lines) {
         vp->sb_head = (vp->sb_head + 1) % vp->sb_cap;
         if (vp->sb_len < vp->sb_cap) vp->sb_len++;
     }
+
+    if (vp->sb_off > 0) {
+        vp->sb_off = _SFTE_CLAMP(vp->sb_off + lines, 0, vp->sb_len);
+        vp->last_sb_off = vp->sb_off;
+    }
 }
 #endif  // SFTE_TERM_SCROLLBACK_CAP
 

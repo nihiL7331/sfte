@@ -2,7 +2,9 @@
 
 #include "src/config.h"
 #include "src/grid.h"
+#include "src/kitty.h"
 #include "src/search.h"
+#include "src/sixel.h"
 #include "src/types.h"
 #include "src/util.h"
 #if SFTE_WAYLAND
@@ -1723,9 +1725,9 @@ static inline void _sfte_parser_feed_byte(sfte_term *term, uint8_t b) {
 void sfte_parse(sfte_term *term, const uint8_t *data, size_t len) {
     if (len == 0 || !data) return;
 
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK_CAP && SFTE_TERM_SCROLL_ON_OUTPUT
     sfte_viewport_state *vp = &term->viewport;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK_CAP && SFTE_TERM_SCROLL_ON_OUTPUT
 #if SFTE_SEARCH
     sfte_search_state *search = &term->search;
 #endif  // SFTE_SEARCH
@@ -1740,13 +1742,13 @@ void sfte_parse(sfte_term *term, const uint8_t *data, size_t len) {
 #if SFTE_SEARCH && SFTE_TERM_SCROLLBACK_CAP
     else
 #endif  // SFTE_SEARCH && SFTE_TERM_SCROLLBACK_CAP
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK_CAP && SFTE_TERM_SCROLL_ON_OUTPUT
         // If not in search mode, snap the view to bottom if new output arrives
         if (vp->sb_off > 0) {
             vp->sb_off = 0;
             _sfte_grid_dirty_rows(term, 0, vp->rows - 1);
         }
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK_CAP && SFTE_TERM_SCROLL_ON_OUTPUT
 
 #if SFTE_CURSOR_BLINK
     // reset blink timer when typing/outputting
