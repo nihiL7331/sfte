@@ -91,11 +91,16 @@ static inline void _sfte_render_damage_add(sfte_damage_rect *dmg, int32_t x, int
         return;
     }
 
+    int32_t r1 = dmg->x + dmg->w;
+    int32_t b1 = dmg->y + dmg->h;
+    int32_t r2 = x + w;
+    int32_t b2 = y + h;
+
     dmg->x = (dmg->x < x) ? dmg->x : x;
     dmg->y = (dmg->y < y) ? dmg->y : y;
 
-    int32_t max_r = (dmg->x + dmg->w > x + w) ? dmg->x + dmg->w : x + w;
-    int32_t max_b = (dmg->y + dmg->h > y + h) ? dmg->y + dmg->h : y + h;
+    int32_t max_r = (r1 > r2) ? r1 : r2;
+    int32_t max_b = (b1 > b2) ? b1 : b2;
 
     dmg->w = max_r - dmg->x;
     dmg->h = max_b - dmg->y;
