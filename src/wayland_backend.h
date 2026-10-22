@@ -433,18 +433,28 @@ static inline void _sfte_wayland_keyboard_keymap(void *data, struct wl_keyboard 
 static inline void _sfte_wayland_keyboard_enter(void *data, struct wl_keyboard *keyboard,
                                                 uint32_t serial, struct wl_surface *surface,
                                                 struct wl_array *keys) {
-    (void)data, (void)keyboard, (void)serial, (void)surface, (void)keys;
+    (void)keyboard, (void)serial, (void)surface, (void)keys;
+    sfte_wayland_app *app = (sfte_wayland_app *)data;
+    sfte_ctx *ctx = app->ctx;
+
+    sfte_set_focus(ctx, 1);
+    app->needs_render = 1;
 }
 
 static inline void _sfte_wayland_keyboard_leave(void *data, struct wl_keyboard *keyboard,
                                                 uint32_t serial, struct wl_surface *surface) {
     (void)keyboard, (void)serial, (void)surface;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
+    sfte_ctx *ctx = app->ctx;
+
     if (app->repeat_timer_fd > 0) {
         struct itimerspec its = {0};
         timerfd_settime(app->repeat_timer_fd, 0, &its, NULL);
     }
     app->repeating_key = 0;
+
+    sfte_set_focus(ctx, 1);
+    app->needs_render = 1;
 }
 
 static inline void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
