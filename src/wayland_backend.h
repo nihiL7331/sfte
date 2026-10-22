@@ -906,7 +906,7 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
         }
 
         int32_t timeout = sfte_get_timeout_ms(ctx);
-        if (app->needs_render) timeout = 0;  // Don't sleep if we already know we need to draw
+        if (app->needs_render && !app->frame_pending)
             timeout = 0;  // Don't sleep if we already know we need to draw
 
         if (poll(fds, nfds, timeout) == -1) break;
