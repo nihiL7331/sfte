@@ -2830,6 +2830,14 @@ struct sfte_ctx {
 };
 
 #if SFTE_WAYLAND
+typedef struct sfte_wayland_window_backend {
+    int32_t pty_fd;  // Master file descriptor to read/write from
+    pid_t pty_pid;   // PID of shell
+#if SFTE_TERM_RESURRECT
+    int32_t log_fd;
+#endif  // SFTE_TERM_RESURRECT
+} sfte_wayland_window_backend;
+
 struct sfte_wayland_app {
     sfte_ctx *ctx;
     struct wl_display *display;
@@ -2869,11 +2877,7 @@ struct sfte_wayland_app {
     int32_t width, height;
     int32_t pending_width, pending_height;
     int32_t mouse_x, mouse_y;
-    int32_t pty_fds[SFTE_MUX_MAX_WINDOWS];  // Master file descriptor to read/write from
-    pid_t pty_pids[SFTE_MUX_MAX_WINDOWS];   // PID of shell
-#if SFTE_TERM_RESURRECT
-    int32_t log_fds[SFTE_MUX_MAX_WINDOWS];
-#endif  // SFTE_TERM_RESURRECT
+    sfte_wayland_window_backend win_backends[SFTE_MUX_MAX_WINDOWS];
 
     int32_t repeat_timer_fd;
     int32_t repeat_rate;
@@ -10965,11 +10969,12 @@ static inline void _sfte_wayland_get_pty(sfte_wayland_app *app, int32_t **out_fd
                                          int32_t **out_log_fd, pid_t **out_pid) {
     sfte_ctx *ctx = app->ctx;
     sfte_mux *mux = &ctx->mux;
-    if (out_fd) *out_fd = &app->pty_fds[mux->active_idx];
+    sfte_wayland_window_backend *backend = &app->win_backends[mux->active_idx];
+    if (out_fd) *out_fd = &backend->pty_fd;
 #if SFTE_TERM_RESURRECT
-    if (out_log_fd) *out_log_fd = &app->log_fds[mux->active_idx];
+    if (out_log_fd) *out_log_fd = &backend->log_fd;
 #endif  // SFTE_TERM_RESURRECT
-    if (out_pid) *out_pid = &app->pty_pids[mux->active_idx];
+    if (out_pid) *out_pid = &backend->pty_pid;
 }
 
 /*
@@ -11076,9 +11081,11 @@ static inline void _sfte_wayland_pty_spawn(sfte_wayland_app *app) {
 static inline void _sfte_wayland_pty_update(sfte_wayland_app *app) {
     sfte_ctx *ctx = app->ctx;
     sfte_mux *mux = &ctx->mux;
-    for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i)
-        if (mux->terms[i].is_allocated && app->pty_fds[i] >= 0)
-            sfte_posix_pty_resize(&mux->terms[i], app->pty_fds[i], app->width, app->height);
+    for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) {
+        sfte_wayland_window_backend backend = app->win_backends[i];
+        if (mux->terms[i].is_allocated && backend.pty_fd >= 0)
+            sfte_posix_pty_resize(&mux->terms[i], backend.pty_fd, app->width, app->height);
+    }
 }
 
 #if SFTE_FONT_ZOOM
@@ -11891,12 +11898,15 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
         fds[1] = (struct pollfd){.fd = app->repeat_timer_fd, .events = POLLIN};
         uint8_t nfds = 2;
 
-        for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i)
-            if (app->pty_fds[i] >= 0 && mux->terms[i].is_allocated) {
-                fds[nfds] = (struct pollfd){.fd = app->pty_fds[i], .events = POLLIN};
+        for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) {
+            sfte_wayland_window_backend backend = app->win_backends[i];
+
+            if (backend.pty_fd >= 0 && mux->terms[i].is_allocated) {
+                fds[nfds] = (struct pollfd){.fd = backend.pty_fd, .events = POLLIN};
                 term_map[nfds - 2] = &mux->terms[i];
                 nfds++;
             }
+        }
 
         int32_t timeout = sfte_get_timeout_ms(ctx);
         if (app->needs_render) timeout = 0;  // Don't sleep if we already know we need to draw
@@ -11920,20 +11930,22 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
         if (mux->pending_close) {
             mux->pending_close = 0;
 
-            if (app->pty_pids[mux->active_idx] > 0) {
-                kill(app->pty_pids[mux->active_idx], SIGHUP);
-                app->pty_pids[mux->active_idx] = -1;
+            sfte_wayland_window_backend *backend = &app->win_backends[mux->active_idx];
+
+            if (backend->pty_pid > 0) {
+                kill(backend->pty_pid, SIGHUP);
+                backend->pty_pid = -1;
             }
 
-            if (app->pty_fds[mux->active_idx] >= 0) {
-                close(app->pty_fds[mux->active_idx]);
-                app->pty_fds[mux->active_idx] = -1;
+            if (backend->pty_fd >= 0) {
+                close(backend->pty_fd);
+                backend->pty_fd = -1;
             }
 
 #if SFTE_TERM_RESURRECT
-            if (app->log_fds[mux->active_idx] >= 0) {
-                close(app->log_fds[mux->active_idx]);
-                app->log_fds[mux->active_idx] = -1;
+            if (backend->log_fd >= 0) {
+                close(backend->log_fd);
+                backend->log_fd = -1;
             }
             char log_path[128];
             snprintf(log_path, sizeof(log_path), "/tmp/sfte_tab_%d.log", mux->active_idx);
@@ -11987,7 +11999,8 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
 
                 if (n > 0) {
 #if SFTE_TERM_RESURRECT
-                    if (app->log_fds[p - 2] >= 0) write(app->log_fds[p - 2], buf, n);
+                    sfte_wayland_window_backend log_backend = app->win_backends[p - 2];
+                    if (log_backend.log_fd >= 0) write(log_backend.log_fd, buf, n);
 #endif  // SFTE_TERM_RESURRECT
 
                     sfte_parse(target_term, buf, n);
@@ -11996,11 +12009,12 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
                     close(cur_fd);
 
                     int8_t idx = sfte_term_get_idx(ctx, target_term);
-                    app->pty_fds[idx] = -1;
-                    app->pty_pids[idx] = -1;
+                    sfte_wayland_window_backend *backend = &app->win_backends[idx];
+                    backend->pty_fd = -1;
+                    backend->pty_pid = -1;
 #if SFTE_TERM_RESURRECT
-                    if (app->log_fds[idx] >= 0) close(app->log_fds[idx]);
-                    app->log_fds[idx] = -1;
+                    if (backend->log_fd >= 0) close(backend->log_fd);
+                    backend->log_fd = -1;
 
                     // Delete the file since the tab was intentionally cloesd
                     char log_path[128];
@@ -12018,8 +12032,9 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
                     close(cur_fd);
 
                     int8_t idx = sfte_term_get_idx(ctx, target_term);
-                    app->pty_fds[idx] = -1;
-                    app->pty_pids[idx] = -1;
+                    sfte_wayland_window_backend *backend = &app->win_backends[idx];
+                    backend->pty_fd = -1;
+                    backend->pty_pid = -1;
 
                     if (!sfte_term_close(ctx, target_term)) app->running = 0;
                     break;
@@ -12837,7 +12852,7 @@ uint8_t sfte_input_shortcut(sfte_ctx *ctx, sfte_key key, uint32_t mod_mask) {
     sfte_key lower_key = (key >= 'A' && key <= 'Z') ? (sfte_key)(key + ('a' - 'A')) : key;
 
     for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_shortcuts); ++i) {
-        sfte_key sc_key = _sfte_shortcuts[i].key;
+        sfte_key sc_key = (sfte_key)_sfte_shortcuts[i].key;
         sfte_key lower_sc_key = (sc_key >= 'A' && sc_key <= 'Z') ? (sfte_key)(sc_key + ('a' - 'A'))
                                                                  : sc_key;
         if (lower_sc_key == lower_key && _sfte_shortcuts[i].mod_mask == mod_mask) {
@@ -13594,10 +13609,12 @@ sfte_wayland_app *sfte_wayland_init(void) {
 #endif  // SFTE_INPUT_HYPERLINKS
 
     for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) {
-        app->pty_fds[i] = -1;
-        app->pty_pids[i] = -1;
+        sfte_wayland_window_backend *backend = &app->win_backends[i];
+
+        backend->pty_fd = -1;
+        backend->pty_pid = -1;
 #if SFTE_TERM_RESURRECT
-        app->log_fds[i] = -1;
+        backend->log_fd = -1;
 #endif  // SFTE_TERM_RESURRECT
     }
 
