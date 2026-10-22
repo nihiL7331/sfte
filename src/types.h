@@ -600,9 +600,6 @@ struct sfte_ctx {
 typedef struct sfte_wayland_window_backend {
     int32_t pty_fd;  // Master file descriptor to read/write from
     pid_t pty_pid;   // PID of shell
-#if SFTE_TERM_RESURRECT
-    int32_t log_fd;
-#endif  // SFTE_TERM_RESURRECT
 } sfte_wayland_window_backend;
 
 struct sfte_wayland_app {

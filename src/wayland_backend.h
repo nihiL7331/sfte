@@ -26,17 +26,11 @@
 /*
     Returns the currently active shells file descriptor and process ID.
 */
-static inline void _sfte_wayland_get_pty(sfte_wayland_app *app, int32_t **out_fd,
-                                         int32_t **out_log_fd, pid_t **out_pid) {
+static inline void _sfte_wayland_get_pty(sfte_wayland_app *app, int32_t **out_fd, pid_t **out_pid) {
     sfte_ctx *ctx = app->ctx;
     sfte_mux *mux = &ctx->mux;
     sfte_wayland_window_backend *backend = &app->win_backends[mux->active_idx];
     if (out_fd) *out_fd = &backend->pty_fd;
-#if SFTE_TERM_RESURRECT
-    if (out_log_fd) *out_log_fd = &backend->log_fd;
-#else   // !SFTE_TERM_RESURRECT
-    (void)out_log_fd;
-#endif  // !SFTE_TERM_RESURRECT
     if (out_pid) *out_pid = &backend->pty_pid;
 }
 
@@ -46,7 +40,7 @@ static inline void _sfte_wayland_get_pty(sfte_wayland_app *app, int32_t **out_fd
 static inline void _sfte_wayland_write_cb(void *user_data, const char *data, size_t len) {
     sfte_wayland_app *app = (sfte_wayland_app *)user_data;
     int32_t *fd;
-    _sfte_wayland_get_pty(app, &fd, NULL, NULL);
+    _sfte_wayland_get_pty(app, &fd, NULL);
     if (fd) (void)write(*fd, data, len);
 }
 
@@ -65,69 +59,9 @@ static inline void _sfte_wayland_pty_spawn(sfte_wayland_app *app) {
     _SFTE_MUX_SWITCH_FOCUS(ctx, prev_idx, idx);
 #endif  // SFTE_MUX
 
-#if SFTE_TERM_RESURRECT
-    char log_path[128];
-#if SFTE_MUX
-    snprintf(log_path, sizeof(log_path), "/tmp/sfte_tab_%d.log", idx);
-#else   // !SFTE_MUX
-    snprintf(log_path, sizeof(log_path), "/tmp/sfte_main.log");
-#endif  // !SFTE_MUX
-
-    int32_t replay_fd = open(log_path, O_RDONLY);
-    if (replay_fd >= 0) {
-        uint8_t replay_buf[8192];
-        ssize_t bytes;
-        while ((bytes = read(replay_fd, replay_buf, sizeof(replay_buf))) > 0)
-            sfte_parse(new_term, replay_buf, bytes);
-        close(replay_fd);
-
-        uint8_t was_alt = 0;
-#if SFTE_TERM_ALT_SCREEN
-        was_alt = new_term->modes.alt_active;
-#endif  // SFTE_TERM_ALT_SCREEN
-
-        memset(&new_term->modes, 0, sizeof(new_term->modes));
-        new_term->modes.auto_wrap = 1;
-
-#if SFTE_INPUT_MOUSE
-        memset(&new_term->mouse, 0, sizeof(new_term->mouse));
-#endif  // SFTE_INPUT_MOUSE
-#if SFTE_INPUT_KITTY
-        memset(&new_term->keyboard, 0, sizeof(new_term->keyboard));
-#endif  // SFTE_INPUT_KITTY
-
-#if SFTE_TERM_ALT_SCREEN
-        if (was_alt && new_term->alt_cells) {
-            sfte_cell *tmp = new_term->cells;
-            new_term->cells = new_term->alt_cells;
-            new_term->alt_cells = tmp;
-        }
-#endif  // SFTE_TERM_ALT_SCREEN
-
-#if SFTE_TERM_ANIMATE_SCREEN
-        new_term->is_animating = 0;
-#endif  // SFTE_TERM_ANIMATE_SCREEN
-
-        new_term->parser.state = 0;
-        new_term->parser.dec_priv = 0;
-
-        const char *break_msg = "\r\n\r\n\033[90msession restored\033[0m\r\n";
-        sfte_parse(new_term, (const uint8_t *)break_msg, strlen(break_msg));
-    }
-
-    int32_t *log_fd;
-    _sfte_wayland_get_pty(app, NULL, &log_fd, NULL);
-    *log_fd = open(log_path, O_CREAT | O_WRONLY | O_APPEND, 0644);
-
-    if (replay_fd >= 0 && *log_fd >= 0) {
-        const char *break_msg = "\r\n\r\n\033[90msession restored\033[0m\r\n";
-        write(*log_fd, break_msg, strlen(break_msg));
-    }
-#endif  // SFTE_TERM_RESURRECT
-
     int32_t *fd;
     pid_t *pid;
-    _sfte_wayland_get_pty(app, &fd, NULL, &pid);
+    _sfte_wayland_get_pty(app, &fd, &pid);
 
     const sfte_viewport_state *vp = &new_term->viewport;
     *pid = sfte_posix_pty_spawn(ctx, fd, vp->cols, vp->rows, app->width, app->height);
@@ -973,6 +907,7 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
 
         int32_t timeout = sfte_get_timeout_ms(ctx);
         if (app->needs_render) timeout = 0;  // Don't sleep if we already know we need to draw
+            timeout = 0;  // Don't sleep if we already know we need to draw
 
         if (poll(fds, nfds, timeout) == -1) break;
 
@@ -1004,16 +939,6 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
                 close(backend->pty_fd);
                 backend->pty_fd = -1;
             }
-
-#if SFTE_TERM_RESURRECT
-            if (backend->log_fd >= 0) {
-                close(backend->log_fd);
-                backend->log_fd = -1;
-            }
-            char log_path[128];
-            snprintf(log_path, sizeof(log_path), "/tmp/sfte_tab_%d.log", mux->active_idx);
-            unlink(log_path);
-#endif  // SFTE_TERM_RESURRECT
 
             if (!sfte_term_close(ctx, &mux->terms[mux->active_idx])) app->running = 0;
             app->needs_render = 1;
@@ -1061,11 +986,6 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
                 ssize_t n = read(cur_fd, buf, SFTE_TERM_PTY_BUF_SIZE);
 
                 if (n > 0) {
-#if SFTE_TERM_RESURRECT
-                    sfte_wayland_window_backend log_backend = app->win_backends[p - 2];
-                    if (log_backend.log_fd >= 0) write(log_backend.log_fd, buf, n);
-#endif  // SFTE_TERM_RESURRECT
-
                     sfte_parse(target_term, buf, n);
                     did_read = 1;
                 } else if (n == 0) {
@@ -1075,15 +995,6 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
                     sfte_wayland_window_backend *backend = &app->win_backends[idx];
                     backend->pty_fd = -1;
                     backend->pty_pid = -1;
-#if SFTE_TERM_RESURRECT
-                    if (backend->log_fd >= 0) close(backend->log_fd);
-                    backend->log_fd = -1;
-
-                    // Delete the file since the tab was intentionally cloesd
-                    char log_path[128];
-                    snprintf(log_path, sizeof(log_path), "/tmp/sfte_tab_%d.log", idx);
-                    unlink(log_path);
-#endif  // SFTE_TERM_RESURRECT
 
                     if (!sfte_term_close(ctx, target_term)) app->running = 0;
                     break;
@@ -1164,9 +1075,6 @@ sfte_wayland_app *sfte_wayland_init(void) {
 
         backend->pty_fd = -1;
         backend->pty_pid = -1;
-#if SFTE_TERM_RESURRECT
-        backend->log_fd = -1;
-#endif  // SFTE_TERM_RESURRECT
     }
 
     _sfte_wayland_load(app);
@@ -1206,17 +1114,7 @@ int sfte_wayland_run(sfte_wayland_app *app) {
     sfte_resize(ctx, app->width, app->height);
     if (!app->buffer) _sfte_wayland_create_buffer(app);
 
-#if SFTE_TERM_RESURRECT
-    for (uint8_t i = 0; i < SFTE_MUX_MAX_WINDOWS; ++i) {
-        char log_path[128];
-        snprintf(log_path, sizeof(log_path), "/tmp/sfte_tab_%d.log", i);
-        if (access(log_path, F_OK) == 0) _sfte_wayland_pty_spawn(app);
-    }
-    _SFTE_MUX_SWITCH_FOCUS(ctx, mux->active_idx, 0);
-#endif  // SFTE_TERM_RESURRECT && SFTE_MUX
-
     _sfte_wayland_pty_update(app);
-
     _sfte_wayland_loop(app);
 
     _sfte_wayland_unload(app);

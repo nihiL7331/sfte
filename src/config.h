@@ -185,16 +185,6 @@ _SFTE_ENSURE_RANGE(SFTE_MEM_STACK_SIZE, 1024, INT32_MAX);
 _SFTE_ENSURE_RANGE(SFTE_TERM_FOCUS, 0, 1);
 
 /*
-    Enables terminal resurrection when open.
-    Works by writing to a log file per tab, storing all data pushed to pty_fd.
-    This data is then parsed on startup, reloading the state.
-*/
-#ifndef SFTE_TERM_RESURRECT
-#define SFTE_TERM_RESURRECT 0
-#endif  // SFTE_TERM_RESURRECT
-_SFTE_ENSURE_RANGE(SFTE_TERM_RESURRECT, 0, 1);
-
-/*
     Initial terminal grid column size.
 */
 #ifndef SFTE_TERM_INIT_COLS
