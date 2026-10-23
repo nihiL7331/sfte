@@ -370,10 +370,11 @@ static inline uint32_t _sfte_grid_get_fg(sfte_cell *cell) {
 static inline uint32_t _sfte_grid_get_ul(sfte_cell *cell) {
 #if SFTE_UNDERLINE_COLORED
 #if SFTE_COLOR_TRUECOLOR
-    return cell->ul_color ? cell->ul_color : SFTE_COLOR_FG;
+    if (cell->ul_color && cell->ul_color != _SFTE_COLOR_FG_DEFAULT) return cell->ul_color;
+    return _sfte_grid_get_fg(cell);
 #endif  // SFTE_COLOR_TRUECOLOR
 
-    if (cell->ul_color == _SFTE_COLOR_FG_DEFAULT || !cell->ul_color) return SFTE_COLOR_FG;
+    if (cell->ul_color == _SFTE_COLOR_FG_DEFAULT || !cell->ul_color) return _sfte_grid_get_fg(cell);
     return _sfte_palette_256[cell->ul_color & 0xFF];
 #endif  // SFTE_UNDERLINE_COLORED
     (void)cell;
