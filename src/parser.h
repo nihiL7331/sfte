@@ -1635,14 +1635,25 @@ static inline void _sfte_parser_feed_byte(sfte_term *term, uint8_t b) {
     switch (b) {
     case '\n':
     case '\x0B':
-    case '\x0C': _sfte_parser_c0_lf(term); return;
-    case '\r': cursor->col = 0; return;
-    case '\t': _sfte_parser_c0_ht(term); return;
+    case '\x0C':
+        if (parser->state == VT_OSC || parser->state == VT_DCS) break;
+        _sfte_parser_c0_lf(term);
+        return;
+    case '\r':
+        if (parser->state == VT_OSC || parser->state == VT_DCS) break;
+        cursor->col = 0;
+        return;
+    case '\t':
+        if (parser->state == VT_OSC || parser->state == VT_DCS) break;
+        _sfte_parser_c0_ht(term);
+        return;
     case '\b':
     case '\x7f':
+        if (parser->state == VT_OSC || parser->state == VT_DCS) break;
         if (cursor->col > 0) cursor->col--;
         return;
     case '\a':
+        if (parser->state == VT_OSC || parser->state == VT_DCS) break;
         if (cb->bell) cb->bell(cb->user_data);
         return;
     default: break;
@@ -1667,7 +1678,9 @@ static inline void _sfte_parser_feed_byte(sfte_term *term, uint8_t b) {
         }
         break;
     case VT_ESCAPE:
-        if (b == '[') {
+        if (b == '\033' || b == '\x1b')
+            parser->state = VT_ESCAPE;
+        else if (b == '[') {
             parser->state = VT_CSI_ENTRY;
             parser->param_idx = 0;
             parser->dec_priv = 0;
