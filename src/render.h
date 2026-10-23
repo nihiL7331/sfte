@@ -1264,6 +1264,15 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
         }
     }
 
+    // Clamp when reaching buffer bounds so it never sticks to bottom
+    if (vp->sb_off == 0 && vp->scroll_y_off > 0.0f) {
+        vp->scroll_y_off = 0.0f;
+        vp->is_scrolling = 0;
+    } else if (vp->sb_off >= vp->sb_len && vp->scroll_y_off < 0.0f) {
+        vp->scroll_y_off = 0.0f;
+        vp->is_scrolling = 0;
+    }
+
     if (vp->is_scrolling) {
         uint64_t now = SFTE_TIME_MS();
         float dt = (float)(now - vp->last_scroll_ms);
