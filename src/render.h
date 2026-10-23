@@ -1051,7 +1051,6 @@ static inline void _sfte_grid_dirty_trail(sfte_trail_state *trail, sfte_term *te
     int32_t start_logical_r, end_logical_r;
     _sfte_grid_from_px(vp, dmg->x, dmg->y, &start_c, &start_logical_r, NULL);
     _sfte_grid_from_px(vp, dmg->x + dmg->w, dmg->y + dmg->h, &end_c, &end_logical_r, NULL);
-    if (start_logical_r < 0 || end_logical_r < 0) return;
 
     _sfte_grid_dirty_rect(term, start_c, start_logical_r, (end_c - start_c) + 1,
                           (end_logical_r - start_logical_r) + 1);
@@ -1116,12 +1115,14 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, int32_t y_off
 
     float inv_l2 = 1.0f / l2;
 
-    int32_t min_x = _SFTE_CLAMP((cx0 < cx1 ? cx0 : cx1) - rx + SFTE_WINDOW_PAD_X, 0, win->width);
-    int32_t max_x = _SFTE_CLAMP((cx0 > cx1 ? cx0 : cx1) + rx + SFTE_WINDOW_PAD_X, 0, win->width);
-    int32_t min_y = _SFTE_CLAMP((cy0 < cy1 ? cy0 : cy1) - ry + SFTE_WINDOW_PAD_Y + y_off, 0,
-                                win->height);
-    int32_t max_y = _SFTE_CLAMP((cy0 > cy1 ? cy0 : cy1) + ry + SFTE_WINDOW_PAD_Y + y_off, 0,
-                                win->height);
+    int32_t min_x = _SFTE_CLAMP((cx0 < cx1 ? cx0 : cx1) - rx + SFTE_WINDOW_PAD_X, SFTE_WINDOW_PAD_X,
+                                win->width - SFTE_WINDOW_PAD_X);
+    int32_t max_x = _SFTE_CLAMP((cx0 > cx1 ? cx0 : cx1) + rx + SFTE_WINDOW_PAD_X, SFTE_WINDOW_PAD_X,
+                                win->width - SFTE_WINDOW_PAD_X);
+    int32_t min_y = _SFTE_CLAMP((cy0 < cy1 ? cy0 : cy1) - ry + SFTE_WINDOW_PAD_Y + y_off,
+                                SFTE_WINDOW_PAD_Y, win->height - SFTE_WINDOW_PAD_Y);
+    int32_t max_y = _SFTE_CLAMP((cy0 > cy1 ? cy0 : cy1) + ry + SFTE_WINDOW_PAD_Y + y_off,
+                                SFTE_WINDOW_PAD_Y, win->height - SFTE_WINDOW_PAD_Y);
 
 #if SFTE_CURSOR_DYNAMIC
     uint32_t trail_color = cursor->color;
@@ -1407,16 +1408,33 @@ static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col,
 #if SFTE_MUX
     const sfte_mux *mux = &ctx->mux;
 #endif  // SFTE_MUX
-    const sfte_term *term = sfte_term_get_active(ctx);
+    sfte_term *term = sfte_term_get_active(ctx);
 #if SFTE_SEARCH
     const sfte_search_state *search = &term->search;
 #endif  // SFTE_SEARCH
     const sfte_viewport_state *vp = &term->viewport;
-    const sfte_cursor_state *cursor = &term->cursor;
+    sfte_cursor_state *cursor = &term->cursor;
+#if SFTE_CURSOR_TRAIL
+    sfte_trail_state *trail = &cursor->trail;
+#endif  // SFTE_CURSOR_TRAIL
 
 #if SFTE_MUX_PREFIX_PREVIEW
     if (mux->is_prefix_active) return;
 #endif  // SFTE_MUX_PREFIX_PREVIEW
+
+#if SFTE_TERM_SCROLLBACK_CAP
+    if (vp->sb_off > 0
+#if SFTE_SEARCH
+        && !search->is_active
+#endif  // SFTE_SEARCH
+    ) {
+#if SFTE_CURSOR_TRAIL
+        trail->warp_tail = 1;
+        trail->is_trailing = 0;
+#endif  // SFTE_CURSOR_TRAIL
+        return;
+    }
+#endif  // SFTE_TERM_SCROLLBACK_CAP
 
 #if SFTE_CURSOR_TRAIL
     _sfte_render_update_trail(ctx);
@@ -1434,15 +1452,6 @@ static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col,
 #if SFTE_CURSOR_BLINK
     if (!cursor->blink_visible) return;
 #endif  // SFTE_CURSOR_BLINK
-
-#if SFTE_TERM_SCROLLBACK_CAP
-    if (vp->sb_off > 0
-#if SFTE_SEARCH
-        && !search->is_active
-#endif  // SFTE_SEARCH
-    )
-        return;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
 
 #if SFTE_CURSOR_DYNAMIC
     uint32_t active_cur_color = cursor->color;
