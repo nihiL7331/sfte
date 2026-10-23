@@ -667,7 +667,8 @@ static inline void _sfte_csi_reset_mode(sfte_term *term, uint16_t *p, uint16_t c
 
     Sets colors and style of the characters following this code.
 */
-static inline void _sfte_csi_exec_sgr(sfte_sgr_state *sgr, uint16_t *p, uint16_t cnt) {
+static inline void _sfte_csi_exec_sgr(sfte_sgr_state *sgr, uint16_t *p, uint16_t cnt,
+                                      uint16_t subparam_mask) {
     if (cnt == 0) {
         cnt = 1;
         p[0] = 0;
@@ -696,8 +697,10 @@ static inline void _sfte_csi_exec_sgr(sfte_sgr_state *sgr, uint16_t *p, uint16_t
             // Default to straight if no sub-param is provided
             sgr->ul_style = _SFTE_UNDERLINE_STYLE_STRAIGHT;
 
-            // If the sub-param exists and defines a style set it
-            if (i + 1 < cnt && p[i + 1] <= _SFTE_UNDERLINE_STYLE_DASHED) sgr->ul_style = p[++i];
+            // If a colon sub-param exists, set extended ul style
+            if (i + 1 < cnt && (subparam_mask & (1 << (i + 1))) &&
+                p[i + 1] <= _SFTE_UNDERLINE_STYLE_DASHED)
+                sgr->ul_style = p[++i];
 #endif  // SFTE_UNDERLINE_EXTENDED
             break;
         case 7: sgr->attr |= _SFTE_ATTR_REVERSE; break;
@@ -712,7 +715,7 @@ static inline void _sfte_csi_exec_sgr(sfte_sgr_state *sgr, uint16_t *p, uint16_t
         case 39: sgr->fg = _SFTE_COLOR_FG_DEFAULT; break;
         case 49: sgr->bg = _SFTE_COLOR_BG_DEFAULT; break;
 #if SFTE_UNDERLINE_COLORED
-        case 59: sgr->ul_color = sgr->fg; break;
+        case 59: sgr->ul_color = _SFTE_COLOR_FG_DEFAULT; break;
 #endif            // SFTE_UNDERLINE_COLORED
         case 38:  // FG
         case 48:  // BG
@@ -726,20 +729,43 @@ static inline void _sfte_csi_exec_sgr(sfte_sgr_state *sgr, uint16_t *p, uint16_t
                     sgr->fg = color;
                 else if (code == 48)
                     sgr->bg = color;
-                i += 2;
-            } else if (i + 4 < cnt && p[i + 1] == 2) {
-                // Truecolor
-                uint32_t rgb = _sfte_csi_parse_truecolor(p, i);
-                uint32_t color = _sfte_color_from_rgb(rgb);
-                if (code == 38)
-                    sgr->fg = color;
-                else if (code == 48)
-                    sgr->bg = color;
 #if SFTE_UNDERLINE_COLORED
                 else if (code == 58)
                     sgr->ul_color = color;
 #endif  // SFTE_UNDERLINE_COLORED
-                i += 4;
+                i += 2;
+            } else if (i + 1 < cnt && p[i + 1] == 2) {
+                // Handles colon format with color space/empty cs (6 param)
+                //               and semicolon/short colon format (5 param)
+                uint8_t has_cs = (i + 5 < cnt) && (subparam_mask & (1 << (i + 3)));
+
+                if (has_cs) {
+                    uint32_t rgb = SFTE_COLOR_ALPHA_MASK | (p[i + 3] << 16) | (p[i + 4] << 8) |
+                                   p[i + 5];
+                    uint32_t color = _sfte_color_from_rgb(rgb);
+                    if (code == 38)
+                        sgr->fg = color;
+                    else if (code == 48)
+                        sgr->bg = color;
+#if SFTE_UNDERLINE_COLORED
+                    else if (code == 58)
+                        sgr->ul_color = color;
+#endif  // SFTE_UNDERLINE_COLORED
+                    i += 5;
+                } else if (i + 4 < cnt) {
+                    uint32_t rgb = SFTE_COLOR_ALPHA_MASK | (p[i + 2] << 16) | (p[i + 3] << 8) |
+                                   p[i + 4];
+                    uint32_t color = _sfte_color_from_rgb(rgb);
+                    if (code == 38)
+                        sgr->fg = color;
+                    else if (code == 48)
+                        sgr->bg = color;
+#if SFTE_UNDERLINE_COLORED
+                    else if (code == 58)
+                        sgr->ul_color = color;
+#endif  // SFTE_UNDERLINE_COLORED
+                    i += 4;
+                }
             }
             break;
         }
@@ -1117,7 +1143,7 @@ static inline void _sfte_csi_dispatch(sfte_term *term, uint8_t cmd) {
     case 'h': _sfte_csi_set_mode(term, p, cnt, col); break;
     case 'l': _sfte_csi_reset_mode(term, p, cnt, col); break;
     case 'm':
-        if (parser->dec_priv == 0) _sfte_csi_exec_sgr(sgr, p, cnt);
+        if (parser->dec_priv == 0) _sfte_csi_exec_sgr(sgr, p, cnt, parser->subparam_mask);
         break;
     case 'n': _sfte_csi_exec_dsr(term, p); break;
     case 'p':
@@ -1600,6 +1626,7 @@ static inline void _sfte_parser_feed_byte(sfte_term *term, uint8_t b) {
             parser->param_idx = 0;
             parser->dec_priv = 0;
             parser->csi_inter = 0;
+            parser->subparam_mask = 0;
             memset(parser->params, 0, sizeof(parser->params));
         } else if (b == ']') {
             parser->state = VT_OSC;
@@ -1706,8 +1733,12 @@ static inline void _sfte_parser_feed_byte(sfte_term *term, uint8_t b) {
             parser->state = VT_CSI_PARAM;
             parser->params[parser->param_idx] *= 10;
             parser->params[parser->param_idx] += (b - '0');
-        } else if (b == ';' || b == ':') {
-            if (parser->param_idx < 15) parser->param_idx++;  // Move to next parameter
+        } else if (b == ';') {
+            parser->state = VT_CSI_PARAM;
+            if (parser->param_idx < 15) parser->param_idx++;
+        } else if (b == ':') {
+            parser->state = VT_CSI_PARAM;
+            if (parser->param_idx < 15) parser->subparam_mask |= (1 << ++parser->param_idx);
         } else if (b >= 0x20 && b <= 0x2F) {
             parser->state = VT_CSI_PARAM;
             parser->csi_inter = b;

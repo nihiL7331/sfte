@@ -332,6 +332,7 @@ typedef struct sfte_font_cache {
 typedef struct sfte_parser_state {
     uint16_t state;
     uint16_t params[16];
+    uint16_t subparam_mask;
     uint8_t param_idx;
     uint8_t dec_priv;
     uint8_t csi_inter;
