@@ -1559,17 +1559,63 @@ static inline void _sfte_parser_dcs_dispatch(sfte_term *term, uint8_t terminator
     const char *term_str = (terminator == '\x1b') ? "\033\\" : "\x07";
     parser->osc_payload[parser->osc_len] = '\0';
 
+#define WRITE_REPLY(...) len += snprintf(reply + len, sizeof(reply) - len, __VA_ARGS__)
+
 #if SFTE_IMG_KITTY
     if (parser->osc_payload[0] == 'G')
         _sfte_kitty_parse_graphics(term, parser->osc_payload + strlen("G"));
     else
 #endif  // SFTE_IMG_KITTY
-        if (strncmp(parser->osc_payload, "+q", 2) == 0) {
+        if (strncmp(parser->osc_payload, "$q", 2) == 0) {
+            // DECRQSS: DCS $ q <cmd> ST -> responds with DCS 1 $ r <settings> <cmd> ST
+            const char *cmd = parser->osc_payload + strlen("+q");
+            if (strcmp(cmd, "m") == 0) {
+                const sfte_sgr_state *sgr = &term->sgr;
+                char reply[64];
+                int len = 0;
+
+                WRITE_REPLY("\033P1$r0");
+
+#if SFTE_UNDERLINE_EXTENDED
+                switch (sgr->ul_style) {
+                case _SFTE_UNDERLINE_STYLE_STRAIGHT: WRITE_REPLY(";4"); break;
+                case _SFTE_UNDERLINE_STYLE_DOUBLE: WRITE_REPLY(";4:2"); break;
+                case _SFTE_UNDERLINE_STYLE_CURLY: WRITE_REPLY(";4:3"); break;
+                case _SFTE_UNDERLINE_STYLE_DOTTED: WRITE_REPLY(";4:4"); break;
+                case _SFTE_UNDERLINE_STYLE_DASHED: WRITE_REPLY(";4:5"); break;
+                }
+#endif  // SFTE_UNDERLINE_EXTENDED
+                if (sgr->attr & _SFTE_ATTR_BOLD) WRITE_REPLY(";1");
+                if (sgr->attr & _SFTE_ATTR_ITALIC) WRITE_REPLY(";3");
+                if (sgr->attr & _SFTE_ATTR_REVERSE) WRITE_REPLY(";7");
+
+                WRITE_REPLY("m%s", term_str);
+                if (cb->write) cb->write(cb->user_data, reply, len);
+            } else {  // unrecognized DECRQSS cmd -> negative report DCS 0 $ r <cmd> ST
+                char reply[64];
+                int len = 0;
+
+                WRITE_REPLY("\033P0$r%s%s", cmd, term_str);
+                if (cb->write) cb->write(cb->user_data, reply, len);
+            }
+        } else if (strncmp(parser->osc_payload, "+q", 2) == 0) {
+            // XTGETTCAP: DCS + q <hex name> ST
+            // capability names are hex-encoded ASCII
+#define SMULX_HEX "536d756c78"           // Smulx
+#define RESP_HEX "1b5b343a25703125646d"  // \033[4:%p1%dm
+#define REPLY_HEX "\033P1+r" SMULX_HEX "=" RESP_HEX "%s"
+            const char *query = parser->osc_payload + strlen("+q");
             char reply[128];
-            size_t len = snprintf(reply, sizeof(reply), "\033P0+r%s%s",
-                                  parser->osc_payload + strlen("+q"), term_str);
+            int len = 0;
+
+            if (strstr(query, SMULX_HEX) != NULL)
+                WRITE_REPLY(REPLY_HEX, term_str);
+            else
+                WRITE_REPLY("\033P0+r%s%s", query, term_str);
             if (cb->write) cb->write(cb->user_data, reply, len);
         }
+
+#undef WRITE_REPLY
 }
 
 /*
