@@ -290,6 +290,15 @@ _SFTE_ENSURE_RANGE(SFTE_TERM_ANIM_DUR_MS, 0.0f, FLT_MAX);
 _SFTE_ENSURE_RANGE(SFTE_TERM_REFLOW, 0, 1);
 
 /*
+    Defines threshold which needs to be crossed by
+    the scroll accumulator to count as one 'scroll action'.
+*/
+#ifndef SFTE_TERM_SCROLL_THRESHOLD
+#define SFTE_TERM_SCROLL_THRESHOLD 10.0
+#endif  // SFTE_TERM_SCROLL_THRESHOLD
+_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLL_THRESHOLD, 0.0, DBL_MAX);
+
+/*
     Determines whether incoming terminal output snaps the scrollback viewport back to the bottom.
     By default it preserves scroll position when output happens.
 */

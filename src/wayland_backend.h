@@ -344,7 +344,7 @@ static inline void _sfte_wayland_pointer_button(void *data, struct wl_pointer *p
 
 static inline void _sfte_wayland_pointer_axis(void *data, struct wl_pointer *pointer, uint32_t time,
                                               uint32_t axis, wl_fixed_t value) {
-    (void)data, (void)pointer, (void)time, (void)axis, (void)value;
+    (void)pointer, (void)time, (void)axis;
 #if SFTE_INPUT_MOUSE
     if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL) return;
 
@@ -352,9 +352,19 @@ static inline void _sfte_wayland_pointer_axis(void *data, struct wl_pointer *poi
     sfte_ctx *ctx = app->ctx;
     sfte_term *term = sfte_term_get_active(ctx);
 
-    int8_t dir = (wl_fixed_to_double(value) < 0) ? 1 : -1;
-    sfte_mouse_scroll(term, dir, app->mouse_x, app->mouse_y);
-    app->needs_render = 1;
+    double val = wl_fixed_to_double(value);
+    if (val == 0.0) return;
+
+    app->scroll_accum += val;
+    int32_t steps = (int32_t)(app->scroll_accum / SFTE_TERM_SCROLL_THRESHOLD);
+
+    if (steps != 0) {
+        app->scroll_accum -= steps * SFTE_TERM_SCROLL_THRESHOLD;
+        int8_t dir = (steps < 0) ? 1 : -1;
+        int32_t cnt = abs(steps);
+        for (int32_t i = 0; i < cnt; ++i) sfte_mouse_scroll(term, dir, app->mouse_x, app->mouse_y);
+        app->needs_render = 1;
+    }
 #endif  // SFTE_INPUT_MOUSE
 }
 
@@ -370,6 +380,12 @@ static inline void _sfte_wayland_pointer_axis_source(void *data, struct wl_point
 static inline void _sfte_wayland_pointer_axis_stop(void *data, struct wl_pointer *pointer,
                                                    uint32_t time, uint32_t axis) {
     (void)data, (void)pointer, (void)time, (void)axis;
+#if SFTE_INPUT_MOUSE
+    if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) {
+        sfte_wayland_app *app = (sfte_wayland_app *)data;
+        app->scroll_accum = 0.0;
+    }
+#endif  // SFTE_INPUT_MOUSE
 }
 
 static inline void _sfte_wayland_pointer_axis_discrete(void *data, struct wl_pointer *pointer,

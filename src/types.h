@@ -642,6 +642,8 @@ struct sfte_wayland_app {
     int32_t width, height;
     int32_t pending_width, pending_height;
     int32_t mouse_x, mouse_y;
+    double scroll_accum;
+
     sfte_wayland_window_backend win_backends[SFTE_MUX_MAX_WINDOWS];
 
     int32_t repeat_timer_fd;
