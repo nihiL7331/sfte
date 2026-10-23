@@ -286,6 +286,18 @@ static inline int32_t _sfte_grid_log2vis(const sfte_viewport_state *vp, int32_t 
 }
 
 /*
+    Checks if a logical row falls within valid buffer boundaries,
+    accounting for scrollback history and screen height.
+*/
+static inline uint8_t _sfte_grid_is_row_valid(const sfte_viewport_state *vp, int32_t logical_row) {
+#if SFTE_TERM_SCROLLBACK_CAP
+    return logical_row >= -vp->sb_len && logical_row < vp->rows;
+#else   // !SFTE_TERM_SCROLLBACK_CAP
+    return logical_row >= 0 && logical_row < vp->rows;
+#endif  // !SFTE_TERM_SCROLLBACK_CAP
+}
+
+/*
     Converts a visual 2D coordinate into a 1D physical memory index.
 */
 static inline uint32_t _sfte_grid_get_idx(const sfte_viewport_state *vp, int16_t col,
@@ -380,7 +392,8 @@ static inline void _sfte_grid_dirty_rows(sfte_term *term, int32_t logical_row1,
     int32_t min_logical_r = logical_row1 < logical_row2 ? logical_row1 : logical_row2;
     int32_t max_logical_r = logical_row1 > logical_row2 ? logical_row1 : logical_row2;
 
-    for (int32_t logical_r = min_logical_r; logical_r <= max_logical_r; ++logical_r)
+    for (int32_t logical_r = min_logical_r; logical_r <= max_logical_r; ++logical_r) {
+        if (!_sfte_grid_is_row_valid(vp, logical_r)) continue;
         if (logical_r >= 0) {
             int32_t row_start_idx = _sfte_grid_get_idx(vp, 0, logical_r);
             for (int16_t c = 0; c < vp->cols; ++c) term->cells[row_start_idx + c].dirty = 1;
@@ -392,6 +405,7 @@ static inline void _sfte_grid_dirty_rows(sfte_term *term, int32_t logical_row1,
             for (int16_t c = 0; c < vp->cols; ++c) term->scrollback[row_start_idx + c].dirty = 1;
         }
 #endif  // SFTE_TERM_SCROLLBACK_CAP
+    }
 }
 
 /*
@@ -407,9 +421,11 @@ static inline void _sfte_grid_dirty_rect(sfte_term *term, int16_t start_col,
     int16_t end_c = _SFTE_CLAMP(start_col + cols - 1, 0, vp->cols - 1);
     int32_t end_logical_r = start_logical_row + rows - 1;
 
-    for (int32_t logical_r = start_logical_row; logical_r <= end_logical_r; ++logical_r)
+    for (int32_t logical_r = start_logical_row; logical_r <= end_logical_r; ++logical_r) {
+        if (!_sfte_grid_is_row_valid(vp, logical_r)) continue;
         for (int16_t c = start_c; c <= end_c; ++c)
             _sfte_grid_get_cell(term, c, logical_r)->dirty = 1;
+    }
 }
 
 /*

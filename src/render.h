@@ -1202,6 +1202,28 @@ static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_
 #endif  // SFTE_TERM_ANIMATE_SCREEN
 
 /*
+    Calculates the visible visual row range [out_start_r; out_end_r).
+    Accounts for `y_off` during smooth scrolling animations.
+*/
+static inline void _sfte_render_get_vis_row_range(const sfte_viewport_state *vp, int32_t y_off,
+                                                  int16_t *out_start_r, int16_t *out_end_r) {
+    int16_t extra_top = 0, extra_bot = 0;
+#if SFTE_TERM_SCROLL_SMOOTH
+    if (vp->cell_height > 0) {
+        if (y_off > 0)
+            extra_top = (int16_t)((y_off + vp->cell_height - 1) / vp->cell_height);
+        else if (y_off < 0)
+            extra_bot = (int16_t)((-y_off + vp->cell_height - 1) / vp->cell_height);
+    }
+#else   // !SFTE_TERM_SCROLL_SMOOTH
+    (void)vp, (void)y_off;
+#endif  // !SFTE_TERM_SCROLL_SMOOTH
+
+    if (out_start_r) *out_start_r = -extra_top;
+    if (out_end_r) *out_end_r = vp->rows + extra_bot;
+}
+
+/*
     Prepares render passes.
     Returns the amount of passes in `passes` array.
 */
@@ -1268,7 +1290,10 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
             for (int32_t x = 0; x < win->width; ++x)
                 SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, win->width, win->height, clear_bg);
 
-        _sfte_grid_dirty_rows(term, -vp->sb_off, -vp->sb_off + vp->rows - 1);
+        int16_t start_r, end_r;
+        _sfte_render_get_vis_row_range(vp, (int32_t)vp->scroll_y_off, &start_r, &end_r);
+        _sfte_grid_dirty_rows(term, _sfte_grid_vis2log(vp, start_r),
+                              _sfte_grid_vis2log(vp, end_r - 1));
 #if SFTE_TERM_ALT_SCREEN
         if (passes_cnt == 2 && term->alt_cells)
             for (int32_t i = 0; i < vp->rows * vp->cols; ++i) term->alt_cells[i].dirty = 1;
@@ -1559,8 +1584,13 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int32_t y_o
     const sfte_mouse_state *mouse = &term->mouse;
 #endif  // SFTE_INPUT_SELECTION
 
-    for (int16_t r = 0; r < vp->rows; ++r) {
+    int16_t start_r, end_r;
+    _sfte_render_get_vis_row_range(vp, y_off, &start_r, &end_r);
+
+    for (int16_t r = start_r; r < end_r; ++r) {
         int32_t logical_r = _sfte_grid_vis2log(vp, r);
+        if (!_sfte_grid_is_row_valid(vp, logical_r)) continue;
+
         for (int16_t c = 0; c < vp->cols; ++c) {
             sfte_cell *vcell = _sfte_grid_get_cell(term, c, logical_r);
             if (!vcell->dirty) continue;
@@ -1780,10 +1810,10 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
         int32_t dmg_cy = row * vp->cell_height + SFTE_WINDOW_PAD_Y;
         int32_t dmg_ch = vp->cell_height;
 
-        if (row == 0) {
+        if (row <= 0) {
             dmg_cy = 0;
             dmg_ch += SFTE_WINDOW_PAD_Y;
-        } else if (row == vp->rows - 1) {
+        } else if (row >= vp->rows - 1) {
             dmg_ch += win->height - (dmg_cy + dmg_ch);
         }
         _sfte_render_damage_add(out_dmg, 0, dmg_cy, win->width, dmg_ch);
@@ -1800,12 +1830,17 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
     const sfte_render_buffers *render = &term->render;
     const sfte_viewport_state *vp = &term->viewport;
 
-    for (int16_t r = 0; r < vp->rows; ++r) {
+    int16_t start_r, end_r;
+    _sfte_render_get_vis_row_range(vp, y_off, &start_r, &end_r);
+
+    for (int16_t r = start_r; r < end_r; ++r) {
         int32_t logical_r = _sfte_grid_vis2log(vp, r);
+        if (!_sfte_grid_is_row_valid(vp, logical_r)) continue;
+
         _sfte_render_extract_fg_row(ctx, logical_r, r, vis_col, vis_row);
 
 #if SFTE_FONT_LIGATURES
-        int32_t cache_idx = (logical_r >= 0) ? ((logical_r + vp->grid_off) % vp->rows) : r;
+        int32_t cache_idx = ((logical_r + vp->grid_off) % vp->rows + vp->rows) % vp->rows;
         uint64_t row_hash = _sfte_render_get_row_hash(term, logical_r);
         uint16_t *memo_ids = &render->row_shaper_ids[cache_idx * vp->cols];
         if (render->row_hashes[cache_idx] == row_hash)
@@ -1987,13 +2022,18 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
         if (out_dmg->w <= 0 || out_dmg->h <= 0) {
             out_dmg->w = 0;
             out_dmg->h = 0;
-        } else
-            for (int32_t r = 0; r < vp->rows; ++r) {
+        } else {
+            int16_t start_r, end_r;
+            _sfte_render_get_vis_row_range(vp, passes[0].y_off, &start_r, &end_r);
+
+            for (int16_t r = start_r; r < end_r; ++r) {
                 int32_t logical_r = _sfte_grid_vis2log(vp, r);
-                if (logical_r < vp->rows)
-                    for (int16_t c = 0; c < vp->cols; ++c)
-                        _sfte_grid_get_cell(term, c, logical_r)->dirty = 0;
+                if (!_sfte_grid_is_row_valid(vp, logical_r)) continue;
+
+                for (int16_t c = 0; c < vp->cols; ++c)
+                    _sfte_grid_get_cell(term, c, logical_r)->dirty = 0;
             }
+        }
     } else
         out_dmg->w = 0, out_dmg->h = 0;
 }
