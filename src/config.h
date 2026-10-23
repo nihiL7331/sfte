@@ -607,7 +607,7 @@ _SFTE_ENSURE_RANGE(SFTE_FONT_BLEED, 0, 1);
     One atlas is shared across all font types and font fallbacks.
 */
 #ifndef SFTE_FONT_ATLAS_SIZE
-#define SFTE_FONT_ATLAS_SIZE 1024
+#define SFTE_FONT_ATLAS_SIZE 512
 #endif  // SFTE_FONT_ATLAS_SIZE
 _SFTE_ENSURE_RANGE(SFTE_FONT_ATLAS_SIZE, 1, INT32_MAX);
 

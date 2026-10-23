@@ -1,5 +1,6 @@
 #pragma once
 
+#include "src/config.h"
 #include "src/util.h"
 #include <stdint.h>
 #include <string.h>
@@ -551,7 +552,11 @@ static inline sfte_font_cache *_sfte_font_get_cache(sfte_ctx *ctx, sfte_font_sty
     Clears a font cache's atlas texture and glyph hash map.
 */
 static inline void _sfte_font_clear_cache(sfte_font_cache *cache) {
-    if (cache->atlas_pxs) memset(cache->atlas_pxs, 0, SFTE_FONT_ATLAS_SIZE * SFTE_FONT_ATLAS_SIZE);
+    if (cache->atlas_pxs) {
+        size_t used_rows = (size_t)cache->atlas_y + cache->atlas_row_h + _SFTE_FONT_PADDING;
+        if (used_rows > SFTE_FONT_ATLAS_SIZE) used_rows = SFTE_FONT_ATLAS_SIZE;
+        if (used_rows > 0) memset(cache->atlas_pxs, 0, used_rows * SFTE_FONT_ATLAS_SIZE);
+    }
     if (cache->glyphs) memset(cache->glyphs, 0, SFTE_FONT_GLYPH_CAP * sizeof(sfte_glyph));
     cache->atlas_x = 0;
     cache->atlas_y = 0;
