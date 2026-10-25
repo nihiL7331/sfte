@@ -6,52 +6,47 @@
 #include "src/mux.h"
 #include "src/search.h"
 #include "src/types.h"
+#include "src/util.h"
 #include <stdint.h>
 
 #if SFTE_CURSOR_DYNAMIC
-#define _SFTE_CUR_STYLE(cursor) (cursor->style)
+#define _SFTE_CUR_STYLE(cursor, cfg) (cursor->style)
 #else
-#define _SFTE_CUR_STYLE(cursor) (SFTE_CURSOR_STYLE)
+#define _SFTE_CUR_STYLE(cursor, cfg) (cfg->cursor.style)
 #endif  // !SFTE_CURSOR_DYNAMIC
 
 // =================================================================================================
 // >>view
 // =================================================================================================
 
-#if SFTE_WINDOW_PAD_X || SFTE_WINDOW_PAD_Y
 /*
     Fills the padding regions around the terminal grid with the background color.
 */
 static inline void _sfte_view_clear_padding_rects(sfte_ctx *ctx, void *px_buf) {
+    const sfte_config *cfg = &ctx->cfg;
     const sfte_window_state *win = &ctx->window;
     sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
-    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp, cfg);
 
     int32_t w = win->width;
     int32_t h = win->height;
     int32_t grid_w = vp->cols * vp->cell_width;
     int32_t grid_h = (vp->rows + layout.reserved_rows) * vp->cell_height;
-    uint32_t bg = (SFTE_COLOR_BG_OPACITY << 24) | (SFTE_COLOR_BG & ~SFTE_COLOR_ALPHA_MASK);
 
-#if SFTE_WINDOW_PAD_Y
-    for (int32_t y = 0; y < SFTE_WINDOW_PAD_Y && y < h; ++y)
-        for (int32_t x = 0; x < w; ++x) SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, h, bg);
+    for (int32_t y = 0; y < cfg->window.pad_y && y < h; ++y)
+        for (int32_t x = 0; x < w; ++x) SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, h, cfg->color.bg);
 
-    for (int32_t y = SFTE_WINDOW_PAD_Y + grid_h; y < h; ++y)
-        for (int32_t x = 0; x < w; ++x) SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, h, bg);
-#endif  // SFTE_WINDOW_PAD_Y
+    for (int32_t y = cfg->window.pad_y + grid_h; y < h; ++y)
+        for (int32_t x = 0; x < w; ++x) SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, h, cfg->color.bg);
 
-#if SFTE_WINDOW_PAD_X
-    for (int32_t y = SFTE_WINDOW_PAD_Y; y < SFTE_WINDOW_PAD_Y + grid_h && y < h; ++y) {
-        for (int32_t x = 0; x < SFTE_WINDOW_PAD_X && x < w; ++x)
-            SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, h, bg);
-        for (int32_t x = SFTE_WINDOW_PAD_X + grid_w; x < w; ++x)
-            SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, h, bg);
+    for (int32_t y = cfg->window.pad_y; y < cfg->window.pad_y + grid_h && y < h; ++y) {
+        for (int32_t x = 0; x < cfg->window.pad_x && x < w; ++x)
+            SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, h, cfg->color.bg);
+        for (int32_t x = cfg->window.pad_x + grid_w; x < w; ++x)
+            SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, w, h, cfg->color.bg);
     }
-#endif  // SFTE_WINDOW_PAD_X
 }
-#endif  // SFTE_WINDOW_PAD_X || SFTE_WINDOW_PAD_Y
 
 // =================================================================================================
 // >>render
@@ -115,6 +110,7 @@ static inline void _sfte_render_damage_add(sfte_damage_rect *dmg, int32_t x, int
    rows and columns to guarantee seamless redrawing.
 */
 static inline void _sfte_render_propagate_damage(sfte_ctx *ctx, int16_t vis_col, int16_t vis_row) {
+    const sfte_config *cfg = &ctx->cfg;
     sfte_term *term = sfte_term_get_active(ctx);
     sfte_window_state *win = &ctx->window;
     const sfte_viewport_state *vp = &term->viewport;
@@ -125,10 +121,10 @@ static inline void _sfte_render_propagate_damage(sfte_ctx *ctx, int16_t vis_col,
     if (term->last_drawn_col != vis_col || term->last_drawn_row != vis_row) {
         if (term->last_drawn_col >= 0 && term->last_drawn_col < term->viewport.cols &&
             term->last_drawn_row >= 0 && term->last_drawn_row < term->viewport.rows)
-            _sfte_grid_get_cell(term, term->last_drawn_col, logical_r_last)->dirty = 1;
+            _sfte_grid_get_cell(term, term->last_drawn_col, logical_r_last, cfg)->dirty = 1;
 
         if (vis_col >= 0 && vis_col < vp->cols && vis_row >= 0 && vis_row < vp->rows)
-            _sfte_grid_get_cell(term, vis_col, logical_r_curr)->dirty = 1;
+            _sfte_grid_get_cell(term, vis_col, logical_r_curr, cfg)->dirty = 1;
 
         term->last_drawn_col = vis_col;
         term->last_drawn_row = vis_row;
@@ -140,7 +136,7 @@ static inline void _sfte_render_propagate_damage(sfte_ctx *ctx, int16_t vis_col,
         uint8_t row_has_damage = 0;
 
         for (int16_t c = 0; c < vp->cols; ++c)
-            if (_sfte_grid_get_cell(term, c, logical_r)->dirty) {
+            if (_sfte_grid_get_cell(term, c, logical_r, cfg)->dirty) {
                 row_has_damage = 1;
                 break;
             }
@@ -158,7 +154,7 @@ static inline void _sfte_render_propagate_damage(sfte_ctx *ctx, int16_t vis_col,
 
             for (int32_t lr = logical_r_min; lr <= logical_r_max; ++lr)
                 for (int16_t c = 0; c < vp->cols; ++c) {
-                    sfte_cell *cell = _sfte_grid_get_cell(term, c, lr);
+                    sfte_cell *cell = _sfte_grid_get_cell(term, c, lr, cfg);
                     if (!cell->dirty) cell->dirty = 2;  // bleed-dirty
                 }
         }
@@ -169,7 +165,7 @@ static inline void _sfte_render_propagate_damage(sfte_ctx *ctx, int16_t vis_col,
         int32_t logical_r = _sfte_grid_vis2log(vp, r);
 
         for (int16_t c = 0; c < vp->cols; ++c) {
-            sfte_cell *cell = _sfte_grid_get_cell(term, c, logical_r);
+            sfte_cell *cell = _sfte_grid_get_cell(term, c, logical_r, cfg);
             if (cell->dirty == 2) cell->dirty = 1;
         }
     }
@@ -202,6 +198,7 @@ static inline void _sfte_render_sort_images(sfte_ctx *ctx) {
 */
 static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, uint8_t is_bg_pass,
                                        int32_t base_y_off, uint8_t pad_was_dirty) {
+    const sfte_config *cfg = &ctx->cfg;
     const sfte_window_state *win = &ctx->window;
     sfte_term *term = sfte_term_get_active(ctx);
     const sfte_modes_state *modes = &term->modes;
@@ -220,8 +217,8 @@ static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, uint8_t is_b
         sfte_img *img = _sfte_img_find(images, p->img_id);
         if (!img) continue;
 
-        int32_t base_x = (p->start_col * vp->cell_width) + SFTE_WINDOW_PAD_X + p->x_off;
-        int32_t base_y = (p->start_row * vp->cell_height) + SFTE_WINDOW_PAD_Y + p->y_off +
+        int32_t base_x = (p->start_col * vp->cell_width) + cfg->window.pad_x + p->x_off;
+        int32_t base_y = (p->start_row * vp->cell_height) + cfg->window.pad_y + p->y_off +
                          base_y_off;
 
         for (int32_t iy = 0; iy < img->height; ++iy) {
@@ -233,19 +230,19 @@ static inline void _sfte_render_images(sfte_ctx *ctx, void *px_buf, uint8_t is_b
                 if (out_x < 0 || out_x >= win->width) continue;
 
                 uint8_t is_dirty = 0;
-                if (out_x < SFTE_WINDOW_PAD_X || out_y < SFTE_WINDOW_PAD_Y ||
-                    out_x >= win->width - SFTE_WINDOW_PAD_X ||
-                    out_y >= win->height - SFTE_WINDOW_PAD_Y) {
+                if (out_x < cfg->window.pad_x || out_y < cfg->window.pad_y ||
+                    out_x >= win->width - cfg->window.pad_x ||
+                    out_y >= win->height - cfg->window.pad_y) {
                     is_dirty = pad_was_dirty;
                 } else {
-                    int16_t grid_c = (out_x - SFTE_WINDOW_PAD_X) / vp->cell_width;
-                    int16_t grid_r = (out_y - SFTE_WINDOW_PAD_Y) / vp->cell_height;
+                    int16_t grid_c = (out_x - cfg->window.pad_x) / vp->cell_width;
+                    int16_t grid_r = (out_y - cfg->window.pad_y) / vp->cell_height;
 
                     grid_c = _SFTE_CLAMP(grid_c, 0, vp->cols - 1);
                     grid_r = _SFTE_CLAMP(grid_r, 0, vp->rows - 1);
 
                     int32_t logical_r = _sfte_grid_vis2log(vp, grid_r);
-                    is_dirty = _sfte_grid_get_cell(term, grid_c, logical_r)->dirty;
+                    is_dirty = _sfte_grid_get_cell(term, grid_c, logical_r, cfg)->dirty;
                 }
                 if (!is_dirty) continue;
 
@@ -293,10 +290,6 @@ static inline void _sfte_render_line(sfte_ctx *ctx, void *px_buf, int32_t x0, in
     float grad = (dx == 0.0f) ? 1.0f : (dy / dx);
     float intery = y0;
 
-#define _SFTE_SAFE_BLEND(_x, _y, _a)                                                               \
-    if ((_x) >= 0 && (_x) < win->width && (_y) >= 0 && (_y) < win->height)                         \
-        SFTE_COLOR_BLEND_PIXEL(px_buf, _x, _y, win->width, col, _a);
-
     for (int32_t x = x0; x <= x1; ++x) {
         float intery_frac = intery - floorf(intery);
         uint8_t a1 = (uint8_t)((1.0f - intery_frac) * 255.0f);
@@ -307,18 +300,18 @@ static inline void _sfte_render_line(sfte_ctx *ctx, void *px_buf, int32_t x0, in
         int32_t bound_max = bound_min + thickness;
 
         if (steep) {
-            _SFTE_SAFE_BLEND(bound_min, x, a1);
-            for (int32_t w = 1; w < thickness; ++w) _SFTE_SAFE_BLEND(bound_min + w, x, 255);
-            _SFTE_SAFE_BLEND(bound_max, x, a2);
+            SFTE_COLOR_BLEND_PIXEL_SAFE(px_buf, bound_min, x, win->width, win->height, col, a1);
+            for (int32_t w = 1; w < thickness; ++w)
+                SFTE_COLOR_DRAW_PIXEL(px_buf, bound_min + w, x, win->width, win->height, col);
+            SFTE_COLOR_BLEND_PIXEL_SAFE(px_buf, bound_max, x, win->width, win->height, col, a2);
         } else {
-            _SFTE_SAFE_BLEND(x, bound_min, a1);
-            for (int32_t w = 1; w < thickness; ++w) _SFTE_SAFE_BLEND(x, bound_min + w, 255);
-            _SFTE_SAFE_BLEND(x, bound_max, a2);
+            SFTE_COLOR_BLEND_PIXEL_SAFE(px_buf, x, bound_min, win->width, win->height, col, a1);
+            for (int32_t w = 1; w < thickness; ++w)
+                SFTE_COLOR_DRAW_PIXEL(px_buf, x, bound_min + w, win->width, win->height, col);
+            SFTE_COLOR_BLEND_PIXEL_SAFE(px_buf, x, bound_max, win->width, win->height, col, a2);
         }
         intery += grad;
     }
-
-#undef _SFTE_SAFE_BLEND
 }
 
 /*
@@ -495,14 +488,15 @@ static inline void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col
                                         sfte_font_cache *target_cache) {
     if (rune == ' ') return;
 
+    const sfte_config *cfg = &ctx->cfg;
     const sfte_font_state *font = &ctx->font;
     const sfte_window_state *win = &ctx->window;
     sfte_term *term = sfte_term_get_active(ctx);
     sfte_stack *stack = &term->stack;
     const sfte_viewport_state *vp = &term->viewport;
 
-    int32_t cx = col * vp->cell_width + SFTE_WINDOW_PAD_X;
-    int32_t cy = row * vp->cell_height + SFTE_WINDOW_PAD_Y;
+    int32_t cx = col * vp->cell_width + cfg->window.pad_x;
+    int32_t cy = row * vp->cell_height + cfg->window.pad_y;
 
 #if SFTE_TERM_CUSTOM_BOXES && !SFTE_TERM_ASCII_CHARSET
     if ((rune >= 0x2500 && rune <= 0x259F) || (rune >= 0x2800 && rune <= 0x28FF))
@@ -537,22 +531,19 @@ static inline void _sfte_render_fg_cell(sfte_ctx *ctx, void *px_buf, int16_t col
 #if SFTE_SEARCH
 static inline void _sfte_render_search_overlay(sfte_ctx *ctx, void *px_buf,
                                                sfte_damage_rect *out_dmg) {
+    const sfte_config *cfg = &ctx->cfg;
     const sfte_window_state *win = &ctx->window;
     const sfte_term *term = sfte_term_get_active(ctx);
     const sfte_search_state *search = &term->search;
     const sfte_viewport_state *vp = &term->viewport;
-    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp, cfg);
 
     if (!search->is_active) return;
 
     int32_t bar_h = vp->cell_height;
-#if SFTE_SEARCH_PLACEMENT_TOP
-    int32_t r = 0;
-#else   // !SFTE_SEARCH_PLACEMENT_TOP
-    int32_t r = vp->rows - 1;
-#endif  // !SFTE_SEARCH_PLACEMENT_TOP
+    int32_t r = cfg->search.top ? 0 : vp->rows - 1;
     int32_t y_off = layout.grid_off_y;
-    int32_t start_y = r * vp->cell_height + SFTE_WINDOW_PAD_Y + y_off;
+    int32_t start_y = r * vp->cell_height + cfg->window.pad_y + y_off;
 
     char right_buf[64];
     int16_t right_len = snprintf(right_buf, sizeof(right_buf), " [%u/%u] ",
@@ -560,7 +551,7 @@ static inline void _sfte_render_search_overlay(sfte_ctx *ctx, void *px_buf,
                                  search->match_cnt);
 
     // Calculate available space for query
-    int16_t prefix_len = strlen(SFTE_SEARCH_PREFIX);
+    int16_t prefix_len = strlen(cfg->search.prefix);
     int16_t query_len = search->text_input.len;
 
     int16_t avail_query_space = vp->cols - prefix_len - right_len - 1;
@@ -576,14 +567,14 @@ static inline void _sfte_render_search_overlay(sfte_ctx *ctx, void *px_buf,
         while (start_idx < query_len && (search->text_input.buf[start_idx] & 0xC0) == 0x80)
             start_idx++;
 
-        left_len = snprintf(left_buf, sizeof(left_buf), "%s...%s ", SFTE_SEARCH_PREFIX,
+        left_len = snprintf(left_buf, sizeof(left_buf), "%s...%s ", cfg->search.prefix,
                             search->text_input.buf + start_idx);
     } else
-        left_len = snprintf(left_buf, sizeof(left_buf), "%s%s ", SFTE_SEARCH_PREFIX,
+        left_len = snprintf(left_buf, sizeof(left_buf), "%s%s ", cfg->search.prefix,
                             search->text_input.buf);
 
     int32_t bar_w = vp->cols * vp->cell_width;
-    int32_t start_x = SFTE_WINDOW_PAD_X;
+    int32_t start_x = cfg->window.pad_x;
 
     for (int32_t y = 0; y < bar_h; ++y) {
         int32_t py = start_y + y;
@@ -593,9 +584,8 @@ static inline void _sfte_render_search_overlay(sfte_ctx *ctx, void *px_buf,
             int32_t px = start_x + x;
             if (px >= win->width) break;
 
-            uint32_t col_bg = (SFTE_SEARCH_BG_BAR_OPACITY << 24) |
-                              (SFTE_SEARCH_BG_BAR & ~SFTE_COLOR_ALPHA_MASK);
-            SFTE_COLOR_BLEND_PIXEL(px_buf, px, py, win->width, col_bg, (uint8_t)(col_bg >> 24));
+            SFTE_COLOR_BLEND_PIXEL(px_buf, px, py, win->width, cfg->search.bg_bar,
+                                   (uint8_t)(cfg->search.bg_bar >> 24));
         }
     }
 
@@ -607,7 +597,7 @@ static inline void _sfte_render_search_overlay(sfte_ctx *ctx, void *px_buf,
         uint8_t font_idx = 0;
         uint16_t glyph_id = 0;
         _sfte_font_resolve_rune(font_cache, rune, &font_idx, &glyph_id);
-        _sfte_render_fg_cell(ctx, px_buf, c, r, y_off, rune, glyph_id, font_idx, SFTE_COLOR_FG,
+        _sfte_render_fg_cell(ctx, px_buf, c, r, y_off, rune, glyph_id, font_idx, cfg->color.fg,
                              font_cache);
     }
 
@@ -621,7 +611,7 @@ static inline void _sfte_render_search_overlay(sfte_ctx *ctx, void *px_buf,
         uint16_t glyph_id = 0;
         _sfte_font_resolve_rune(font_cache, rune, &font_idx, &glyph_id);
         _sfte_render_fg_cell(ctx, px_buf, right_start_c + c, r, y_off, rune, glyph_id, font_idx,
-                             SFTE_COLOR_FG, font_cache);
+                             cfg->color.fg, font_cache);
     }
 
     _sfte_render_damage_add(out_dmg, start_x, start_y, bar_w, bar_h);
@@ -630,34 +620,29 @@ static inline void _sfte_render_search_overlay(sfte_ctx *ctx, void *px_buf,
 
 #if SFTE_MUX_BAR
 static inline void _sfte_render_mux_bar(sfte_ctx *ctx, void *px_buf, sfte_damage_rect *out_dmg) {
+    const sfte_config *cfg = &ctx->cfg;
     const sfte_window_state *win = &ctx->window;
     sfte_mux *mux = &ctx->mux;
     sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
-    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp, cfg);
 
     if (!term || vp->cell_width == 0) return;
 
     int32_t bar_y = layout.bar_y;
-    int16_t bar_row = (bar_y - SFTE_WINDOW_PAD_Y) / vp->cell_height - 1;
+    int16_t bar_row = (bar_y - cfg->window.pad_y) / vp->cell_height - 1;
 
     char labels[SFTE_MUX_MAX_WINDOWS][32];
     uint16_t label_lens[SFTE_MUX_MAX_WINDOWS];
     uint16_t bar_len = 0;
 
-    uint16_t pad_l = 0, pad_r = 0;
-#if SFTE_MUX_BAR_EDGE_LEFT
-    pad_l++;
-#endif  // SFTE_MUX_BAR_EDGE_LEFT
-#if SFTE_MUX_BAR_EDGE_RIGHT
-    pad_r++;
-#endif  // SFTE_MUX_BAR_EDGE_RIGHT
+    uint16_t pad_l = cfg->mux_bar.edge_left, pad_r = cfg->mux_bar.edge_right;
 
     for (uint8_t pos = 0; pos < mux->tab_cnt; ++pos) {
         uint8_t i = mux->tab_order[pos];
 
         uint16_t c = 0;
-        const char *fmt = SFTE_MUX_BAR_FORMAT;
+        const char *fmt = cfg->mux_bar.format;
 
         while (*fmt && c < sizeof(labels[i]) - 1)
             if (fmt[0] == '%' && fmt[1] == 'u') {
@@ -671,7 +656,7 @@ static inline void _sfte_render_mux_bar(sfte_ctx *ctx, void *px_buf, sfte_damage
 
                     mux->rename_cursor_col = c;
                 } else if (term_title[0] == '\0')
-                    term_title = SFTE_TERM_DEFAULT_TITLE;
+                    term_title = cfg->window.default_title;
 
                 c += snprintf(labels[i] + c, sizeof(labels[i]) - c, "%s", term_title);
                 fmt += 2;
@@ -681,64 +666,57 @@ static inline void _sfte_render_mux_bar(sfte_ctx *ctx, void *px_buf, sfte_damage
         labels[i][c] = '\0';
         label_lens[i] = c;
 
-        bar_len += label_lens[i] + pad_l + pad_r + (SFTE_MUX_BAR_MARGIN * 2) + SFTE_MUX_BAR_PAD;
+        bar_len += label_lens[i] + pad_l + pad_r + (cfg->mux_bar.margin * 2) + cfg->mux_bar.pad;
     }
 
-    if (bar_len > 0) bar_len -= SFTE_MUX_BAR_PAD;
+    if (bar_len > 0) bar_len -= cfg->mux_bar.pad;
 
-#if SFTE_MUX_BAR_ALIGN == SFTE_MUX_BAR_ALIGN_LEFT
-    (void)bar_len;
-    uint16_t cur_col = SFTE_MUX_BAR_PAD;
-#elif SFTE_MUX_BAR_ALIGN == SFTE_MUX_BAR_ALIGN_CENTER
-    uint16_t cur_col = (vp->cols > bar_len) ? (vp->cols - bar_len) / 2 : 0;
-#elif SFTE_MUX_BAR_ALIGN == SFTE_MUX_BAR_ALIGN_RIGHT
-    uint16_t cur_col = (vp->cols > bar_len + SFTE_MUX_BAR_PAD)
-                           ? vp->cols - bar_len - SFTE_MUX_BAR_PAD
-                           : 0;
-#elif SFTE_MUX_BAR_ALIGN == SFTE_MUX_BAR_ALIGN_FILL
     uint16_t cur_col = 0;
-    int32_t base_tab_cols = 0, leftover_cols = 0;
-    if (num_tabs > 0) {
-        int32_t total_pad = (num_tabs - 1) * SFTE_MUX_BAR_PAD;
-        int32_t avail_cols = vp->cols - total_pad;
-        if (avail_cols < 0) avail_cols = 0;
-        base_tab_cols = avail_cols / mux->tab_cnt;
-        leftover_cols = avail_cols % mux->tab_cnt;
+    if (cfg->mux_bar.align == SFTE_MUX_BAR_ALIGN_LEFT)
+        cur_col = cfg->mux_bar.pad;
+    else if (cfg->mux_bar.align == SFTE_MUX_BAR_ALIGN_CENTER)
+        cur_col = (vp->cols > bar_len) ? (vp->cols - bar_len) / 2 : 0;
+    else if (cfg->mux_bar.align == SFTE_MUX_BAR_ALIGN_RIGHT)
+        cur_col = (vp->cols > bar_len + cfg->mux_bar.pad) ? vp->cols - bar_len - cfg->mux_bar.pad
+                                                          : 0;
+    else if (cfg->mux_bar.align == SFTE_MUX_BAR_ALIGN_FILL) {
+        // int32_t base_tab_cols = 0, leftover_cols = 0;
+        // if (num_tabs > 0) {
+        //     int32_t total_pad = (num_tabs - 1) * cfg->mux_bar.pad;
+        //     int32_t avail_cols = vp->cols - total_pad;
+        //     if (avail_cols < 0) avail_cols = 0;
+        //     base_tab_cols = avail_cols / mux->tab_cnt;
+        //     leftover_cols = avail_cols % mux->tab_cnt;
+        // }
     }
-#endif  // SFTE_MUX_BAR_ALIGN == SFTE_MUX_BAR_ALIGN_FILL
 
-#if !SFTE_MUX_BAR_HOVER
-    // Clear background
-    for (int32_t y = bar_y; y < bar_y + vp->cell_height; ++y)
-        for (int32_t x = SFTE_WINDOW_PAD_X; x < win->width - SFTE_WINDOW_PAD_X; ++x)
-            if (x >= 0 && x < win->width && y >= 0 && y < win->height)
-                SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, win->width, win->height,
-                                      (SFTE_COLOR_BG_OPACITY) << 24 |
-                                          (SFTE_COLOR_BG & ~SFTE_COLOR_ALPHA_MASK));
-#endif  // !SFTE_MUX_BAR_HOVER
+    if (!cfg->mux_bar.hover)  // Clear background
+        for (int32_t y = bar_y; y < bar_y + vp->cell_height; ++y)
+            for (int32_t x = cfg->window.pad_x; x < win->width - cfg->window.pad_x; ++x)
+                if (x >= 0 && x < win->width && y >= 0 && y < win->height)
+                    SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, win->width, win->height, cfg->color.bg);
 
     // Render windows
     for (uint8_t pos = 0; pos < mux->tab_cnt; ++pos) {
         uint8_t i = mux->tab_order[pos];
 
-#if SFTE_MUX_BAR_ALIGN == SFTE_MUX_BAR_ALIGN_FILL
-        // Add 1 extra column to this tab if we still have leftover remainder columns
-        int32_t tab_cols = base_tab_cols + (leftover_cols > 0 ? 1 : 0);
-        if (leftover_cols > 0) leftover_cols--;
-#else   // SFTE_MUX_BAR_ALIGN != SFTE_MUX_BAR_ALIGN_FILL
-        int32_t tab_cols = label_lens[i] + pad_l + pad_r + (SFTE_MUX_BAR_MARGIN * 2);
-#endif  // SFTE_MUX_BAR_ALIGN != SFTE_MUX_BAR_ALIGN_FILL
+        int32_t tab_cols = 0;
+        if (cfg->mux_bar.align == SFTE_MUX_BAR_ALIGN_FILL) {
+            // Add 1 extra column to this tab if we still have leftover remainder columns
+            // tab_cols = base_tab_cols + (leftover_cols > 0 ? 1 : 0);
+            // if (leftover_cols > 0) leftover_cols--;
+        } else
+            tab_cols = label_lens[i] + pad_l + pad_r + (cfg->mux_bar.margin * 2);
 
-        mux->tab_px_x[i] = cur_col * vp->cell_width + SFTE_WINDOW_PAD_X;
+        mux->tab_px_x[i] = cur_col * vp->cell_width + cfg->window.pad_x;
         mux->tab_px_w[i] = tab_cols * vp->cell_width;
 
-        uint32_t col_bg = (mux->active_idx == i)    ? SFTE_MUX_BAR_BG_ACTIVE
-                          : (mux->hovered_idx == i) ? SFTE_MUX_BAR_BG_HOVER
-                                                    : SFTE_MUX_BAR_BG_INACTIVE;  // RGB8888
-        uint32_t col_fg = (mux->active_idx == i)    ? SFTE_MUX_BAR_FG_ACTIVE
-                          : (mux->hovered_idx == i) ? SFTE_MUX_BAR_FG_HOVER
-                                                    : SFTE_MUX_BAR_FG_INACTIVE;  // RGB888
-        col_fg = SFTE_COLOR_ALPHA_MASK | (col_fg & ~SFTE_COLOR_ALPHA_MASK);
+        uint32_t col_bg = (mux->active_idx == i)    ? cfg->mux_bar.bg_active
+                          : (mux->hovered_idx == i) ? cfg->mux_bar.bg_hover
+                                                    : cfg->mux_bar.bg_inactive;
+        uint32_t col_fg = (mux->active_idx == i)    ? cfg->mux_bar.fg_active
+                          : (mux->hovered_idx == i) ? cfg->mux_bar.fg_hover
+                                                    : cfg->mux_bar.fg_inactive;
 
         sfte_font_style style = SFTE_FONT_STYLE_REGULAR;
 
@@ -775,9 +753,9 @@ static inline void _sfte_render_mux_bar(sfte_ctx *ctx, void *px_buf, sfte_damage
 
         sfte_font_cache *font_cache = _sfte_font_get_cache(ctx, style);
 
-        int32_t bg_start_x = mux->tab_px_x[i] + (SFTE_MUX_BAR_EDGE_LEFT ? vp->cell_width : 0);
+        int32_t bg_start_x = mux->tab_px_x[i] + cfg->mux_bar.edge_left * vp->cell_width;
         int32_t bg_end_x = mux->tab_px_x[i] + mux->tab_px_w[i] -
-                           (SFTE_MUX_BAR_EDGE_RIGHT ? vp->cell_width : 0);
+                           cfg->mux_bar.edge_right * vp->cell_width;
 
         for (int32_t y = bar_y; y < bar_y + vp->cell_height; ++y)
             for (int32_t x = bg_start_x; x < bg_end_x; ++x)
@@ -824,7 +802,7 @@ static inline void _sfte_render_mux_bar(sfte_ctx *ctx, void *px_buf, sfte_damage
                                  glyph_id, font_idx, col_fg, font_cache);
         }
 
-        cur_col += tab_cols + SFTE_MUX_BAR_PAD;
+        cur_col += tab_cols + cfg->mux_bar.pad;
     }
 
     _sfte_render_damage_add(out_dmg, 0, bar_y, win->width, vp->cell_height);
@@ -866,12 +844,12 @@ static inline void _sfte_render_mux_preview(sfte_ctx *ctx, void *px_buf,
 
 #define DRAW_BORDER(_c, _r, _rune)                                                                 \
     do {                                                                                           \
-        _sfte_render_bg_cell(ctx, px_buf, _c, _r, 0, SFTE_COLOR_BG);                               \
+        _sfte_render_bg_cell(ctx, px_buf, _c, _r, 0, cfg->color.bg);                               \
         uint8_t _font_idx = 0;                                                                     \
         uint16_t _glyph_id = 0;                                                                    \
         _sfte_font_resolve_rune(font, _rune, &_font_idx, &_glyph_id);                              \
         _sfte_render_fg_cell(ctx, px_buf, _c, _r, 0, _rune, _glyph_id, _font_idx,                  \
-                             SFTE_MUX_PREVIEW_BORDER_FG, font);                                    \
+                             cfg->mux.preview_border_fg, font);                                    \
     } while (0)
 
     int16_t cur_r = start_r;
@@ -906,8 +884,8 @@ static inline void _sfte_render_mux_preview(sfte_ctx *ctx, void *px_buf,
             char idx_str[16];
             uint8_t idx_len = snprintf(idx_str, sizeof(idx_str), " %d ", i + 1);
 
-            uint32_t line_bg = (mux->preview_selected_idx == i) ? SFTE_MUX_PREVIEW_HOVER_BG
-                                                                : SFTE_COLOR_BG;
+            uint32_t line_bg = (mux->preview_selected_idx == i) ? cfg->mux.preview_hover_bg
+                                                                : cfg->color.bg;
 
             for (int16_t c = start_c + 1; c < end_c; ++c) {
                 int16_t text_c = c - (start_c + 1);
@@ -922,7 +900,7 @@ static inline void _sfte_render_mux_preview(sfte_ctx *ctx, void *px_buf,
                     uint16_t glyph_id = 0;
                     _sfte_font_resolve_rune(font, b_char, &font_idx, &glyph_id);
                     _sfte_render_fg_cell(ctx, px_buf, c, cur_r, 0, b_char, glyph_id, font_idx,
-                                         SFTE_COLOR_FG, font);
+                                         cfg->color.fg, font);
                 } else if (text_c < cur_term->viewport.cols) {
                     sfte_cell *vcell = _sfte_grid_get_cell(cur_term, text_c, logical_r);
                     sfte_rune r_char = vcell->rune ? vcell->rune : ' ';
@@ -978,6 +956,7 @@ static inline void _sfte_render_mux_preview(sfte_ctx *ctx, void *px_buf,
     This can be later expanded for further terminal modes, e.g. for a theme picker.
 */
 static inline void _sfte_render_get_cursor_pos(sfte_ctx *ctx, int16_t *out_col, int16_t *out_row) {
+    const sfte_config *cfg = &ctx->cfg;
     sfte_term *term = sfte_term_get_active(ctx);
 #if SFTE_MUX
     sfte_mux *mux = &ctx->mux;
@@ -987,21 +966,21 @@ static inline void _sfte_render_get_cursor_pos(sfte_ctx *ctx, int16_t *out_col, 
 #endif  // SFTE_SEARCH
     const sfte_cursor_state *cursor = &term->cursor;
     const sfte_viewport_state *vp = &term->viewport;
-    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp, cfg);
 
     *out_col = _SFTE_CLAMP(cursor->col, 0, vp->cols - 1);
     *out_row = (int16_t)_sfte_grid_log2vis(vp, cursor->row);
 #if SFTE_MUX_BAR
     if (mux->is_renaming) {
         *out_col = mux->rename_cursor_col;
-        *out_row = (layout.bar_y - SFTE_WINDOW_PAD_Y - layout.grid_off_y) / vp->cell_height;
+        *out_row = (layout.bar_y - cfg->window.pad_y - layout.grid_off_y) / vp->cell_height;
         return;
     }
 #endif  // SFTE_MUX_BAR
 #if SFTE_SEARCH
     if (search->is_active) {
-        *out_col = strlen(SFTE_SEARCH_PREFIX) + search->text_input.cursor_byte_idx;
-        *out_row = SFTE_SEARCH_PLACEMENT_TOP ? 0 : vp->rows - 1;
+        *out_col = strlen(cfg->search.prefix) + search->text_input.cursor_byte_idx;
+        *out_row = cfg->search.top ? 0 : vp->rows - 1;
     }
 #endif  // SFTE_SEARCH
 }
@@ -1012,6 +991,7 @@ static inline void _sfte_render_get_cursor_pos(sfte_ctx *ctx, int16_t *out_col, 
     This is separated from _sfte_render_trail to avoid not updating on early returns.
 */
 static inline void _sfte_render_update_trail(sfte_ctx *ctx) {
+    const sfte_config *cfg = &ctx->cfg;
     sfte_term *term = sfte_term_get_active(ctx);
     sfte_trail_state *trail = &term->cursor.trail;
     const sfte_viewport_state *vp = &term->viewport;
@@ -1024,7 +1004,7 @@ static inline void _sfte_render_update_trail(sfte_ctx *ctx) {
     if (vis_col != trail->last_grid_col || vis_row != trail->last_grid_row) {
         uint64_t now = SFTE_TIME_MS();
 
-        if (trail->last_move_ms != 0 && (now - trail->last_move_ms >= SFTE_CURSOR_TRAIL))
+        if (trail->last_move_ms != 0 && (now - trail->last_move_ms >= cfg->cursor.trail_threshold))
             trail->is_trailing = 1;
         else if (!trail->is_trailing) {
             trail->x = target_x;
@@ -1041,7 +1021,8 @@ static inline void _sfte_render_update_trail(sfte_ctx *ctx) {
 /*
     Flags the AABB of the cursor trail as dirty.
 */
-static inline void _sfte_grid_dirty_trail(sfte_trail_state *trail, sfte_term *term) {
+static inline void _sfte_grid_dirty_trail(sfte_trail_state *trail, sfte_term *term,
+                                          const sfte_config *cfg) {
     const sfte_viewport_state *vp = &term->viewport;
     sfte_damage_rect *dmg = &trail->dmg;
 
@@ -1049,11 +1030,11 @@ static inline void _sfte_grid_dirty_trail(sfte_trail_state *trail, sfte_term *te
 
     int16_t start_c, end_c;
     int32_t start_logical_r, end_logical_r;
-    _sfte_grid_from_px(vp, dmg->x, dmg->y, &start_c, &start_logical_r, NULL);
-    _sfte_grid_from_px(vp, dmg->x + dmg->w, dmg->y + dmg->h, &end_c, &end_logical_r, NULL);
+    _sfte_grid_from_px(vp, dmg->x, dmg->y, &start_c, &start_logical_r, NULL, cfg);
+    _sfte_grid_from_px(vp, dmg->x + dmg->w, dmg->y + dmg->h, &end_c, &end_logical_r, NULL, cfg);
 
     _sfte_grid_dirty_rect(term, start_c, start_logical_r, (end_c - start_c) + 1,
-                          (end_logical_r - start_logical_r) + 1);
+                          (end_logical_r - start_logical_r) + 1, cfg);
 }
 #endif  // SFTE_CURSOR_TRAIL
 
@@ -1063,6 +1044,7 @@ static inline void _sfte_grid_dirty_trail(sfte_trail_state *trail, sfte_term *te
 */
 static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, int32_t y_off,
                                       sfte_damage_rect *out_dmg) {
+    const sfte_config *cfg = &ctx->cfg;
     const sfte_window_state *win = &ctx->window;
     sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
@@ -1091,12 +1073,12 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, int32_t y_off
     float trail_h = vp->cell_height;
     float trail_y_off = 0;
 
-    if (_SFTE_CUR_STYLE(cursor) == SFTE_CURSOR_STYLE_UNDERLINE) {
-        trail_h *= SFTE_CURSOR_THICK_RATIO;
+    if (_SFTE_CUR_STYLE(cursor, cfg) == SFTE_CURSOR_STYLE_UNDERLINE) {
+        trail_h *= cfg->cursor.thick_ratio;
         if (trail_h < 1.0f) trail_h = 1.0f;
         trail_y_off = vp->cell_height - trail_h;
-    } else if (_SFTE_CUR_STYLE(cursor) == SFTE_CURSOR_STYLE_BAR) {
-        trail_w *= SFTE_CURSOR_THICK_RATIO;
+    } else if (_SFTE_CUR_STYLE(cursor, cfg) == SFTE_CURSOR_STYLE_BAR) {
+        trail_w *= cfg->cursor.thick_ratio;
         if (trail_w < 1.0f) trail_w = 1.0f;
     }
 
@@ -1115,33 +1097,34 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, int32_t y_off
 
     float inv_l2 = 1.0f / l2;
 
-    int32_t min_x = _SFTE_CLAMP((cx0 < cx1 ? cx0 : cx1) - rx + SFTE_WINDOW_PAD_X, SFTE_WINDOW_PAD_X,
-                                win->width - SFTE_WINDOW_PAD_X);
-    int32_t max_x = _SFTE_CLAMP((cx0 > cx1 ? cx0 : cx1) + rx + SFTE_WINDOW_PAD_X, SFTE_WINDOW_PAD_X,
-                                win->width - SFTE_WINDOW_PAD_X);
-    int32_t min_y = _SFTE_CLAMP((cy0 < cy1 ? cy0 : cy1) - ry + SFTE_WINDOW_PAD_Y + y_off,
-                                SFTE_WINDOW_PAD_Y, win->height - SFTE_WINDOW_PAD_Y);
-    int32_t max_y = _SFTE_CLAMP((cy0 > cy1 ? cy0 : cy1) + ry + SFTE_WINDOW_PAD_Y + y_off,
-                                SFTE_WINDOW_PAD_Y, win->height - SFTE_WINDOW_PAD_Y);
+    int32_t min_x = _SFTE_CLAMP((cx0 < cx1 ? cx0 : cx1) - rx + cfg->window.pad_x, cfg->window.pad_x,
+                                win->width - cfg->window.pad_x);
+    int32_t max_x = _SFTE_CLAMP((cx0 > cx1 ? cx0 : cx1) + rx + cfg->window.pad_x, cfg->window.pad_x,
+                                win->width - cfg->window.pad_x);
+    int32_t min_y = _SFTE_CLAMP((cy0 < cy1 ? cy0 : cy1) - ry + cfg->window.pad_y + y_off,
+                                cfg->window.pad_y, win->height - cfg->window.pad_y);
+    int32_t max_y = _SFTE_CLAMP((cy0 > cy1 ? cy0 : cy1) + ry + cfg->window.pad_y + y_off,
+                                cfg->window.pad_y, win->height - cfg->window.pad_y);
 
 #if SFTE_CURSOR_DYNAMIC
     uint32_t trail_color = cursor->color;
 #else   // !SFTE_CURSOR_DYNAMIC
-    uint32_t trail_color = SFTE_CURSOR_COLOR;
+    uint32_t trail_color = cfg->color.cursor;
 #endif  // !SFTE_CURSOR_DYNAMIC
 
 #if SFTE_CURSOR_BLINK
     uint8_t skip_cursor = cursor->blink_visible;
-#else
+#else   // !SFTE_CURSOR_BLINK
     uint8_t skip_cursor = 1;
-#endif
+#endif  // !SFTE_CURSOR_BLINK
 
+    uint8_t cur_a = (uint8_t)(trail_color >> 24);
     for (int32_t y = min_y; y < max_y; ++y) {
-        float up_y = (float)(y - SFTE_WINDOW_PAD_Y - y_off) + 0.5f;
+        float up_y = (float)(y - cfg->window.pad_y - y_off) + 0.5f;
         float dy_from_cy0 = up_y - cy0;
 
         for (int32_t x = min_x; x < max_x; ++x) {
-            float up_x = (float)(x - SFTE_WINDOW_PAD_X) + 0.5f;
+            float up_x = (float)(x - cfg->window.pad_x) + 0.5f;
 
             if (skip_cursor && up_x >= target_x && up_x < target_x + trail_w &&
                 up_y >= target_y + trail_y_off && up_y < target_y + trail_y_off + trail_h)
@@ -1151,8 +1134,9 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, int32_t y_off
             float t = _SFTE_CLAMP((dx_from_cx0 * ab_x + dy_from_cy0 * ab_y) * inv_l2, 0.0f, 1.0f);
 
             if (fabsf(up_x - cx0 - t * ab_x) <= rx && fabsf(up_y - cy0 - t * ab_y) <= ry) {
-                uint8_t alpha = (uint8_t)(128.0f * t);
-                SFTE_COLOR_BLEND_PIXEL(px_buf, x, y, win->width, trail_color, alpha);
+                uint8_t a = (uint8_t)(128.0f * t);
+                uint8_t eff_a = cur_a ? (uint8_t)((a * cur_a) >> 8) : a;
+                SFTE_COLOR_BLEND_PIXEL(px_buf, x, y, win->width, trail_color, eff_a);
             }
         }
     }
@@ -1175,13 +1159,14 @@ static inline void _sfte_render_trail(sfte_ctx *ctx, void *px_buf, int32_t y_off
    if static.
 */
 static inline uint8_t _sfte_render_get_anim_offsets(sfte_ctx *ctx, int32_t *out_y, int32_t *in_y) {
+    const sfte_config *cfg = &ctx->cfg;
     const sfte_window_state *win = &ctx->window;
     sfte_term *term = sfte_term_get_active(ctx);
 
     if (!term->is_animating) return 0;
 
     uint64_t now = SFTE_TIME_MS();
-    float progress = (now - term->anim_start_ms) / SFTE_TERM_ANIM_DUR_MS;
+    float progress = (now - term->anim_start_ms) / cfg->window.anim_dur_ms;
     if (progress >= 1.0f) {
         term->is_animating = 0;
         return 2;
@@ -1230,11 +1215,12 @@ static inline void _sfte_render_get_vis_row_range(const sfte_viewport_state *vp,
 static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
                                                   sfte_pass_info *passes,
                                                   sfte_damage_rect *out_dmg) {
+    const sfte_config *cfg = &ctx->cfg;
     sfte_window_state *win = &ctx->window;
     sfte_term *term = sfte_term_get_active(ctx);
     const sfte_cursor_state *cursor = &term->cursor;
     sfte_viewport_state *vp = &term->viewport;
-    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp, cfg);
 
     passes[0].y_off = 0;
     passes[0].grid = term->cells;
@@ -1255,7 +1241,7 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
         vp->scroll_y_off -= sb_diff * vp->cell_height;
         vp->last_sb_off = vp->sb_off;
 
-        float max_scroll_lead = (float)(vp->cell_height * SFTE_TERM_SCROLL_STEP * 2);
+        float max_scroll_lead = (float)(vp->cell_height * cfg->scroll.step * 2);
         vp->scroll_y_off = _SFTE_CLAMP(vp->scroll_y_off, -max_scroll_lead, max_scroll_lead);
 
         if (!vp->is_scrolling) {
@@ -1278,7 +1264,7 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
         float dt = (float)(now - vp->last_scroll_ms);
         vp->last_scroll_ms = now;
 
-        float decay = _SFTE_CLAMP(dt * SFTE_TERM_SCROLL_DECAY, 0.0f, 1.0f);
+        float decay = _SFTE_CLAMP(dt * cfg->scroll.decay, 0.0f, 1.0f);
 
         vp->scroll_y_off -= vp->scroll_y_off * decay;
 
@@ -1293,16 +1279,16 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
     if (needs_wipe) {
         _sfte_render_damage_add(out_dmg, 0, 0, win->width, win->height);
         win->pad_dirty = 1;
-        uint32_t clear_bg = (SFTE_COLOR_BG_OPACITY << 24) |
-                            (SFTE_COLOR_BG & ~SFTE_COLOR_ALPHA_MASK);
         for (int32_t y = 0; y < win->height; ++y)
             for (int32_t x = 0; x < win->width; ++x)
-                SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, win->width, win->height, clear_bg);
+                SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, win->width, win->height, cfg->color.bg);
 
-        int16_t start_r, end_r;
+        int16_t start_r = 0, end_r = vp->rows - 1;
+#if SFTE_TERM_SCROLL_SMOOTH
         _sfte_render_get_vis_row_range(vp, (int32_t)vp->scroll_y_off, &start_r, &end_r);
+#endif  // SFTE_TERM_SCROLL_SMOOTH
         _sfte_grid_dirty_rows(term, _sfte_grid_vis2log(vp, start_r),
-                              _sfte_grid_vis2log(vp, end_r - 1));
+                              _sfte_grid_vis2log(vp, end_r - 1), cfg);
 #if SFTE_TERM_ALT_SCREEN
         if (passes_cnt == 2 && term->alt_cells)
             for (int32_t i = 0; i < vp->rows * vp->cols; ++i) term->alt_cells[i].dirty = 1;
@@ -1339,17 +1325,16 @@ static inline uint8_t _sfte_render_prepare_passes(sfte_ctx *ctx, void *px_buf,
 */
 static inline void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
                                         int32_t y_off, uint32_t bg) {
+    const sfte_config *cfg = &ctx->cfg;
     const sfte_window_state *win = &ctx->window;
     const sfte_viewport_state *vp = &sfte_term_get_active(ctx)->viewport;
 
-    int32_t cx = col * vp->cell_width + SFTE_WINDOW_PAD_X;
-    int32_t cy = row * vp->cell_height + SFTE_WINDOW_PAD_Y;
-    uint32_t final_bg = (SFTE_COLOR_BG_OPACITY << 24) | (bg & ~SFTE_COLOR_ALPHA_MASK);
+    int32_t cx = col * vp->cell_width + cfg->window.pad_x;
+    int32_t cy = row * vp->cell_height + cfg->window.pad_y;
 
     for (int32_t y = 0; y < vp->cell_height; ++y)
         for (int32_t x = 0; x < vp->cell_width; ++x)
-            SFTE_COLOR_DRAW_PIXEL(px_buf, cx + x, cy + y + y_off, win->width, win->height,
-                                  final_bg);
+            SFTE_COLOR_DRAW_PIXEL(px_buf, cx + x, cy + y + y_off, win->width, win->height, bg);
 }
 
 /*
@@ -1360,14 +1345,15 @@ static inline void _sfte_render_bg_cell(sfte_ctx *ctx, void *px_buf, int16_t col
 */
 static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int32_t cx, int32_t cy,
                                                int32_t render_w, sfte_cell *vcell) {
+    const sfte_config *cfg = &ctx->cfg;
     const sfte_font_state *font = &ctx->font;
     const sfte_window_state *win = &ctx->window;
     const sfte_viewport_state *vp = &sfte_term_get_active(ctx)->viewport;
 
-    uint32_t base_ul_col = _sfte_grid_get_ul(vcell);
+    uint32_t base_ul_col = _sfte_grid_get_ul(vcell, cfg);
     uint32_t underline_col = SFTE_COLOR_ALPHA_MASK | (base_ul_col & ~SFTE_COLOR_ALPHA_MASK);
 
-    int32_t thick = vp->cell_height * SFTE_UNDERLINE_THICK_RATIO;
+    int32_t thick = vp->cell_height * cfg->underline.thick_ratio;
     if (thick < 1) thick = 1;
 
     uint8_t style = _SFTE_UNDERLINE_STYLE_STRAIGHT;
@@ -1376,7 +1362,7 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int3
                         _SFTE_UNDERLINE_STYLE_DASHED);
 #endif  // SFTE_UNDERLINE_EXTENDED
 
-    int32_t offset = vp->cell_height * SFTE_UNDERLINE_OFFSET_RATIO;
+    int32_t offset = vp->cell_height * cfg->underline.off_ratio;
     if (offset < 1) offset = 1;
 
     int32_t base_y = cy + font->ascent + offset;
@@ -1385,7 +1371,7 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int3
     for (int32_t x = cx; x < cx + render_w; ++x) {
         if (x >= win->width) break;
 
-        int32_t grid_x = x - SFTE_WINDOW_PAD_X;
+        int32_t grid_x = x - cfg->window.pad_x;
         int32_t local_x = grid_x % vp->cell_width;
 
         switch (style) {
@@ -1438,6 +1424,7 @@ static inline void _sfte_render_underline_cell(sfte_ctx *ctx, void *px_buf, int3
 static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col, int16_t row,
                                        int32_t y_off, sfte_damage_rect *out_dmg) {
     (void)out_dmg;
+    const sfte_config *cfg = &ctx->cfg;
     const sfte_window_state *win = &ctx->window;
 #if SFTE_MUX
     const sfte_mux *mux = &ctx->mux;
@@ -1456,7 +1443,7 @@ static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col,
     if (mux->is_prefix_active) return;
 #endif  // SFTE_MUX_PREFIX_PREVIEW
 
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
     if (vp->sb_off > 0
 #if SFTE_SEARCH
         && !search->is_active
@@ -1468,7 +1455,7 @@ static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col,
 #endif  // SFTE_CURSOR_TRAIL
         return;
     }
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
 
 #if SFTE_CURSOR_TRAIL
     _sfte_render_update_trail(ctx);
@@ -1488,17 +1475,17 @@ static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col,
 #endif  // SFTE_CURSOR_BLINK
 
 #if SFTE_CURSOR_DYNAMIC
-    uint32_t active_cur_color = cursor->color;
+    uint32_t cur_col = cursor->color;
 #else   // !SFTE_CURSOR_DYNAMIC
-    uint32_t active_cur_color = SFTE_CURSOR_COLOR;
+    uint32_t cur_col = cfg->color.cursor;
 #endif  // !SFTE_CURSOR_DYNAMIC
-    uint32_t cur_col = SFTE_COLOR_ALPHA_MASK | (active_cur_color & ~SFTE_COLOR_ALPHA_MASK);
+    uint8_t cur_a = (uint8_t)(cur_col >> 24);
 
-    int32_t cx = col * vp->cell_width + SFTE_WINDOW_PAD_X;
-    int32_t cy = row * vp->cell_height + SFTE_WINDOW_PAD_Y + y_off;
+    int32_t cx = col * vp->cell_width + cfg->window.pad_x;
+    int32_t cy = row * vp->cell_height + cfg->window.pad_y + y_off;
 
     int32_t render_w = vp->cell_width;
-    sfte_cell *cell = _sfte_grid_get_cell(term, col, _sfte_grid_vis2log(vp, row));
+    sfte_cell *cell = _sfte_grid_get_cell(term, col, _sfte_grid_vis2log(vp, row), cfg);
 #if SFTE_FONT_WIDE_CHARS
     render_w *= (cell->attr & _SFTE_ATTR_WIDE) ? 2 : 1;
 #endif  // SFTE_FONT_WIDE_CHARS
@@ -1506,18 +1493,39 @@ static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col,
 #if SFTE_TERM_FOCUS
     if (!ctx->window.is_focused) {
         for (int32_t y = cy; y < cy + vp->cell_height; ++y) {
-            SFTE_COLOR_DRAW_PIXEL(px_buf, cx, y, win->width, win->height, cur_col);
-            SFTE_COLOR_DRAW_PIXEL(px_buf, cx + render_w - 1, y, win->width, win->height, cur_col);
+            if (cur_a == 255) {
+                SFTE_COLOR_DRAW_PIXEL(px_buf, cx, y, win->width, win->height, cur_col);
+                SFTE_COLOR_DRAW_PIXEL(px_buf, cx + render_w - 1, y, win->width, win->height,
+                                      cur_col);
+            } else {
+                SFTE_COLOR_BLEND_PIXEL_SAFE(px_buf, cx, y, win->width, win->height, cur_col, cur_a);
+                SFTE_COLOR_BLEND_PIXEL_SAFE(px_buf, cx + render_w - 1, y, win->width, win->height,
+                                            cur_col, cur_a);
+            }
         }
         for (int32_t x = cx; x < cx + render_w; ++x) {
-            SFTE_COLOR_DRAW_PIXEL(px_buf, x, cy, win->width, win->height, cur_col);
-            SFTE_COLOR_DRAW_PIXEL(px_buf, x, cy + vp->cell_height - 1, win->width, win->height,
-                                  cur_col);
+            if (cur_a == 255) {
+                SFTE_COLOR_DRAW_PIXEL(px_buf, x, cy, win->width, win->height, cur_col);
+                SFTE_COLOR_DRAW_PIXEL(px_buf, x, cy + vp->cell_height - 1, win->width, win->height,
+                                      cur_col);
+            } else {
+                SFTE_COLOR_BLEND_PIXEL_SAFE(px_buf, x, cy, win->width, win->height, cur_col, cur_a);
+                SFTE_COLOR_BLEND_PIXEL_SAFE(px_buf, x, cy + vp->cell_height - 1, win->width,
+                                            win->height, cur_col, cur_a);
+            }
         }
         return;
     }
 #endif  // SFTE_TERM_FOCUS
-    if (_SFTE_CUR_STYLE(cursor) == SFTE_CURSOR_STYLE_BLOCK) {
+    if (_SFTE_CUR_STYLE(cursor, cfg) == SFTE_CURSOR_STYLE_BLOCK) {
+        if (cur_a < 255) {
+            for (int32_t y = cy; y < cy + vp->cell_height; ++y)
+                for (int32_t x = cx; x < cx + vp->cell_width; ++x)
+                    SFTE_COLOR_BLEND_PIXEL_SAFE(px_buf, x, y, win->width, win->height, cur_col,
+                                                cur_a);
+            return;
+        }
+
         _sfte_render_bg_cell(ctx, px_buf, col, row, y_off, cur_col);
 #if SFTE_SEARCH
         if (search->is_active) return;
@@ -1541,23 +1549,30 @@ static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col,
             _sfte_render_fg_cell(ctx, px_buf, col, row, y_off, rune, glyph_id, font_idx, cell->bg,
                                  font);
         }
-    } else if (_SFTE_CUR_STYLE(cursor) == SFTE_CURSOR_STYLE_UNDERLINE) {
-        int32_t thick = vp->cell_height * SFTE_CURSOR_THICK_RATIO;
+    } else if (_SFTE_CUR_STYLE(cursor, cfg) == SFTE_CURSOR_STYLE_UNDERLINE) {
+        int32_t thick = vp->cell_height * cfg->cursor.thick_ratio;
         if (thick < 1) thick = 1;
 
         for (int32_t y = cy + vp->cell_height - thick; y < cy + vp->cell_height; ++y)
             for (int32_t x = cx; x < cx + render_w; ++x)
-                if (x < win->width && y < win->height)
+                if (cur_a == 255 && x < win->width && y < win->height)
                     SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, win->width, win->height, cur_col);
-    } else if (_SFTE_CUR_STYLE(cursor) == SFTE_CURSOR_STYLE_BAR) {
-        int32_t thick = vp->cell_width * SFTE_CURSOR_THICK_RATIO;
+                else
+                    SFTE_COLOR_BLEND_PIXEL_SAFE(px_buf, x, y, win->width, win->height, cur_col,
+                                                cur_a);
+    } else if (_SFTE_CUR_STYLE(cursor, cfg) == SFTE_CURSOR_STYLE_BAR) {
+        int32_t thick = vp->cell_width * cfg->cursor.thick_ratio;
         if (thick < 1) thick = 1;
 
         for (int32_t y = cy; y < cy + vp->cell_height; ++y)
             for (int32_t x = cx; x < cx + thick; ++x)
-                if (x < win->width && y < win->height)
+                if (cur_a == 255 && x < win->width && y < win->height)
                     SFTE_COLOR_DRAW_PIXEL(px_buf, x, y, win->width, win->height, cur_col);
+                else
+                    SFTE_COLOR_BLEND_PIXEL_SAFE(px_buf, x, y, win->width, win->height, cur_col,
+                                                cur_a);
     }
+#undef _SFTE_SAFE_BLEND
 }
 
 /*
@@ -1565,10 +1580,11 @@ static inline void _sfte_render_cursor(sfte_ctx *ctx, void *px_buf, int16_t col,
 */
 static inline void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, int16_t col,
                                                  int16_t row, int32_t y_off, sfte_cell *vcell) {
+    const sfte_config *cfg = &ctx->cfg;
     const sfte_viewport_state *vp = &sfte_term_get_active(ctx)->viewport;
 
-    int32_t cx = col * vp->cell_width + SFTE_WINDOW_PAD_X;
-    int32_t cy = row * vp->cell_height + SFTE_WINDOW_PAD_Y;
+    int32_t cx = col * vp->cell_width + cfg->window.pad_x;
+    int32_t cy = row * vp->cell_height + cfg->window.pad_y;
 
     int32_t render_w = vp->cell_width;
 #if SFTE_FONT_WIDE_CHARS
@@ -1584,6 +1600,7 @@ static inline void _sfte_render_decorations_cell(sfte_ctx *ctx, void *px_buf, in
     Renders the whole grid, contrary to `_sfte_render_bg_cell`.
 */
 static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int32_t y_off) {
+    const sfte_config *cfg = &ctx->cfg;
     const sfte_term *term = sfte_term_get_active(ctx);
 #if SFTE_SEARCH
     const sfte_search_state *search = &term->search;
@@ -1601,10 +1618,10 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int32_t y_o
         if (!_sfte_grid_is_row_valid(vp, logical_r)) continue;
 
         for (int16_t c = 0; c < vp->cols; ++c) {
-            sfte_cell *vcell = _sfte_grid_get_cell(term, c, logical_r);
+            sfte_cell *vcell = _sfte_grid_get_cell(term, c, logical_r, cfg);
             if (!vcell->dirty) continue;
 
-            uint32_t bg = _sfte_grid_get_bg(vcell);
+            uint32_t bg = _sfte_grid_get_bg(vcell, cfg);
             uint8_t attr = vcell->attr;
 
 #if SFTE_INPUT_SELECTION
@@ -1617,15 +1634,15 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int32_t y_o
             // If `search_res` is 1 it is highlighted but not active,
             // If `search_res` is 2 it is highlighted AND active.
             if (search_res == 1) {
-                bg = SFTE_SEARCH_BG_MATCH;
-                attr |= SFTE_SEARCH_ATTR_MATCH;
+                bg = cfg->search.bg_match;
+                attr |= cfg->search.attr_match;
             } else if (search_res == 2) {
-                bg = SFTE_SEARCH_BG_ACTIVE;
-                attr |= SFTE_SEARCH_ATTR_ACTIVE;
+                bg = cfg->search.bg_active;
+                attr |= cfg->search.attr_active;
             }
 #endif  // SFTE_SEARCH
 
-            if (attr & _SFTE_ATTR_REVERSE) bg = _sfte_grid_get_fg(vcell);
+            if (attr & _SFTE_ATTR_REVERSE) bg = _sfte_grid_get_fg(vcell, cfg);
 
             _sfte_render_bg_cell(ctx, px_buf, c, r, y_off, bg);
         }
@@ -1636,7 +1653,9 @@ static inline void _sfte_render_bg_grid(sfte_ctx *ctx, void *px_buf, int32_t y_o
 /*
     Computes and returns a 64-bit FNV-1a hash of the row's shaping inputs.
 */
-static inline uint64_t _sfte_render_get_row_hash(const sfte_term *term, int32_t logical_row) {
+static inline uint64_t _sfte_render_get_row_hash(sfte_ctx *ctx, int32_t logical_row) {
+    const sfte_config *cfg = &ctx->cfg;
+    sfte_term *term = sfte_term_get_active(ctx);
     const sfte_render_buffers *render = &term->render;
     const sfte_viewport_state *vp = &term->viewport;
 
@@ -1644,10 +1663,10 @@ static inline uint64_t _sfte_render_get_row_hash(const sfte_term *term, int32_t 
     const uint64_t prime = 1099511628211ULL;
 
     for (int16_t c = 0; c < vp->cols; ++c) {
-        sfte_cell *vcell = _sfte_grid_get_cell(term, c, logical_row);
+        sfte_cell *vcell = _sfte_grid_get_cell(term, c, logical_row, cfg);
         uint8_t attr = vcell->attr;
-        uint32_t fg = _sfte_grid_get_fg(vcell);
-        uint32_t bg = _sfte_grid_get_bg(vcell);
+        uint32_t fg = _sfte_grid_get_fg(vcell, cfg);
+        uint32_t bg = _sfte_grid_get_bg(vcell, cfg);
 
         hash ^= render->shaper_ids[c];
         hash *= prime;
@@ -1668,7 +1687,9 @@ static inline uint64_t _sfte_render_get_row_hash(const sfte_term *term, int32_t 
     Chunks a row into continuous style/color blocks and passes them to the OpenType shaper.
     Ensures ligatures do not bleed across formatting boundaries.
 */
-static inline void _sfte_render_shape_fg_row(sfte_term *term, int32_t logical_row) {
+static inline void _sfte_render_shape_fg_row(sfte_ctx *ctx, int32_t logical_row) {
+    const sfte_config *cfg = &ctx->cfg;
+    sfte_term *term = sfte_term_get_active(ctx);
     const sfte_render_buffers *render = &term->render;
     const sfte_viewport_state *vp = &term->viewport;
 
@@ -1679,18 +1700,18 @@ static inline void _sfte_render_shape_fg_row(sfte_term *term, int32_t logical_ro
             continue;
         }
 
-        sfte_cell *start_cell = _sfte_grid_get_cell(term, span_start, logical_row);
-        uint32_t active_fg = _sfte_grid_get_fg(start_cell);
-        uint32_t active_bg = _sfte_grid_get_bg(start_cell);
+        sfte_cell *start_cell = _sfte_grid_get_cell(term, span_start, logical_row, cfg);
+        uint32_t active_fg = _sfte_grid_get_fg(start_cell, cfg);
+        uint32_t active_bg = _sfte_grid_get_bg(start_cell, cfg);
 
         sfte_font_cache *active_cache = render->target_caches[span_start];
         uint8_t active_font_idx = render->font_indices[span_start];
 
         int16_t span_end = span_start + 1;
         while (span_end < vp->cols && render->shaper_ids[span_end] != 0) {
-            sfte_cell *next_cell = _sfte_grid_get_cell(term, span_end, logical_row);
-            if (_sfte_grid_get_fg(next_cell) != active_fg ||
-                _sfte_grid_get_bg(next_cell) != active_bg ||
+            sfte_cell *next_cell = _sfte_grid_get_cell(term, span_end, logical_row, cfg);
+            if (_sfte_grid_get_fg(next_cell, cfg) != active_fg ||
+                _sfte_grid_get_bg(next_cell, cfg) != active_bg ||
                 render->target_caches[span_end] != active_cache ||
                 render->font_indices[span_end] != active_font_idx)
                 break;
@@ -1713,14 +1734,15 @@ static inline void _sfte_render_shape_fg_row(sfte_term *term, int32_t logical_ro
 static inline void _sfte_render_extract_fg_row(sfte_ctx *ctx, int32_t logical_row, int16_t row,
                                                int16_t vis_col, int16_t vis_row) {
     (void)row, (void)vis_col, (void)vis_row;
-    sfte_font_state *font = &ctx->font;
+    const sfte_config *cfg = &ctx->cfg;
     const sfte_term *term = sfte_term_get_active(ctx);
+    sfte_font_state *font = &ctx->font;
     const sfte_render_buffers *render = &term->render;
     const sfte_viewport_state *vp = &term->viewport;
     const sfte_cursor_state *cursor = &term->cursor;
 
     for (int16_t c = 0; c < vp->cols; ++c) {
-        sfte_cell *vcell = _sfte_grid_get_cell(term, c, logical_row);
+        sfte_cell *vcell = _sfte_grid_get_cell(term, c, logical_row, cfg);
         sfte_rune rune = vcell->rune ? vcell->rune : ' ';
 #if defined(SFTE_FONT_BOLD) || defined(SFTE_FONT_ITALIC) || defined(SFTE_FONT_BOLD_ITALIC)
         uint8_t attr = vcell->attr;
@@ -1753,6 +1775,7 @@ static inline void _sfte_render_extract_fg_row(sfte_ctx *ctx, int32_t logical_ro
 static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
                                        int32_t logical_row, int32_t y_off,
                                        sfte_damage_rect *out_dmg) {
+    const sfte_config *cfg = &ctx->cfg;
     const sfte_window_state *win = &ctx->window;
     const sfte_term *term = sfte_term_get_active(ctx);
 #if SFTE_SEARCH
@@ -1765,22 +1788,22 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
     const sfte_viewport_state *vp = &term->viewport;
 
     for (int16_t c = 0; c < vp->cols; ++c) {
-        sfte_cell *vcell = _sfte_grid_get_cell(term, c, logical_row);
+        sfte_cell *vcell = _sfte_grid_get_cell(term, c, logical_row, cfg);
         if (!vcell->dirty) continue;
 
         uint8_t attr = vcell->attr;
 
 #if SFTE_FONT_WIDE_CHARS
         if (attr & _SFTE_ATTR_DUMMY) {
-            _sfte_render_damage_add(out_dmg, c * vp->cell_width + SFTE_WINDOW_PAD_X,
-                                    row * vp->cell_height + SFTE_WINDOW_PAD_Y, vp->cell_width,
+            _sfte_render_damage_add(out_dmg, c * vp->cell_width + cfg->window.pad_x,
+                                    row * vp->cell_height + cfg->window.pad_y, vp->cell_width,
                                     vp->cell_height);
             vcell->dirty = 0;
             continue;
         }
 #endif  // SFTE_FONT_WIDE_CHARS
         sfte_rune rune = vcell->rune ? vcell->rune : ' ';
-        uint32_t fg = _sfte_grid_get_fg(vcell);
+        uint32_t fg = _sfte_grid_get_fg(vcell, cfg);
 
 #if SFTE_INPUT_SELECTION
         if (_sfte_input_is_selected(mouse, c, logical_row)) attr ^= _SFTE_ATTR_REVERSE;
@@ -1792,17 +1815,17 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
         // If `search_res` is 1 it is highlighted but not active,
         // If `search_res` is 2 it is highlighted AND active.
         if (search_res == 1) {
-            fg = SFTE_SEARCH_FG_MATCH;
-            attr |= SFTE_SEARCH_ATTR_MATCH;
+            fg = cfg->search.fg_match;
+            attr |= cfg->search.attr_match;
         } else if (search_res == 2) {
-            fg = SFTE_SEARCH_FG_ACTIVE;
-            attr |= SFTE_SEARCH_ATTR_ACTIVE;
+            fg = cfg->search.fg_active;
+            attr |= cfg->search.attr_active;
         }
 #endif  // SFTE_SEARCH
 
-        if (attr & _SFTE_ATTR_REVERSE) fg = _sfte_grid_get_bg(vcell);
+        if (attr & _SFTE_ATTR_REVERSE) fg = _sfte_grid_get_bg(vcell, cfg);
 #ifdef SFTE_BOLD_WHITE
-        if ((attr & _SFTE_ATTR_BOLD) && !(attr & _SFTE_ATTR_REVERSE)) fg = SFTE_COLOR_FG;
+        if ((attr & _SFTE_ATTR_BOLD) && !(attr & _SFTE_ATTR_REVERSE)) fg = cfg->color.fg;
 #endif
 
 #if SFTE_FONT_LIGATURES
@@ -1816,12 +1839,12 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
                              render->font_indices[c], fg, render->target_caches[c]);
         _sfte_render_decorations_cell(ctx, px_buf, c, row, y_off, vcell);
 
-        int32_t dmg_cy = row * vp->cell_height + SFTE_WINDOW_PAD_Y;
+        int32_t dmg_cy = row * vp->cell_height + cfg->window.pad_y;
         int32_t dmg_ch = vp->cell_height;
 
         if (row <= 0) {
             dmg_cy = 0;
-            dmg_ch += SFTE_WINDOW_PAD_Y;
+            dmg_ch += cfg->window.pad_y;
         } else if (row >= vp->rows - 1) {
             dmg_ch += win->height - (dmg_cy + dmg_ch);
         }
@@ -1835,6 +1858,7 @@ static inline void _sfte_render_fg_row(sfte_ctx *ctx, void *px_buf, int16_t row,
 */
 static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis_col,
                                         int16_t vis_row, int32_t y_off, sfte_damage_rect *out_dmg) {
+    const sfte_config *cfg = &ctx->cfg;
     sfte_term *term = sfte_term_get_active(ctx);
     const sfte_render_buffers *render = &term->render;
     const sfte_viewport_state *vp = &term->viewport;
@@ -1850,18 +1874,18 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
 
 #if SFTE_FONT_LIGATURES
         int32_t cache_idx = ((logical_r + vp->grid_off) % vp->rows + vp->rows) % vp->rows;
-        uint64_t row_hash = _sfte_render_get_row_hash(term, logical_r);
+        uint64_t row_hash = _sfte_render_get_row_hash(ctx, logical_r);
         uint16_t *memo_ids = &render->row_shaper_ids[cache_idx * vp->cols];
         if (render->row_hashes[cache_idx] == row_hash)
             memcpy(render->shaper_ids, memo_ids, vp->cols * sizeof(uint16_t));
         else {
-            _sfte_render_shape_fg_row(term, logical_r);
+            _sfte_render_shape_fg_row(ctx, logical_r);
             render->row_hashes[cache_idx] = row_hash;
 
             // Dirty any cells that had their shapes changed due to ligatures
             for (int16_t c = 0; c < vp->cols; ++c)
                 if (render->shaper_ids[c] != memo_ids[c])
-                    _sfte_grid_get_cell(term, c, logical_r)->dirty = 1;
+                    _sfte_grid_get_cell(term, c, logical_r, cfg)->dirty = 1;
 
             memcpy(memo_ids, render->shaper_ids, vp->cols * sizeof(uint16_t));
         }
@@ -1875,6 +1899,7 @@ static inline void _sfte_render_fg_grid(sfte_ctx *ctx, void *px_buf, int16_t vis
 // =================================================================================================
 
 void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_rect *out_dmg) {
+    const sfte_config *cfg = &ctx->cfg;
 #if SFTE_MUX && SFTE_MUX_PREFIX_PREVIEW
     sfte_mux *mux = &ctx->mux;
 #endif  // SFTE_MUX && SFTE_MUX_PREFIX_PREVIEW
@@ -1891,7 +1916,7 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
     sfte_trail_state *trail = &cursor->trail;
 #endif  // SFTE_CURSOR_TRAIL
     const sfte_viewport_state *vp = &term->viewport;
-    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp, cfg);
 
     win->width = w;
     win->height = h;
@@ -1902,13 +1927,14 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
         return;
     }
 
-    int16_t new_cols = (w - (2 * SFTE_WINDOW_PAD_X)) / vp->cell_width;
-    int16_t new_rows = (h - (2 * SFTE_WINDOW_PAD_Y)) / vp->cell_height;
+    int16_t new_cols = (w - (2 * cfg->window.pad_x)) / vp->cell_width;
+    int16_t new_rows = (h - (2 * cfg->window.pad_y)) / vp->cell_height;
 // Make space for multiplexer bar if enabled and not hovering above viewport
-#if SFTE_MUX_BAR && !SFTE_MUX_BAR_HOVER
-    if (new_rows > 1) new_rows--;
-#endif  // SFTE_MUX_BAR && !SFTE_MUX_BAR_HOVER
-    if (new_cols != vp->cols || new_rows != vp->rows) _sfte_grid_resize(term, new_cols, new_rows);
+#if SFTE_MUX_BAR
+    if (new_rows > layout.reserved_rows) new_rows -= layout.reserved_rows;
+#endif  // SFTE_MUX_BAR
+    if (new_cols != vp->cols || new_rows != vp->rows)
+        _sfte_grid_resize(term, new_cols, new_rows, cfg);
 
     sfte_pass_info passes[2];
     uint8_t num_passes = _sfte_render_prepare_passes(ctx, px_buf, passes, out_dmg);
@@ -1919,7 +1945,7 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
 #if SFTE_FONT_WIDE_CHARS
     uint8_t cursor_is_visible = (vis_row >= 0 && vis_row < vp->rows);
     if (cursor_is_visible && vis_col > 0 &&
-        (_sfte_grid_get_cell(term, vis_col, vis_row)->attr & _SFTE_ATTR_DUMMY))
+        (_sfte_grid_get_cell(term, vis_col, vis_row, cfg)->attr & _SFTE_ATTR_DUMMY))
         vis_col--;
 #endif  // SFTE_FONT_WIDE_CHARS
 
@@ -1930,19 +1956,15 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
     // Force the text grid row beneath the overlay to completely redraw
     // This is crucial so that alpha blending doesn't break, hence
     // it's hidden behind `SFTE_SEARCH_BAR_BG_OPACITY != 0xFF`.
-#if SFTE_SEARCH_PLACEMENT_TOP
-    int16_t search_row = 0;
-#else   // !SFTE_SEARCH_PLACEMENT_TOP
-    int16_t search_row = vp->rows - 1;
-#endif  // !SFTE_SEARCH_PLACEMENT_TOP
-    if (search->is_active) _sfte_grid_dirty_rows(term, search_row, search_row);
+    int16_t search_row = cfg->search.top ? 0 : vp->rows - 1;
+    if (search->is_active) _sfte_grid_dirty_rows(term, search_row, search_row, cfg);
 #endif  // SFTE_SEARCH && SFTE_SEARCH_BG_BAR_OPACITY != 0xFF
 
     // Similarly to the search logic, we need to completely redraw the row beneath the overlay
     // if it's hovering above the viewport.
-    if (layout.overlay) {
-        int16_t r = (layout.bar_y - SFTE_WINDOW_PAD_Y) / vp->cell_height;
-        _sfte_grid_dirty_rows(term, r, r);
+    if (cfg->mux_bar.hover) {
+        int16_t r = (layout.bar_y - cfg->window.pad_y) / vp->cell_height;
+        _sfte_grid_dirty_rows(term, r, r, cfg);
     }
 
 #if SFTE_MUX_PREFIX_PREVIEW
@@ -1953,7 +1975,7 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
 #endif  // SFTE_MUX_PREFIX_PREVIEW
 
 #if SFTE_CURSOR_TRAIL
-    _sfte_grid_dirty_trail(trail, term);
+    _sfte_grid_dirty_trail(trail, term, cfg);
 #endif  // SFTE_CURSOR_TRAIL
 
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
@@ -2040,37 +2062,40 @@ void sfte_render(sfte_ctx *ctx, void *px_buf, int32_t w, int32_t h, sfte_damage_
                 if (!_sfte_grid_is_row_valid(vp, logical_r)) continue;
 
                 for (int16_t c = 0; c < vp->cols; ++c)
-                    _sfte_grid_get_cell(term, c, logical_r)->dirty = 0;
+                    _sfte_grid_get_cell(term, c, logical_r, cfg)->dirty = 0;
             }
         }
     } else
         out_dmg->w = 0, out_dmg->h = 0;
 }
 
-void sfte_get_ideal_size(const sfte_term *term, int16_t cols, int16_t rows, int32_t *out_w,
+void sfte_get_ideal_size(sfte_ctx *ctx, int16_t cols, int16_t rows, int32_t *out_w,
                          int32_t *out_h) {
+    const sfte_config *cfg = &ctx->cfg;
+    const sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
-    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp, cfg);
 
-    if (out_w) *out_w = cols * vp->cell_width + (2 * SFTE_WINDOW_PAD_X);
-    if (out_h) *out_h = (rows + layout.reserved_rows) * vp->cell_height + 2 * SFTE_WINDOW_PAD_Y;
+    if (out_w) *out_w = cols * vp->cell_width + (2 * cfg->window.pad_x);
+    if (out_h) *out_h = (rows + layout.reserved_rows) * vp->cell_height + 2 * cfg->window.pad_y;
 }
 
 void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
     if (w <= 0 || h <= 0) return;
 
+    const sfte_config *cfg = &ctx->cfg;
     sfte_term *term = sfte_term_get_active(ctx);
     sfte_window_state *win = &ctx->window;
     const sfte_viewport_state *vp = &term->viewport;
-    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp, cfg);
 
     win->width = w;
     win->height = h;
     win->pad_dirty = 1;
 
-    int16_t new_cols = (w - (2 * SFTE_WINDOW_PAD_X)) / (int32_t)vp->cell_width;
+    int16_t new_cols = (w - (2 * cfg->window.pad_x)) / (int32_t)vp->cell_width;
     if (new_cols < 1) new_cols = 1;
-    int16_t new_rows = (h - (2 * SFTE_WINDOW_PAD_Y)) / (int32_t)vp->cell_height;
+    int16_t new_rows = (h - (2 * cfg->window.pad_y)) / (int32_t)vp->cell_height;
     // Reserve space for the multiplexer bar if not floating above viewport
     if (new_rows > layout.reserved_rows) new_rows -= layout.reserved_rows;
 
@@ -2080,13 +2105,16 @@ void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
         if (!t->is_allocated) continue;
 
         if (new_cols != t->viewport.cols || new_rows != t->viewport.rows) {
-            _sfte_grid_resize(t, new_cols, new_rows);
+            _sfte_grid_resize(t, new_cols, new_rows, cfg);
 #if SFTE_CURSOR_TRAIL
             t->cursor.trail.warp_tail = 1;
 #endif  // SFTE_CURSOR_TRAIL
         } else {
-            _sfte_grid_dirty_rows(t, -t->viewport.sb_off,
-                                  -t->viewport.sb_off + t->viewport.rows - 1);
+            uint32_t off = 0;
+#if SFTE_TERM_SCROLLBACK
+            off = t->viewport.sb_off;
+#endif  // SFTE_TERM_SCROLLBACK
+            _sfte_grid_dirty_rows(t, -off, -off + t->viewport.rows - 1, cfg);
         }
     }
 }
@@ -2095,11 +2123,12 @@ void sfte_resize(sfte_ctx *ctx, int32_t w, int32_t h) {
 void sfte_zoom(sfte_ctx *ctx, float delta) {
     if (delta == 0) return;
 
+    const sfte_config *cfg = &ctx->cfg;
     sfte_window_state *win = &ctx->window;
     sfte_font_state *font = &ctx->font;
 
     float new_size = font->cur_size + delta;
-    if (new_size < SFTE_FONT_MIN_SIZE || new_size > SFTE_FONT_MAX_SIZE) return;
+    if (new_size < cfg->font.min_size || new_size > cfg->font.max_size) return;
 
     win->pad_dirty = 1;
     font->cur_size = new_size;

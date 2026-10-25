@@ -29,16 +29,6 @@ typedef struct sfte_logger {
 } sfte_logger;
 #endif  // !SFTE_NO_LOGGING
 
-#if SFTE_COLOR_TRUECOLOR
-typedef uint32_t sfte_color;
-#define _SFTE_COLOR_FG_DEFAULT SFTE_COLOR_FG
-#define _SFTE_COLOR_BG_DEFAULT SFTE_COLOR_BG
-#else  // !SFTE_COLOR_TRUECOLOR
-typedef uint8_t sfte_color;
-#define _SFTE_COLOR_FG_DEFAULT 254
-#define _SFTE_COLOR_BG_DEFAULT 255
-#endif  // !SFTE_COLOR_TRUECOLOR
-
 #if SFTE_TERM_ASCII_CHARSET
 typedef uint8_t sfte_rune;
 #else   // !SFTE_TERM_ASCII_CHARSET
@@ -76,10 +66,10 @@ typedef struct sfte_cell {
     uint16_t link_idx;  // 0=no link, >0=index to `term.link_pool`
 #endif                  // SFTE_INPUT_HYPERLINKS
 
-    sfte_color fg;
-    sfte_color bg;
+    uint32_t fg;
+    uint32_t bg;
 #if SFTE_UNDERLINE_COLORED
-    sfte_color ul_color;
+    uint32_t ul_color;
 #endif             // SFTE_UNDERLINE_COLORED
     uint8_t attr;  // Bitmask of sfte_attr
 #if SFTE_FONT_WIDE_CHARS
@@ -218,7 +208,6 @@ typedef struct sfte_mux_layout {
     int32_t grid_off_y;     // px the grid is pushed down (bar on top, not overlayed)
     int16_t reserved_rows;  // rows taken away from the grid (0 or 1)
     int32_t bar_y;          // absolute px y of the bars top edge
-    uint8_t overlay;        // 1 if the bar draws on top of a grid row
 } sfte_mux_layout;
 
 typedef struct sfte_text_input_state {
@@ -236,10 +225,10 @@ typedef struct sfte_mouse_state {
     int32_t sel_start_row, sel_end_row;
     uint8_t sel_active;
     uint8_t sel_dragging;
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
     int8_t sel_scroll_dir;
     uint64_t sel_last_scroll_ms;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
 #endif  // SFTE_INPUT_SELECTION
 } sfte_mouse_state;
 #endif  // SFTE_INPUT_MOUSE
@@ -390,12 +379,11 @@ typedef struct sfte_viewport_state {
     int16_t scroll_bot;
     int16_t grid_off;
 
-#if SFTE_TERM_SCROLLBACK_CAP
-    int32_t sb_cap;
+#if SFTE_TERM_SCROLLBACK
     int32_t sb_len;
     int32_t sb_off;  // 0 = live, >0 = history
     int32_t sb_head;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
 #if SFTE_TERM_SCROLL_SMOOTH
     int32_t last_sb_off;
     float scroll_y_off;
@@ -405,12 +393,12 @@ typedef struct sfte_viewport_state {
 } sfte_viewport_state;
 
 typedef struct sfte_sgr_state {
-    sfte_color fg;
-    sfte_color bg;
+    uint32_t fg;
+    uint32_t bg;
     uint16_t attr;
 
 #if SFTE_UNDERLINE_COLORED
-    sfte_color ul_color;
+    uint32_t ul_color;
 #endif  // SFTE_UNDERLINE_COLORED
 #if SFTE_UNDERLINE_EXTENDED
     uint8_t ul_style;
@@ -473,9 +461,9 @@ struct sfte_term {
     sfte_cell *cells;
     uint8_t *tab_stops;
     uint8_t tab_width;
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
     sfte_cell *scrollback;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
 #if SFTE_TERM_ALT_SCREEN
     sfte_cell *alt_cells;
 #endif  // SFTE_TERM_ALT_SCREEN
@@ -595,6 +583,8 @@ struct sfte_ctx {
 #ifndef SFTE_NO_LOGGING
     sfte_logger logger;
 #endif  // !SFTE_NO_LOGGING
+    sfte_config cfg;
+    uint32_t palette[256];
 };
 
 #if SFTE_WAYLAND
@@ -659,10 +649,10 @@ struct sfte_wayland_app {
 
 typedef struct sfte_resize_buffers {
     sfte_cell *main_grid;
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
     sfte_cell *sb_grid;
     int32_t sb_lines;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
     int16_t new_col, new_row;
 } sfte_resize_buffers;
 

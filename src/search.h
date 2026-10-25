@@ -84,6 +84,7 @@ static inline void _sfte_search_posix_re_free(sfte_stack *stack, void *re_ctx) {
 */
 static inline uint8_t _sfte_search_toggle_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
+    const sfte_config *cfg = &ctx->cfg;
 #if SFTE_MUX
     const sfte_mux *mux = &ctx->mux;
 #endif  // SFTE_MUX
@@ -109,13 +110,8 @@ static inline uint8_t _sfte_search_toggle_shortcut(sfte_ctx *ctx, const sfte_arg
         search->text_input.len = 0;
         search->text_input.cursor_byte_idx = 0;
 
-#if SFTE_SEARCH_PLACEMENT_TOP
-        uint16_t row = 0;
-#else   // !SFTE_SEARCH_PLACEMENT_TOP
-        uint16_t row = vp->rows - 1;
-#endif  // !SFTE_SEARCH_PLACEMENT_TOP
-
-        _sfte_grid_dirty_rows(term, row, row);
+        uint16_t row = cfg->search.top ? 0 : vp->rows - 1;
+        _sfte_grid_dirty_rows(term, row, row, cfg);
         search->ui_dirty = 1;
 
         return search->is_active;
@@ -125,7 +121,9 @@ static inline uint8_t _sfte_search_toggle_shortcut(sfte_ctx *ctx, const sfte_arg
 /*
     Jumps to the currently active search match.
 */
-static inline void _sfte_search_jump(sfte_term *term, int8_t delta) {
+static inline void _sfte_search_jump(sfte_ctx *ctx, int8_t delta) {
+    const sfte_config *cfg = &ctx->cfg;
+    sfte_term *term = sfte_term_get_active(ctx);
     sfte_search_state *search = &term->search;
     const sfte_viewport_state *vp = &term->viewport;
 
@@ -141,7 +139,7 @@ static inline void _sfte_search_jump(sfte_term *term, int8_t delta) {
     if (match_logical_r < top_logical_r || match_logical_r > bot_logical_r) {
         int32_t target_off = -match_logical_r + (vp->rows / 2);
         if (target_off < 0) target_off = 0;
-        sfte_view_scroll(term, target_off + top_logical_r);
+        sfte_view_scroll(ctx, target_off + top_logical_r);
     }
 
     // If `delta` is 0, sfte_view_scroll will NOT dirty the screen,
@@ -149,7 +147,7 @@ static inline void _sfte_search_jump(sfte_term *term, int8_t delta) {
     top_logical_r = -vp->sb_off;
     bot_logical_r = top_logical_r + vp->rows - 1;
 
-    _sfte_grid_dirty_rows(term, top_logical_r, bot_logical_r);
+    _sfte_grid_dirty_rows(term, top_logical_r, bot_logical_r, cfg);
     search->ui_dirty = 1;
 }
 
@@ -161,7 +159,7 @@ static inline uint8_t _sfte_search_prev_shortcut(sfte_ctx *ctx, const sfte_arg *
     sfte_term *term = sfte_term_get_active(ctx);
     sfte_search_state *search = &term->search;
 
-    _sfte_search_jump(term, -1);
+    _sfte_search_jump(ctx, -1);
     return search->is_active;
 }
 
@@ -173,14 +171,14 @@ static inline uint8_t _sfte_search_next_shortcut(sfte_ctx *ctx, const sfte_arg *
     sfte_term *term = sfte_term_get_active(ctx);
     sfte_search_state *search = &term->search;
 
-    _sfte_search_jump(term, 1);
+    _sfte_search_jump(ctx, 1);
     return search->is_active;
 }
 
 /*
     Frees the compiled regex context and clears the match list.
 */
-static inline void _sfte_search_clear(sfte_term *term) {
+static inline void _sfte_search_clear(sfte_term *term, const sfte_config *cfg) {
     sfte_search_state *search = &term->search;
     sfte_stack *stack = &term->stack;
     const sfte_viewport_state *vp = &term->viewport;
@@ -205,7 +203,7 @@ static inline void _sfte_search_clear(sfte_term *term) {
 
     int32_t top_logical_r = -vp->sb_off;
     int32_t bot_logical_r = top_logical_r + vp->rows - 1;
-    _sfte_grid_dirty_rows(term, top_logical_r, bot_logical_r);
+    _sfte_grid_dirty_rows(term, top_logical_r, bot_logical_r, cfg);
 }
 
 /*
@@ -214,6 +212,7 @@ static inline void _sfte_search_clear(sfte_term *term) {
     If `arg` is 1, exits if query is empty.
 */
 static inline uint8_t _sfte_search_clear_shortcut(sfte_ctx *ctx, const sfte_arg *arg) {
+    const sfte_config *cfg = &ctx->cfg;
     sfte_term *term = sfte_term_get_active(ctx);
     sfte_search_state *search = &term->search;
 
@@ -221,7 +220,7 @@ static inline uint8_t _sfte_search_clear_shortcut(sfte_ctx *ctx, const sfte_arg 
     if (!ignore_query && search->text_input.len) return 0;
 
     uint8_t was_active = search->is_active;
-    _sfte_search_clear(term);
+    _sfte_search_clear(term, cfg);
 
     return was_active;
 }
@@ -231,7 +230,8 @@ static inline uint8_t _sfte_search_clear_shortcut(sfte_ctx *ctx, const sfte_arg 
     Returns the number of physical rows consumed.
 */
 static inline int16_t _sfte_search_extract_logical_line(const sfte_term *term, int32_t logical_row,
-                                                        char *out_buf, size_t max_len) {
+                                                        char *out_buf, size_t max_len,
+                                                        const sfte_config *cfg) {
     const sfte_viewport_state *vp = &term->viewport;
 
     int16_t rows_consumed = 0;
@@ -243,21 +243,21 @@ static inline int16_t _sfte_search_extract_logical_line(const sfte_term *term, i
 
         uint8_t is_wrapped = 0;
 #if SFTE_TERM_REFLOW
-        is_wrapped = _sfte_grid_get_cell(term, vp->cols - 1, cur_r)->wrapped;
+        is_wrapped = _sfte_grid_get_cell(term, vp->cols - 1, cur_r, cfg)->wrapped;
 #endif  // SFTE_TERM_REFLOW
 
         // Find the true length of the row to ignore empty trailing cells
         int16_t actual_cols = vp->cols;
         if (!is_wrapped)
             while (actual_cols > 0) {
-                sfte_cell *cell = _sfte_grid_get_cell(term, actual_cols - 1, cur_r);
-                if ((cell->rune != 0 && cell->rune != ' ') || cell->bg != SFTE_COLOR_BG) break;
+                sfte_cell *cell = _sfte_grid_get_cell(term, actual_cols - 1, cur_r, cfg);
+                if ((cell->rune != 0 && cell->rune != ' ') || cell->bg != cfg->color.bg) break;
                 actual_cols--;
             }
 
         // Encode runes to UTF-8 bytes
         for (int16_t c = 0; c < actual_cols; ++c) {
-            sfte_cell *cell = _sfte_grid_get_cell(term, c, cur_r);
+            sfte_cell *cell = _sfte_grid_get_cell(term, c, cur_r, cfg);
             uint32_t rune = cell->rune ? cell->rune : ' ';
 
             if (rune <= 0x7F) {
@@ -286,7 +286,8 @@ static inline int16_t _sfte_search_extract_logical_line(const sfte_term *term, i
 */
 static inline void _sfte_search_map_to_coords(const sfte_term *term, int32_t start_logical_row,
                                               uint32_t match_idx, uint32_t match_len,
-                                              sfte_search_match *out_match) {
+                                              sfte_search_match *out_match,
+                                              const sfte_config *cfg) {
     const sfte_viewport_state *vp = &term->viewport;
 
     int32_t cur_r = start_logical_row;
@@ -302,14 +303,14 @@ static inline void _sfte_search_map_to_coords(const sfte_term *term, int32_t sta
     while (1) {
         uint8_t is_wrapped = 0;
 #if SFTE_TERM_REFLOW
-        is_wrapped = _sfte_grid_get_cell(term, vp->cols - 1, cur_r)->wrapped;
+        is_wrapped = _sfte_grid_get_cell(term, vp->cols - 1, cur_r, cfg)->wrapped;
 #endif  // SFTE_TERM_REFLOW
 
         int16_t actual_cols = vp->cols;
         if (!is_wrapped)
             while (actual_cols > 0) {
-                sfte_cell *cell = _sfte_grid_get_cell(term, actual_cols - 1, cur_r);
-                if ((cell->rune != 0 && cell->rune != ' ') || cell->bg != SFTE_COLOR_BG) break;
+                sfte_cell *cell = _sfte_grid_get_cell(term, actual_cols - 1, cur_r, cfg);
+                if ((cell->rune != 0 && cell->rune != ' ') || cell->bg != cfg->color.bg) break;
                 actual_cols--;
             }
 
@@ -327,7 +328,7 @@ static inline void _sfte_search_map_to_coords(const sfte_term *term, int32_t sta
                 return;
             }
 
-            sfte_cell *cell = _sfte_grid_get_cell(term, c, cur_r);
+            sfte_cell *cell = _sfte_grid_get_cell(term, c, cur_r, cfg);
             uint32_t rune = cell->rune ? cell->rune : ' ';
 
             uint8_t byte_len = 0;
@@ -392,7 +393,9 @@ static inline uint8_t _sfte_search_is_highlighted(const sfte_search_state *searc
 
     Populates the match list from the bottom (live screen), later going to scrollback.
 */
-static inline void _sfte_search_exec(sfte_term *term, const char *query) {
+static inline void _sfte_search_exec(sfte_ctx *ctx, const char *query) {
+    const sfte_config *cfg = &ctx->cfg;
+    sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
     sfte_stack *stack = &term->stack;
     sfte_search_state *search = &term->search;
@@ -427,12 +430,8 @@ static inline void _sfte_search_exec(sfte_term *term, const char *query) {
     search->match_cnt = 0;
     search->matches = NULL;
 
-#if SFTE_SEARCH_PLACEMENT_TOP
-    uint16_t row = 0;
-#else   // !SFTE_SEARCH_PLACEMENT_TOP
-    uint16_t row = vp->rows - 1;
-#endif  // !SFTE_SEARCH_PLACEMENT_TOP
-    _sfte_grid_dirty_rows(term, row, row);
+    uint16_t row = cfg->search.top ? 0 : vp->rows - 1;
+    _sfte_grid_dirty_rows(term, row, row, cfg);
     search->ui_dirty = 1;
 
     if (query_len == 0) return;
@@ -445,7 +444,8 @@ static inline void _sfte_search_exec(sfte_term *term, const char *query) {
     search->matches = (sfte_search_match *)_sfte_mem_stack_alloc(
         stack, sizeof(sfte_search_match) * search->match_cap, _Alignof(sfte_search_match));
 
-    int32_t min_logical_r = -(vp->sb_len < vp->sb_cap ? vp->sb_len : vp->sb_cap);
+    int32_t min_logical_r = -(vp->sb_len < cfg->scroll.scrollback_cap ? vp->sb_len
+                                                                      : cfg->scroll.scrollback_cap);
     int32_t max_logical_r = vp->rows - 1;
 
     char row_buf[SFTE_SEARCH_ROW_BUF_CAP];
@@ -457,7 +457,7 @@ static inline void _sfte_search_exec(sfte_term *term, const char *query) {
         while (logical_start_r > min_logical_r) {
             // Check if previous row wrapped into this one
             int32_t prev_r = logical_start_r - 1;
-            sfte_cell *last_cell = _sfte_grid_get_cell(term, vp->cols - 1, prev_r);
+            sfte_cell *last_cell = _sfte_grid_get_cell(term, vp->cols - 1, prev_r, cfg);
             if (!last_cell) break;
 #if SFTE_TERM_REFLOW
             if (!last_cell->wrapped) break;
@@ -466,7 +466,8 @@ static inline void _sfte_search_exec(sfte_term *term, const char *query) {
         }
 
         // Extract full logical line starting from head
-        _sfte_search_extract_logical_line(term, logical_start_r, row_buf, SFTE_SEARCH_ROW_BUF_CAP);
+        _sfte_search_extract_logical_line(term, logical_start_r, row_buf, SFTE_SEARCH_ROW_BUF_CAP,
+                                          cfg);
 
         int32_t search_off = 0;
         int32_t match_idx, match_len;
@@ -486,7 +487,8 @@ static inline void _sfte_search_exec(sfte_term *term, const char *query) {
             }
 
             sfte_search_match *m = &search->matches[search->match_cnt];
-            _sfte_search_map_to_coords(term, logical_start_r, search_off + match_idx, match_len, m);
+            _sfte_search_map_to_coords(term, logical_start_r, search_off + match_idx, match_len, m,
+                                       cfg);
             search->match_cnt++;
 
             if (match_len == 0)
@@ -517,7 +519,7 @@ static inline void _sfte_search_exec(sfte_term *term, const char *query) {
         }
 
         search->active_match_idx = closest_idx;
-        _sfte_search_jump(term, 0);
+        _sfte_search_jump(ctx, 0);
     } else
         search->active_match_idx = 0;
 }

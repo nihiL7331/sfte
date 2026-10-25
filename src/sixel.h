@@ -20,7 +20,8 @@
     Sixel requires the text cursor to be pushed to the beginning of next line
     after image finishes drawing, scrolling the screen if necessary.
 */
-static inline void _sfte_sixel_commit(sfte_sixel_state *sixel, sfte_term *term) {
+static inline void _sfte_sixel_commit(sfte_sixel_state *sixel, sfte_term *term,
+                                      const sfte_config *cfg) {
     const sfte_modes_state *modes = &term->modes;
     const sfte_viewport_state *vp = &term->viewport;
     sfte_image_state *images = &term->images;
@@ -67,7 +68,7 @@ static inline void _sfte_sixel_commit(sfte_sixel_state *sixel, sfte_term *term) 
 
                 // If the image pushed the cursor off the screen, scroll down
                 while (cursor->row > vp->scroll_bot) {
-                    _sfte_grid_scroll(term, 1);
+                    _sfte_grid_scroll(term, 1, cfg);
                     cursor->row--;
                 }
             } else

@@ -93,7 +93,7 @@ typedef void (*sfte_progress_cb)(void *user_data, uint8_t state, uint8_t progres
 /*
     Context (de)initialization
 */
-sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data);
+sfte_ctx *sfte_init(sfte_write_cb write_fn, void *user_data, const sfte_config *cfg);
 void sfte_free(sfte_ctx *ctx);
 
 /*
@@ -178,13 +178,12 @@ uint8_t sfte_term_close(sfte_ctx *ctx, sfte_term *term);
 /*
     Ask engine how many pixels it needs to display a specified grid.
 */
-void sfte_get_ideal_size(const sfte_term *term, int16_t cols, int16_t rows, int32_t *out_w,
-                         int32_t *out_h);
+void sfte_get_ideal_size(sfte_ctx *ctx, int16_t cols, int16_t rows, int32_t *out_w, int32_t *out_h);
 
 /*
     Feed bytes from the shell/PTY to the terminal state machine.
 */
-void sfte_parse(sfte_term *term, const uint8_t *data, size_t len);
+void sfte_parse(sfte_ctx *ctx, sfte_term *term, const uint8_t *data, size_t len);
 
 /*
     Render the grid to the provided `px_buf` buffer
@@ -263,7 +262,7 @@ void sfte_mouse_click(sfte_ctx *ctx, sfte_mouse_button btn, uint8_t pressed, int
     Feed scroll wheel events to the terminal engine.
     `dir` is the scroll direction: positive (>0) for up, negative (<0) for down.
 */
-void sfte_mouse_scroll(sfte_term *term, int8_t dir, int32_t px_x, int32_t px_y);
+void sfte_mouse_scroll(sfte_ctx *ctx, int8_t dir, int32_t px_x, int32_t px_y);
 #endif  // SFTE_INPUT_MOUSE
 
 #if SFTE_INPUT_HYPERLINKS
@@ -271,7 +270,7 @@ void sfte_mouse_scroll(sfte_term *term, int8_t dir, int32_t px_x, int32_t px_y);
     Returns the URL at the given cell coords.
     Returns NULL if no link is present.
 */
-const char *sfte_get_link_at(sfte_term *term, int16_t col, int16_t row);
+const char *sfte_get_link_at(sfte_ctx *ctx, int16_t col, int16_t row);
 #endif  // SFTE_INPUT_HYPERLINKS
 
 #if SFTE_INPUT_SELECTION
@@ -280,15 +279,15 @@ const char *sfte_get_link_at(sfte_term *term, int16_t col, int16_t row);
     If `out_buf` is NULL, performs a dry-run and returns the required byte size.
     Returns 0 if nothing is selected.
 */
-size_t sfte_get_selection(const sfte_term *term, char *out_buf, size_t max_bytes);
+size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes);
 #endif  // SFTE_INPUT_SELECTION
 
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
 /*
     Shift viewport up or down in the scrollback buffer.
 */
-void sfte_view_scroll(sfte_term *term, int32_t delta);
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+void sfte_view_scroll(sfte_ctx *ctx, int32_t delta);
+#endif  // SFTE_TERM_SCROLLBACK
 
 #ifdef SFTE_XKB_COMMON
 /*
@@ -316,7 +315,7 @@ typedef struct sfte_wayland_app sfte_wayland_app;
 /*
     Initializes Wayland, PTY and `sfte_ctx`.
 */
-sfte_wayland_app *sfte_wayland_init(void);
+sfte_wayland_app *sfte_wayland_init(const sfte_config *cfg);
 
 /*
     Exposes the context for runtime configuration.

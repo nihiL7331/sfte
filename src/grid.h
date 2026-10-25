@@ -12,14 +12,15 @@
 /*
     Pushes a single cell into the temporary linear buffer.
 */
-static inline void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell cell, uint8_t is_cursor) {
+static inline void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell cell, uint8_t is_cursor,
+                                     const sfte_config *cfg) {
 #if SFTE_FONT_WIDE_CHARS
     // If we're pushing a double-width character and we're at last column, wrap early.
     if ((cell.attr & _SFTE_ATTR_WIDE) && st->reflow_col == st->new_cols - 1) {
         sfte_cell space = cell;
         space.rune = ' ';
-        space.fg = _SFTE_COLOR_FG_DEFAULT;
-        space.bg = _SFTE_COLOR_BG_DEFAULT;
+        space.fg = cfg->color.fg;
+        space.bg = cfg->color.bg;
         space.attr = 0;
         space.wrapped = 1;
         st->temp_rows[st->reflow_row * st->new_cols + st->reflow_col] = space;
@@ -48,7 +49,8 @@ static inline void _sfte_reflow_push(sfte_reflow_state *st, sfte_cell cell, uint
     Calculates the true length of a line by trimming empty trailing spaces.
     If the cursor is on this line (cursor_cx >= 0), it ensures the length includes the cursor.
 */
-static inline int16_t _sfte_reflow_get_len(sfte_cell *row, int16_t cols, int16_t cursor_col) {
+static inline int16_t _sfte_reflow_get_len(sfte_cell *row, int16_t cols, int16_t cursor_col,
+                                           const sfte_config *cfg) {
     if (row[cols - 1].wrapped) return cols;
     int16_t len = cols;
 
@@ -59,9 +61,14 @@ static inline int16_t _sfte_reflow_get_len(sfte_cell *row, int16_t cols, int16_t
     // 2. its bg is the default color (colored spaces are used by TUIs to draw UI).
     // Finally, we must NEVER trim the cell where the cursor is currently sitting,
     // even if its a blank space.
-    while (len > 0 && (row[len - 1].rune == ' ' || row[len - 1].rune == 0) &&
-           row[len - 1].bg == SFTE_COLOR_BG) {
+    while (len > 0) {
         if (cursor_col >= 0 && len - 1 == cursor_col) break;
+        sfte_cell *c = &row[len - 1];
+        if (c->attr & _SFTE_ATTR_REVERSE) break;
+        if (c->rune != ' ' && c->rune != 0) break;
+        if (c->bg != 0 && c->bg != cfg->color.bg &&
+            (c->bg & 0x00FFFFFF) != (cfg->color.bg & 0x00FFFFFF))
+            break;
         len--;
     }
 
@@ -77,10 +84,10 @@ static inline int16_t _sfte_reflow_get_len(sfte_cell *row, int16_t cols, int16_t
     Processes a single row, extracting length, pushing cells, and handling cursor edge cases.
 */
 static inline void _sfte_reflow_process_row(sfte_cell *row, int16_t cols, int16_t cursor_col,
-                                            sfte_reflow_state *st) {
-    int16_t len = _sfte_reflow_get_len(row, cols, cursor_col);
+                                            sfte_reflow_state *st, const sfte_config *cfg) {
+    int16_t len = _sfte_reflow_get_len(row, cols, cursor_col, cfg);
 
-    for (int16_t c = 0; c < len; ++c) _sfte_reflow_push(st, row[c], c == cursor_col);
+    for (int16_t c = 0; c < len; ++c) _sfte_reflow_push(st, row[c], c == cursor_col, cfg);
 
     if (cursor_col >= 0 && cursor_col >= len) {
         if (st->reflow_col == st->new_cols) {
@@ -110,27 +117,41 @@ static inline void _sfte_reflow_process_row(sfte_cell *row, int16_t cols, int16_
     during scrollback iteration to explicitly trim trailing whitespace on all historical lines.
 */
 static inline void _sfte_reflow_grid_into_linear(sfte_term *term, sfte_cell *main_old,
-                                                 int16_t grid_off_old, sfte_reflow_state *st) {
+                                                 int16_t grid_off_old, sfte_reflow_state *st,
+                                                 const sfte_config *cfg) {
     const sfte_viewport_state *vp = &term->viewport;
 
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
     for (int32_t i = 0; i < vp->sb_len; ++i) {
-        uint32_t ring_idx = (vp->sb_head - vp->sb_len + i + vp->sb_cap) % vp->sb_cap;
+        uint32_t ring_idx = (vp->sb_head - vp->sb_len + i + cfg->scroll.scrollback_cap) %
+                            cfg->scroll.scrollback_cap;
         sfte_cell *row = &term->scrollback[ring_idx * vp->cols];
-        _sfte_reflow_process_row(row, vp->cols, -1, st);
+        _sfte_reflow_process_row(row, vp->cols, -1, st, cfg);
     }
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
+
+    // Find last populated row on screen
+    int16_t last_r = st->target_old_row;
+    for (int16_t r = vp->rows - 1; r > last_r; --r) {
+        int32_t phys_r = (r + grid_off_old) % vp->rows;
+        if (phys_r < 0) phys_r += vp->rows;
+        sfte_cell *row = &main_old[phys_r * vp->cols];
+        if (_sfte_reflow_get_len(row, vp->cols, -1, cfg) > 0) {
+            last_r = r;
+            break;
+        }
+    }
 
     // reflow live grid
     st->is_live = 1;
-    for (int16_t r = 0; r < vp->rows; ++r) {
+    for (int16_t r = 0; r <= last_r; ++r) {
         int32_t phys_r = (r + grid_off_old) % vp->rows;
         if (phys_r < 0) phys_r += vp->rows;
 
         sfte_cell *row = &main_old[phys_r * vp->cols];
         int16_t cursor_col = (r == st->target_old_row) ? st->target_old_col : -1;
 
-        _sfte_reflow_process_row(row, vp->cols, cursor_col, st);
+        _sfte_reflow_process_row(row, vp->cols, cursor_col, st, cfg);
     }
 }
 
@@ -138,8 +159,8 @@ static inline void _sfte_reflow_grid_into_linear(sfte_term *term, sfte_cell *mai
     Allocates the temporary linear buffer and performs the topological text reflow.
 */
 static sfte_cell *_sfte_reflow_linearize(sfte_term *term, sfte_cell *main_old, int16_t grid_off_old,
-                                         int16_t new_cols, int16_t new_rows,
-                                         sfte_reflow_state *st) {
+                                         int16_t new_cols, int16_t new_rows, sfte_reflow_state *st,
+                                         const sfte_config *cfg) {
     const sfte_viewport_state *vp = &term->viewport;
 
     // term->viewport.cols / new_cols calculates the raw expansion factor.
@@ -147,9 +168,9 @@ static sfte_cell *_sfte_reflow_linearize(sfte_term *term, sfte_cell *main_old, i
     // +1 to account for integer division truncation, and
     // +1 as a safety margin for double-width characters that force early wraps.
     int16_t max_temp_rows = (
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
                                 vp->sb_len +
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
                                 vp->rows) *
                             (vp->cols / new_cols + 2);
 
@@ -165,7 +186,7 @@ static sfte_cell *_sfte_reflow_linearize(sfte_term *term, sfte_cell *main_old, i
     st->is_live = 0;
 
     // Walks the old grids and populates st->temp_rows
-    _sfte_reflow_grid_into_linear(term, main_old, grid_off_old, st);
+    _sfte_reflow_grid_into_linear(term, main_old, grid_off_old, st, cfg);
 
     return temp_rows;
 }
@@ -176,7 +197,8 @@ static sfte_cell *_sfte_reflow_linearize(sfte_term *term, sfte_cell *main_old, i
 */
 static inline void _sfte_reflow_extract_view(const sfte_viewport_state *vp, int16_t new_cols,
                                              int16_t new_rows, int16_t target_row,
-                                             sfte_reflow_state *st, sfte_resize_buffers *out) {
+                                             sfte_reflow_state *st, sfte_resize_buffers *out,
+                                             const sfte_config *cfg) {
     (void)vp;
     int32_t total_lines = st->reflow_row + (st->reflow_col > 0 ? 1 : 0);
 
@@ -194,19 +216,20 @@ static inline void _sfte_reflow_extract_view(const sfte_viewport_state *vp, int1
     if (max_top < 0) max_top = 0;
     screen_top = _SFTE_CLAMP(screen_top, 0, max_top);
 
-#if SFTE_TERM_SCROLLBACK_CAP
-    out->sb_grid = (sfte_cell *)SFTE_CALLOC(vp->sb_cap * new_cols, sizeof(sfte_cell));
+#if SFTE_TERM_SCROLLBACK
+    out->sb_grid = (sfte_cell *)SFTE_CALLOC(cfg->scroll.scrollback_cap * new_cols,
+                                            sizeof(sfte_cell));
     SFTE_ASSERT(out->sb_grid, "failed to allocate resized scrollback");
 
     // The scrollback is above `screen_top`
     out->sb_lines = screen_top;
-    if (out->sb_lines > vp->sb_cap) out->sb_lines = vp->sb_cap;
+    if (out->sb_lines > cfg->scroll.scrollback_cap) out->sb_lines = cfg->scroll.scrollback_cap;
     int32_t sb_start = screen_top - out->sb_lines;
 
     if (out->sb_lines > 0)
         memcpy(out->sb_grid, &st->temp_rows[sb_start * new_cols],
                (size_t)out->sb_lines * new_cols * sizeof(sfte_cell));
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
 
     int32_t copy_lines = _SFTE_CLAMP(total_lines - screen_top, 0, new_rows);
     if (copy_lines > 0)
@@ -215,8 +238,8 @@ static inline void _sfte_reflow_extract_view(const sfte_viewport_state *vp, int1
 
     for (int32_t i = copy_lines * new_cols; i < new_rows * new_cols; ++i) {
         out->main_grid[i].rune = ' ';
-        out->main_grid[i].bg = _SFTE_COLOR_BG_DEFAULT;
-        out->main_grid[i].fg = _SFTE_COLOR_FG_DEFAULT;
+        out->main_grid[i].bg = cfg->color.bg;
+        out->main_grid[i].fg = cfg->color.fg;
         out->main_grid[i].attr = 0;
         out->main_grid[i].wrapped = 0;
     }
@@ -230,7 +253,8 @@ static inline void _sfte_reflow_extract_view(const sfte_viewport_state *vp, int1
 static sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_term *term, sfte_cell *main_old,
                                                          int16_t grid_off_old, int16_t new_cols,
                                                          int16_t new_rows, int16_t target_col,
-                                                         int16_t target_row) {
+                                                         int16_t target_row,
+                                                         const sfte_config *cfg) {
     const sfte_viewport_state *vp = &term->viewport;
 
     sfte_reflow_state st = {
@@ -238,10 +262,11 @@ static sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_term *term, sfte_c
         .target_old_row = target_row,
     };
 
-    sfte_cell *temp = _sfte_reflow_linearize(term, main_old, grid_off_old, new_cols, new_rows, &st);
+    sfte_cell *temp = _sfte_reflow_linearize(term, main_old, grid_off_old, new_cols, new_rows, &st,
+                                             cfg);
 
     sfte_resize_buffers out = {0};
-    _sfte_reflow_extract_view(vp, new_cols, new_rows, target_row, &st, &out);
+    _sfte_reflow_extract_view(vp, new_cols, new_rows, target_row, &st, &out, cfg);
 
     SFTE_FREE(temp);
 
@@ -260,16 +285,29 @@ static sfte_resize_buffers _sfte_reflow_generate_buffers(sfte_term *term, sfte_c
 // -------------------------------------------------------------------------------------------------
 
 /*
+    Extracts a viewport scrollback offset from provided `vp`.
+    If `SFTE_TERM_SCROLLBACK` is 0, returns 0.
+*/
+static inline int32_t _sfte_grid_get_sb_off(const sfte_viewport_state *vp) {
+#if SFTE_TERM_SCROLLBACK
+    return vp->sb_off;
+#else   // !SFTE_TERM_SCROLLBACK
+    (void)vp;
+    return 0;
+#endif  // !SFTE_TERM_SCROLLBACK
+}
+
+/*
     Converts a visual screen row (0 to ctx->term.viewport.rows-1) into a logical row.
-    Projects the coordinate into the scrollback history if `SFTE_TERM_SCROLLBACK_CAP` isn't 0.
+    Projects the coordinate into the scrollback history if `SFTE_TERM_SCROLLBACK` isn't 0.
 */
 static inline int32_t _sfte_grid_vis2log(const sfte_viewport_state *vp, int16_t visual_row) {
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
     return (int32_t)visual_row - vp->sb_off;
-#else   // !SFTE_TERM_SCROLLBACK_CAP
+#else   // !SFTE_TERM_SCROLLBACK
     (void)vp;
     return (int32_t)visual_row;
-#endif  // !SFTE_TERM_SCROLLBACK_CAP
+#endif  // !SFTE_TERM_SCROLLBACK
 }
 
 /*
@@ -277,12 +315,12 @@ static inline int32_t _sfte_grid_vis2log(const sfte_viewport_state *vp, int16_t 
     Returns negative values if the row is currently hidden in the scrollback.
  */
 static inline int32_t _sfte_grid_log2vis(const sfte_viewport_state *vp, int32_t logical_row) {
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
     return logical_row + vp->sb_off;
-#else   // !SFTE_TERM_SCROLLBACK_CAP
+#else   // !SFTE_TERM_SCROLLBACK
     (void)vp;
     return logical_row;
-#endif  // !SFTE_TERM_SCROLLBACK_CAP
+#endif  // !SFTE_TERM_SCROLLBACK
 }
 
 /*
@@ -290,11 +328,11 @@ static inline int32_t _sfte_grid_log2vis(const sfte_viewport_state *vp, int32_t 
     accounting for scrollback history and screen height.
 */
 static inline uint8_t _sfte_grid_is_row_valid(const sfte_viewport_state *vp, int32_t logical_row) {
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
     return logical_row >= -vp->sb_len && logical_row < vp->rows;
-#else   // !SFTE_TERM_SCROLLBACK_CAP
+#else   // !SFTE_TERM_SCROLLBACK
     return logical_row >= 0 && logical_row < vp->rows;
-#endif  // !SFTE_TERM_SCROLLBACK_CAP
+#endif  // !SFTE_TERM_SCROLLBACK
 }
 
 /*
@@ -315,70 +353,50 @@ static inline uint32_t _sfte_grid_get_idx(const sfte_viewport_state *vp, int16_t
    length.
 */
 static inline sfte_cell *_sfte_grid_get_cell(const sfte_term *term, int16_t col,
-                                             int32_t logical_row) {
+                                             int32_t logical_row, const sfte_config *cfg) {
     const sfte_viewport_state *vp = &term->viewport;
 
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
     if (logical_row >= 0)
         return &term->cells[_sfte_grid_get_idx(vp, col, logical_row)];
     else {
-        int32_t ring_row = ((vp->sb_head + logical_row) % vp->sb_cap + vp->sb_cap) % vp->sb_cap;
+        int32_t ring_row = ((vp->sb_head + logical_row) % cfg->scroll.scrollback_cap +
+                            cfg->scroll.scrollback_cap) %
+                           cfg->scroll.scrollback_cap;
         return &term->scrollback[ring_row * vp->cols + col];
     }
-#else   // !SFTE_TERM_SCROLLBACK_CAP
+#else   // !SFTE_TERM_SCROLLBACK
     return &term->cells[_sfte_grid_get_idx(vp, col, logical_row)];
-#endif  // !SFTE_TERM_SCROLLBACK_CAP
+#endif  // !SFTE_TERM_SCROLLBACK
 }
 
 /*
     Returns the background color of a cell.
-    The behavior of this function depends on whether `SFTE_COLOR_TRUECOLOR` is 1.
-    If it is, it just returns the value.
-    If it isn't, it treats the color value as an index to the 256-color palette.
 */
-static inline uint32_t _sfte_grid_get_bg(sfte_cell *cell) {
-#if SFTE_COLOR_TRUECOLOR
-    return cell->bg ? cell->bg : SFTE_COLOR_BG;
-#endif  // SFTE_COLOR_TRUECOLOR
-    if (cell->bg == _SFTE_COLOR_BG_DEFAULT || (!cell->bg && !cell->rune)) return SFTE_COLOR_BG;
-    return _sfte_palette_256[cell->bg & 0xFF];
+static inline uint32_t _sfte_grid_get_bg(sfte_cell *cell, const sfte_config *cfg) {
+    return cell->bg ? cell->bg : cfg->color.bg;
 }
 
 /*
     Returns the foreground color of a cell.
-    The behavior of this function depends on whether `SFTE_COLOR_TRUECOLOR` is 1.
-    If it is, it just returns the value.
-    If it isn't, it treats the color value as an index to the 256-color palette.
 */
-static inline uint32_t _sfte_grid_get_fg(sfte_cell *cell) {
-#if SFTE_COLOR_TRUECOLOR
-    return cell->fg ? cell->fg : SFTE_COLOR_FG;
-#endif  // SFTE_COLOR_TRUECOLOR
-    if (cell->fg == _SFTE_COLOR_FG_DEFAULT || (!cell->fg && !cell->rune)) return SFTE_COLOR_FG;
-    return _sfte_palette_256[cell->fg & 0xFF];
+static inline uint32_t _sfte_grid_get_fg(sfte_cell *cell, const sfte_config *cfg) {
+    return cell->fg ? cell->fg : cfg->color.fg;
 }
 
 /*
     Returns the underline color of a cell.
-    The behavior of this function depends on whether `SFTE_COLOR_TRUECOLOR` is 1.
-    If it is, it just returns the value.
-    If it isn't, it treats the color value as an index to the 256-color palette.
 
     If underline color is not set, defaults to foreground default color.
     If underline colors are not supported, returns foreground default color.
 */
-static inline uint32_t _sfte_grid_get_ul(sfte_cell *cell) {
+static inline uint32_t _sfte_grid_get_ul(sfte_cell *cell, const sfte_config *cfg) {
 #if SFTE_UNDERLINE_COLORED
-#if SFTE_COLOR_TRUECOLOR
-    if (cell->ul_color && cell->ul_color != _SFTE_COLOR_FG_DEFAULT) return cell->ul_color;
-    return _sfte_grid_get_fg(cell);
-#endif  // SFTE_COLOR_TRUECOLOR
-
-    if (cell->ul_color == _SFTE_COLOR_FG_DEFAULT || !cell->ul_color) return _sfte_grid_get_fg(cell);
-    return _sfte_palette_256[cell->ul_color & 0xFF];
+    if (cell->ul_color && cell->ul_color != cfg->color.fg) return cell->ul_color;
+    return _sfte_grid_get_fg(cell, cfg);
 #endif  // SFTE_UNDERLINE_COLORED
     (void)cell;
-    return SFTE_COLOR_FG;
+    return cfg->color.fg;
 }
 
 /*
@@ -387,7 +405,7 @@ static inline uint32_t _sfte_grid_get_ul(sfte_cell *cell) {
     and clamping to the visible physical screen.
 */
 static inline void _sfte_grid_dirty_rows(sfte_term *term, int32_t logical_row1,
-                                         int32_t logical_row2) {
+                                         int32_t logical_row2, const sfte_config *cfg) {
     const sfte_viewport_state *vp = &term->viewport;
 
     int32_t min_logical_r = logical_row1 < logical_row2 ? logical_row1 : logical_row2;
@@ -399,13 +417,15 @@ static inline void _sfte_grid_dirty_rows(sfte_term *term, int32_t logical_row1,
             int32_t row_start_idx = _sfte_grid_get_idx(vp, 0, logical_r);
             for (int16_t c = 0; c < vp->cols; ++c) term->cells[row_start_idx + c].dirty = 1;
         }
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
         else {
-            int32_t ring_row = ((vp->sb_head + logical_r) % vp->sb_cap + vp->sb_cap) % vp->sb_cap;
+            int32_t ring_row = ((vp->sb_head + logical_r) % cfg->scroll.scrollback_cap +
+                                cfg->scroll.scrollback_cap) %
+                               cfg->scroll.scrollback_cap;
             int32_t row_start_idx = ring_row * vp->cols;
             for (int16_t c = 0; c < vp->cols; ++c) term->scrollback[row_start_idx + c].dirty = 1;
         }
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
     }
 }
 
@@ -415,7 +435,8 @@ static inline void _sfte_grid_dirty_rows(sfte_term *term, int32_t logical_row1,
     Routes into the scrollback buffer if start_logical_r < 0.
 */
 static inline void _sfte_grid_dirty_rect(sfte_term *term, int16_t start_col,
-                                         int32_t start_logical_row, int16_t cols, int16_t rows) {
+                                         int32_t start_logical_row, int16_t cols, int16_t rows,
+                                         const sfte_config *cfg) {
     const sfte_viewport_state *vp = &term->viewport;
 
     int16_t start_c = _SFTE_CLAMP(start_col, 0, vp->cols - 1);
@@ -425,7 +446,7 @@ static inline void _sfte_grid_dirty_rect(sfte_term *term, int16_t start_col,
     for (int32_t logical_r = start_logical_row; logical_r <= end_logical_r; ++logical_r) {
         if (!_sfte_grid_is_row_valid(vp, logical_r)) continue;
         for (int16_t c = start_c; c <= end_c; ++c)
-            _sfte_grid_get_cell(term, c, logical_r)->dirty = 1;
+            _sfte_grid_get_cell(term, c, logical_r, cfg)->dirty = 1;
     }
 }
 
@@ -504,7 +525,7 @@ static inline void _sfte_grid_clear_sixel(sfte_term *term, int32_t start_idx, in
     Deletes images that scroll entirely out of the scrollback buffer.
 */
 static inline void _sfte_grid_scroll_images(sfte_term *term, int16_t lines, int16_t top,
-                                            int16_t bot) {
+                                            int16_t bot, const sfte_config *cfg) {
     const sfte_modes_state *modes = &term->modes;
     const sfte_viewport_state *vp = &term->viewport;
     sfte_image_state *images = &term->images;
@@ -526,7 +547,7 @@ static inline void _sfte_grid_scroll_images(sfte_term *term, int16_t lines, int1
         if (!img) continue;
 
         int32_t rows = _sfte_grid_span(img->height, p->y_off, vp->cell_height);
-        if (p->start_row + rows <= -SFTE_TERM_SCROLLBACK_CAP) {
+        if (p->start_row + rows <= -cfg->scroll.scrollback_cap) {
             img->ref_cnt--;
             images->placements[i--] = images->placements[--images->placements_len];
         }
@@ -534,11 +555,12 @@ static inline void _sfte_grid_scroll_images(sfte_term *term, int16_t lines, int1
 }
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
 /*
     Pushes lines scrolling off the top of the screen into the ring buffer.
 */
-static inline void _sfte_grid_push_scrollback(sfte_term *term, int16_t lines) {
+static inline void _sfte_grid_push_scrollback(sfte_term *term, int16_t lines,
+                                              const sfte_config *cfg) {
     const sfte_modes_state *modes = &term->modes;
     sfte_viewport_state *vp = &term->viewport;
 
@@ -551,16 +573,18 @@ static inline void _sfte_grid_push_scrollback(sfte_term *term, int16_t lines) {
         uint32_t screen_idx = _sfte_grid_get_idx(vp, 0, i);
         memcpy(&term->scrollback[ring_idx], &term->cells[screen_idx], vp->cols * sizeof(sfte_cell));
 
-        vp->sb_head = (vp->sb_head + 1) % vp->sb_cap;
-        if (vp->sb_len < vp->sb_cap) vp->sb_len++;
+        vp->sb_head = (vp->sb_head + 1) % cfg->scroll.scrollback_cap;
+        if (vp->sb_len < cfg->scroll.scrollback_cap) vp->sb_len++;
     }
 
     if (vp->sb_off > 0) {
         vp->sb_off = _SFTE_CLAMP(vp->sb_off + lines, 0, vp->sb_len);
+#if SFTE_TERM_SCROLL_SMOOTH
         vp->last_sb_off = vp->sb_off;
+#endif  // SFTE_TERM_SCROLL_SMOOTH
     }
 }
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
 
 // -------------------------------------------------------------------------------------------------
 // >grid core
@@ -572,7 +596,8 @@ static inline void _sfte_grid_push_scrollback(sfte_term *term, int16_t lines) {
     Also triggers the deletion of any Sixel images that intersect that region.
     Does NOT move the cursor.
 */
-static inline void _sfte_grid_clear_cells(sfte_term *term, uint32_t start_idx, uint32_t cnt) {
+static inline void _sfte_grid_clear_cells(sfte_term *term, uint32_t start_idx, uint32_t cnt,
+                                          const sfte_config *cfg) {
     const sfte_sgr_state *sgr = &term->sgr;
 
     for (uint32_t i = 0; i < cnt; ++i) {
@@ -586,7 +611,7 @@ static inline void _sfte_grid_clear_cells(sfte_term *term, uint32_t start_idx, u
         c->ul_style = 0;
 #endif  // SFTE_UNDERLINE_EXTENDED
 #if SFTE_UNDERLINE_COLORED
-        c->ul_color = _SFTE_COLOR_FG_DEFAULT;
+        c->ul_color = cfg->color.fg;
 #endif  // SFTE_UNDERLINE_COLORED
 #if SFTE_TERM_REFLOW
         c->wrapped = 0;
@@ -607,11 +632,12 @@ static inline void _sfte_grid_clear_cells(sfte_term *term, uint32_t start_idx, u
     Also triggers the deletion of any Sixel images that intersect these rows.
     Does NOT move the cursor.
 */
-static inline void _sfte_grid_clear_rows(sfte_term *term, int16_t start_row, int16_t cnt) {
+static inline void _sfte_grid_clear_rows(sfte_term *term, int16_t start_row, int16_t cnt,
+                                         const sfte_config *cfg) {
     const sfte_viewport_state *vp = &term->viewport;
 
     for (int16_t r = start_row; r < start_row + cnt; ++r)
-        _sfte_grid_clear_cells(term, _sfte_grid_get_idx(vp, 0, r), vp->cols);
+        _sfte_grid_clear_cells(term, _sfte_grid_get_idx(vp, 0, r), vp->cols, cfg);
 }
 
 /*
@@ -625,7 +651,7 @@ static inline void _sfte_grid_clear_rows(sfte_term *term, int16_t start_row, int
 
     Synchronizes image placements to scroll with the text.
 */
-static inline void _sfte_grid_scroll(sfte_term *term, int16_t lines) {
+static inline void _sfte_grid_scroll(sfte_term *term, int16_t lines, const sfte_config *cfg) {
     sfte_viewport_state *vp = &term->viewport;
 
     int16_t height = vp->scroll_bot - vp->scroll_top + 1;
@@ -634,13 +660,13 @@ static inline void _sfte_grid_scroll(sfte_term *term, int16_t lines) {
     lines = _SFTE_CLAMP(lines, -height, height);
 
 #if SFTE_IMG_SIXEL || SFTE_IMG_KITTY
-    _sfte_grid_scroll_images(term, lines, vp->scroll_top, vp->scroll_bot);
+    _sfte_grid_scroll_images(term, lines, vp->scroll_top, vp->scroll_bot, cfg);
 #endif  // SFTE_IMG_SIXEL || SFTE_IMG_KITTY
 
     if (lines > 0) {  // Scroll up
-#if SFTE_TERM_SCROLLBACK_CAP
-        if (vp->scroll_top == 0) _sfte_grid_push_scrollback(term, lines);
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
+        if (vp->scroll_top == 0) _sfte_grid_push_scrollback(term, lines, cfg);
+#endif  // SFTE_TERM_SCROLLBACK
 
         if (vp->scroll_top == 0 && vp->scroll_bot == vp->rows - 1)
             vp->grid_off = (vp->grid_off + lines) % vp->rows;
@@ -653,7 +679,7 @@ static inline void _sfte_grid_scroll(sfte_term *term, int16_t lines) {
             }
         }
 
-        _sfte_grid_clear_rows(term, vp->scroll_bot - lines + 1, lines);
+        _sfte_grid_clear_rows(term, vp->scroll_bot - lines + 1, lines, cfg);
     } else if (lines < 0) {  // Scroll down
         lines = -lines;
 
@@ -669,10 +695,10 @@ static inline void _sfte_grid_scroll(sfte_term *term, int16_t lines) {
             }
         }
 
-        _sfte_grid_clear_rows(term, vp->scroll_top, lines);
+        _sfte_grid_clear_rows(term, vp->scroll_top, lines, cfg);
     }
 
-    _sfte_grid_dirty_rows(term, vp->scroll_top, vp->scroll_bot);
+    _sfte_grid_dirty_rows(term, vp->scroll_top, vp->scroll_bot, cfg);
 }
 
 /*
@@ -686,7 +712,7 @@ static inline void _sfte_grid_scroll(sfte_term *term, int16_t lines) {
     If auto-wrap is OFF, it clamps the cursor to the final column, causing subsequent
     characters to overwrite each other.
 */
-static inline void _sfte_grid_check_wrap(sfte_term *term) {
+static inline void _sfte_grid_check_wrap(sfte_term *term, const sfte_config *cfg) {
     const sfte_viewport_state *vp = &term->viewport;
     const sfte_modes_state *modes = &term->modes;
     sfte_cursor_state *cursor = &term->cursor;
@@ -695,13 +721,13 @@ static inline void _sfte_grid_check_wrap(sfte_term *term) {
     if (cursor->col >= vp->cols) {
         if (modes->auto_wrap) {
 #if SFTE_TERM_REFLOW
-            _sfte_grid_get_cell(term, vp->cols - 1, cursor->row)->wrapped = 1;
+            _sfte_grid_get_cell(term, vp->cols - 1, cursor->row, cfg)->wrapped = 1;
 #endif  // SFTE_TERM_REFLOW
             cursor->col = 0;
             if (cursor->row == vp->scroll_bot) {
                 uint32_t saved_bg = term->sgr.bg;
-                sgr->bg = _SFTE_COLOR_BG_DEFAULT;
-                _sfte_grid_scroll(term, 1);
+                sgr->bg = cfg->color.bg;
+                _sfte_grid_scroll(term, 1, cfg);
                 sgr->bg = saved_bg;
             } else if (cursor->row < vp->rows - 1)
                 cursor->row++;
@@ -741,11 +767,12 @@ static sfte_cell *_sfte_grid_resize_dumb_copy(sfte_cell *old_grid, int16_t old_c
 /*
     Reallocates the tab stops array and populates new columns with default intervals.
 */
-static inline void _sfte_grid_resize_tabs(sfte_term *term, int16_t old_cols, int16_t new_cols) {
+static inline void _sfte_grid_resize_tabs(sfte_term *term, int16_t old_cols, int16_t new_cols,
+                                          const sfte_config *cfg) {
     uint8_t *new_tabs = (uint8_t *)SFTE_MALLOC(new_cols);
     SFTE_ASSERT(new_tabs, "failed to allocate new tab stops");
 
-    uint8_t tw = term->tab_width ? term->tab_width : SFTE_TERM_TAB_WIDTH;
+    uint8_t tw = term->tab_width ? term->tab_width : cfg->window.tab_width;
     for (int16_t i = 0; i < new_cols; ++i) {
         if (i < old_cols)
             new_tabs[i] = term->tab_stops[i];
@@ -765,7 +792,8 @@ static inline void _sfte_grid_resize_tabs(sfte_term *term, int16_t old_cols, int
     If SFTE_TERM_REFLOW is disabled, performs a simple 2D truncation/padding copy.
     Alt-screen grids are always dumb-copied and never reflowed.
 */
-static inline void _sfte_grid_resize(sfte_term *term, int16_t new_cols, int16_t new_rows) {
+static inline void _sfte_grid_resize(sfte_term *term, int16_t new_cols, int16_t new_rows,
+                                     const sfte_config *cfg) {
     if (new_cols < 1 || new_rows < 1) return;
 
     sfte_render_buffers *render = &term->render;
@@ -810,15 +838,16 @@ static inline void _sfte_grid_resize(sfte_term *term, int16_t new_cols, int16_t 
 
 #if SFTE_TERM_REFLOW
     out = _sfte_reflow_generate_buffers(term, main_old, grid_off_old, new_cols, new_rows,
-                                        target_col, target_row);
+                                        target_col, target_row, cfg);
 #else  // !SFTE_TERM_REFLOW
     out.main_grid = _sfte_grid_resize_dumb_copy(main_old, old_cols, old_rows, new_cols, new_rows);
     out.new_col = _SFTE_CLAMP(target_col, 0, new_cols - 1);
     out.new_row = _SFTE_CLAMP(target_row, 0, new_rows - 1);
-#if SFTE_TERM_SCROLLBACK_CAP
-    out.sb_grid = (sfte_cell *)SFTE_CALLOC(vp->sb_cap * new_cols, sizeof(sfte_cell));
+#if SFTE_TERM_SCROLLBACK
+    out.sb_grid = (sfte_cell *)SFTE_CALLOC(cfg->scroll.scrollback_cap * new_cols,
+                                           sizeof(sfte_cell));
     out.sb_lines = 0;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
 #endif  // !SFTE_TERM_REFLOW
 
 #if SFTE_TERM_ALT_SCREEN
@@ -852,13 +881,13 @@ static inline void _sfte_grid_resize(sfte_term *term, int16_t new_cols, int16_t 
     cursor->row = out.new_row;
 #endif  // !SFTE_TERM_ALT_SCREEN
 
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
     if (term->scrollback) SFTE_FREE(term->scrollback);
     term->scrollback = out.sb_grid;
-    vp->sb_head = out.sb_lines % vp->sb_cap;
+    vp->sb_head = out.sb_lines % cfg->scroll.scrollback_cap;
     vp->sb_off = 0;
     vp->sb_len = out.sb_lines;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
 
     term->viewport.grid_off = 0;
     term->viewport.cols = new_cols;
@@ -868,9 +897,9 @@ static inline void _sfte_grid_resize(sfte_term *term, int16_t new_cols, int16_t 
 
 #if SFTE_INPUT_MOUSE && SFTE_INPUT_SELECTION
     int32_t min_sel_r = 0;
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
     min_sel_r = -vp->sb_len;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
     term->mouse.sel_start_col = _SFTE_CLAMP(term->mouse.sel_start_col, 0, new_cols - 1);
     term->mouse.sel_end_col = _SFTE_CLAMP(term->mouse.sel_end_col, 0, new_cols - 1);
     term->mouse.sel_start_row = _SFTE_CLAMP(term->mouse.sel_start_row, min_sel_r, new_rows - 1);
@@ -878,7 +907,7 @@ static inline void _sfte_grid_resize(sfte_term *term, int16_t new_cols, int16_t 
     if (!term->mouse.sel_dragging) term->mouse.sel_active = 0;
 #endif  // SFTE_INPUT_MOUSE && SFTE_INPUT_SELECTION
 
-    _sfte_grid_resize_tabs(term, old_cols, new_cols);
+    _sfte_grid_resize_tabs(term, old_cols, new_cols, cfg);
     _sfte_grid_dirty_range(term, 0, new_cols * new_rows);
 }
 
@@ -922,7 +951,7 @@ static inline void _sfte_rune_stamp_cell(sfte_term *term, uint32_t idx, sfte_run
     Double-width characters (these of width 2) if placed on the last column, the column
     is left blank, the line wraps early, and the character is placed on the next line.
 */
-static inline void _sfte_rune_insert(sfte_term *term, sfte_rune rune) {
+static inline void _sfte_rune_insert(sfte_term *term, sfte_rune rune, const sfte_config *cfg) {
     sfte_cursor_state *cursor = &term->cursor;
     const sfte_viewport_state *vp = &term->viewport;
 
@@ -953,7 +982,7 @@ static inline void _sfte_rune_insert(sfte_term *term, sfte_rune rune) {
 
     // Evaluate line wrapping before drawing,
     // ensures characters placed in the final column enter a pending wrap state.
-    _sfte_grid_check_wrap(term);
+    _sfte_grid_check_wrap(term, cfg);
 
 #if SFTE_FONT_WIDE_CHARS
     if (w == 2) {
@@ -962,12 +991,12 @@ static inline void _sfte_rune_insert(sfte_term *term, sfte_rune rune) {
         if (cursor->col == vp->cols - 1) {
             int32_t idx = _sfte_grid_get_idx(vp, cursor->col, cursor->row);
             _sfte_rune_stamp_cell(term, idx, ' ', 0);
-            term->cells[idx].fg = _SFTE_COLOR_FG_DEFAULT;
-            term->cells[idx].bg = _SFTE_COLOR_BG_DEFAULT;
+            term->cells[idx].fg = cfg->color.fg;
+            term->cells[idx].bg = cfg->color.bg;
             term->cells[idx].attr = 0;
 
             cursor->col++;
-            _sfte_grid_check_wrap(term);
+            _sfte_grid_check_wrap(term, cfg);
         }
 
         // If terminal grid has only one column, we can't draw the double-width character.

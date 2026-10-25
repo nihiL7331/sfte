@@ -96,23 +96,23 @@ static inline uint8_t _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *a
 
 static inline uint8_t _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *arg) {
     (void)arg;
-    const sfte_arg actual_arg = {.f = SFTE_FONT_DEFAULT_SIZE - ctx->font.cur_size};
+    const sfte_config *cfg = &ctx->cfg;
+    const sfte_arg actual_arg = {.f = cfg->font.default_size - ctx->font.cur_size};
     _sfte_wayland_font_resize(ctx, &actual_arg);
     return 1;
 }
 #endif  // SFTE_FONT_ZOOM
 
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
 static inline uint8_t _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg) {
     sfte_wayland_app *app = (sfte_wayland_app *)ctx->cb.user_data;
-    sfte_term *term = sfte_term_get_active(ctx);
 
-    sfte_view_scroll(term, arg->i);
+    sfte_view_scroll(ctx, arg->i);
     app->needs_render = 1;
 
     return 1;
 }
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
 
 /*
     Allocates a SHared Memory (SHM) buffer that both the emulator and
@@ -350,19 +350,19 @@ static inline void _sfte_wayland_pointer_axis(void *data, struct wl_pointer *poi
 
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     sfte_ctx *ctx = app->ctx;
-    sfte_term *term = sfte_term_get_active(ctx);
+    const sfte_config *cfg = &ctx->cfg;
 
     double val = wl_fixed_to_double(value);
     if (val == 0.0) return;
 
     app->scroll_accum += val;
-    int32_t steps = (int32_t)(app->scroll_accum / SFTE_TERM_SCROLL_THRESHOLD);
+    int32_t steps = (int32_t)(app->scroll_accum / cfg->scroll.threshold);
 
     if (steps != 0) {
-        app->scroll_accum -= steps * SFTE_TERM_SCROLL_THRESHOLD;
+        app->scroll_accum -= steps * cfg->scroll.threshold;
         int8_t dir = (steps < 0) ? 1 : -1;
         int32_t cnt = abs(steps);
-        for (int32_t i = 0; i < cnt; ++i) sfte_mouse_scroll(term, dir, app->mouse_x, app->mouse_y);
+        for (int32_t i = 0; i < cnt; ++i) sfte_mouse_scroll(ctx, dir, app->mouse_x, app->mouse_y);
         app->needs_render = 1;
     }
 #endif  // SFTE_INPUT_MOUSE
@@ -453,8 +453,10 @@ static inline void _sfte_wayland_keyboard_enter(void *data, struct wl_keyboard *
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     sfte_ctx *ctx = app->ctx;
 
+#if SFTE_TERM_FOCUS
     sfte_set_focus(ctx, 1);
     app->needs_render = 1;
+#endif  // SFTE_TERM_FOCUS
 }
 
 static inline void _sfte_wayland_keyboard_leave(void *data, struct wl_keyboard *keyboard,
@@ -469,8 +471,10 @@ static inline void _sfte_wayland_keyboard_leave(void *data, struct wl_keyboard *
     }
     app->repeating_key = 0;
 
+#if SFTE_TERM_FOCUS
     sfte_set_focus(ctx, 0);
     app->needs_render = 1;
+#endif  // SFTE_TERM_FOCUS
 }
 
 static inline void _sfte_wayland_keyboard_key(void *data, struct wl_keyboard *keyboard,
@@ -820,7 +824,7 @@ static inline uint8_t _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg
 
     if (!term->mouse.sel_active || !app->data_device_manager || !app->data_device) return 0;
 
-    size_t needed_bytes = sfte_get_selection(term, NULL, 0);
+    size_t needed_bytes = sfte_get_selection(ctx, NULL, 0);
     if (needed_bytes <= 1) {
         _SFTE_INFO(ctx, CLIPBOARD_EMPTY);
         return 0;
@@ -836,7 +840,7 @@ static inline uint8_t _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg
     }
 
     app->selection_text = (char *)SFTE_MALLOC(needed_bytes);
-    sfte_get_selection(term, app->selection_text, needed_bytes);
+    sfte_get_selection(ctx, app->selection_text, needed_bytes);
     if (!app->selection_text) return 0;
 
     app->data_source = wl_data_device_manager_create_data_source(app->data_device_manager);
@@ -1008,12 +1012,14 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
             uint8_t buf[SFTE_TERM_PTY_BUF_SIZE];
             uint8_t did_read = 0;
 
-            while (1) {
+            uint8_t read_burst = SFTE_TERM_PTY_BURST_SIZE;
+            while (read_burst > 0) {
                 ssize_t n = read(cur_fd, buf, SFTE_TERM_PTY_BUF_SIZE);
 
                 if (n > 0) {
-                    sfte_parse(target_term, buf, n);
+                    sfte_parse(ctx, target_term, buf, n);
                     did_read = 1;
+                    read_burst--;
                 } else if (n == 0) {
                     close(cur_fd);
 
@@ -1084,10 +1090,10 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
 // >>public api
 // =================================================================================================
 #if SFTE_WAYLAND
-sfte_wayland_app *sfte_wayland_init(void) {
+sfte_wayland_app *sfte_wayland_init(const sfte_config *cfg) {
     sfte_wayland_app *app = (sfte_wayland_app *)SFTE_CALLOC(1, sizeof(sfte_wayland_app));
     app->running = 1;
-    app->ctx = sfte_init(_sfte_wayland_write_cb, app);
+    app->ctx = sfte_init(_sfte_wayland_write_cb, app, cfg);
 
 #if SFTE_CLIPBOARD && SFTE_INPUT_SELECTION && SFTE_CLIPBOARD_OSC52
     app->ctx->cb.osc52_clipboard = _sfte_wayland_osc52_clipboard_cb;
@@ -1115,26 +1121,28 @@ sfte_ctx *sfte_wayland_get_ctx(sfte_wayland_app *app) {
 
 int sfte_wayland_run(sfte_wayland_app *app) {
     sfte_ctx *ctx = app->ctx;
-    sfte_term *term = sfte_term_get_active(ctx);
+    const sfte_config *cfg = &ctx->cfg;
 
+    SFTE_ASSERT(app->ctx->font.regular.glyphs && app->ctx->font.regular.atlas_pxs,
+                "a regular font path must be provided in cfg->font.regular");
 #ifdef SFTE_FONT_BOLD
-    SFTE_ASSERT(app->ctx->font.bold.glyphs && app->ctx->font.bold.atlas_pxs,
-                "if SFTE_FONT_BOLD is defined, a bold font must be provided using "
-                "sfte_font_load_*");
+    SFTE_ASSERT(
+        app->ctx->font.bold.glyphs && app->ctx->font.bold.atlas_pxs,
+        "if SFTE_FONT_BOLD is defined, a bold font path must be provided in cfg->font.bold");
 #endif  // SFTE_FONT_BOLD
 #ifdef SFTE_FONT_ITALIC
-    SFTE_ASSERT(app->ctx->font.italic.glyphs && app->ctx->font.italic.atlas_pxs,
-                "if SFTE_FONT_ITALIC is defined, an italic font must be provided using "
-                "sfte_font_load_*");
+    SFTE_ASSERT(
+        app->ctx->font.italic.glyphs && app->ctx->font.italic.atlas_pxs,
+        "if SFTE_FONT_ITALIC is defined, an italic font path must be provided in cfg->font.italic");
 #endif  // SFTE_FONT_ITALIC
 #ifdef SFTE_FONT_BOLD_ITALIC
     SFTE_ASSERT(app->ctx->font.bold_italic.glyphs && app->ctx->font.bold_italic.atlas_pxs,
-                "if SFTE_FONT_BOLD_ITALIC is defined, a bold italic font must be provided using "
-                "sfte_font_load_*");
+                "if SFTE_FONT_BOLD_ITALIC is defined, a bold italic font path must be provided in "
+                "cfg->font.bold_italic");
 #endif  // SFTE_FONT_BOLD_ITALIC
 
     int32_t ideal_w, ideal_h;
-    sfte_get_ideal_size(term, SFTE_TERM_INIT_COLS, SFTE_TERM_INIT_ROWS, &ideal_w, &ideal_h);
+    sfte_get_ideal_size(ctx, cfg->window.init_cols, cfg->window.init_rows, &ideal_w, &ideal_h);
     app->width = ideal_w;
     app->height = ideal_h;
     sfte_resize(ctx, app->width, app->height);

@@ -35,7 +35,6 @@ typedef struct sfte_stack sfte_stack;
 // >>system/memory macros
 // =================================================================================================
 
-// Full declaration of these values are placed in the implementation layer as an enum.
 #define SFTE_ATTR_NONE 0
 #define SFTE_ATTR_BOLD 1 << 0
 #define SFTE_ATTR_ITALIC 1 << 1
@@ -163,42 +162,12 @@ _SFTE_ENSURE_RANGE(SFTE_MEM_STACK_SIZE, 1024, INT32_MAX);
 // =================================================================================================
 
 /*
-    The $TERM environment variable exposed to the shell.
-*/
-#ifndef SFTE_TERM_ENV
-#define SFTE_TERM_ENV "xterm-256color"
-#endif  // SFTE_TERM_ENV
-
-/*
-    Default terminal name assigned on initialization.
-*/
-#ifndef SFTE_TERM_DEFAULT_TITLE
-#define SFTE_TERM_DEFAULT_TITLE "sh"
-#endif  // SFTE_TERM_DEFAULT_TITLE
-
-/*
     Enables focus tracking (DECSET 1004) and hollow cursor rendering.
 */
 #ifndef SFTE_TERM_FOCUS
 #define SFTE_TERM_FOCUS 1
 #endif  // SFTE_TERM_FOCUS
 _SFTE_ENSURE_RANGE(SFTE_TERM_FOCUS, 0, 1);
-
-/*
-    Initial terminal grid column size.
-*/
-#ifndef SFTE_TERM_INIT_COLS
-#define SFTE_TERM_INIT_COLS 80
-#endif  // SFTE_TERM_INIT_COLS
-_SFTE_ENSURE_RANGE(SFTE_TERM_INIT_COLS, 1, INT16_MAX);
-
-/*
-    Initial terminal grid row size.
-*/
-#ifndef SFTE_TERM_INIT_ROWS
-#define SFTE_TERM_INIT_ROWS 24
-#endif  // SFTE_TERM_INIT_ROWS
-_SFTE_ENSURE_RANGE(SFTE_TERM_INIT_ROWS, 1, INT16_MAX);
 
 /*
     Number of bytes read from the PTY per poll event.
@@ -209,19 +178,23 @@ _SFTE_ENSURE_RANGE(SFTE_TERM_INIT_ROWS, 1, INT16_MAX);
 _SFTE_ENSURE_RANGE(SFTE_TERM_PTY_BUF_SIZE, 1, UINT16_MAX);
 
 /*
-    Tab stop interval in grid cells.
+    Number of poll events read per 'burst'.
+    Allows the compositor to draw a frame once in a while
+    when output is constantly flowing.
+
+    With *_PTY_BURST_SIZE=4 and *_PTY_BUF_SIZE=UINT16_MAX=65535,
+    every 262140 bytes read a render occurs.
 */
-#ifndef SFTE_TERM_TAB_WIDTH
-#define SFTE_TERM_TAB_WIDTH 8
-#endif  // SFTE_TERM_TAB_WIDTH
-_SFTE_ENSURE_RANGE(SFTE_TERM_TAB_WIDTH, 1, INT16_MAX);
+#ifndef SFTE_TERM_PTY_BURST_SIZE
+#define SFTE_TERM_PTY_BURST_SIZE 4
+#endif  // SFTE_TERM_PTY_BURST_SIZE
 
 /*
     Enables procedural rendering for box drawing characters (U+2500 - U+257F).
     Guarantees seamless, gapless lines for TUIs.
 */
 #ifndef SFTE_TERM_CUSTOM_BOXES
-#define SFTE_TERM_CUSTOM_BOXES 1
+#define SFTE_TERM_CUSTOM_BOXES 0
 #endif  // SFTE_TERM_CUSTOM_BOXES
 _SFTE_ENSURE_RANGE(SFTE_TERM_CUSTOM_BOXES, 0, 1);
 
@@ -234,15 +207,6 @@ _SFTE_ENSURE_RANGE(SFTE_TERM_CUSTOM_BOXES, 0, 1);
 #define SFTE_TERM_ALT_SCREEN 1
 #endif  // SFTE_TERM_ALT_SCREEN
 _SFTE_ENSURE_RANGE(SFTE_TERM_ALT_SCREEN, 0, 1);
-
-/*
-    Defines frame rate during rendering (in frames per second).
-    Used for screen animations, smooth scrolling, cursor trail.
-*/
-#ifndef SFTE_TERM_REFRESH_RATE
-#define SFTE_TERM_REFRESH_RATE 60
-#endif  // SFTE_TERM_REFRESH_RATE
-_SFTE_ENSURE_RANGE(SFTE_TERM_REFRESH_RATE, 1, 720);
 
 /*
     Maintains a secondary pixel buffer to prevent tearing.
@@ -273,14 +237,6 @@ _SFTE_ENSURE_RANGE(SFTE_TERM_ANIMATE_SCREEN, 0, 1);
 _SFTE_ENSURE_DEPS(SFTE_TERM_ANIMATE_SCREEN, SFTE_TERM_ALT_SCREEN);
 
 /*
-    Duration of the scrolling animation on TUI open/close (alt screen toggle).
-*/
-#ifndef SFTE_TERM_ANIM_DUR_MS
-#define SFTE_TERM_ANIM_DUR_MS 250.0f
-#endif  // SFTE_TERM_ANIM_DUR_MS
-_SFTE_ENSURE_RANGE(SFTE_TERM_ANIM_DUR_MS, 0.0f, FLT_MAX);
-
-/*
     Enables text reflow when resizing the terminal window.
     With SFTE_TERM_REFLOW disabled, any text going off the right edge is deleted immediately.
 */
@@ -290,32 +246,23 @@ _SFTE_ENSURE_RANGE(SFTE_TERM_ANIM_DUR_MS, 0.0f, FLT_MAX);
 _SFTE_ENSURE_RANGE(SFTE_TERM_REFLOW, 0, 1);
 
 /*
-    Defines threshold which needs to be crossed by
-    the scroll accumulator to count as one 'scroll action'.
+    Enables scrollback history buffer.
 */
-#ifndef SFTE_TERM_SCROLL_THRESHOLD
-#define SFTE_TERM_SCROLL_THRESHOLD 10.0
-#endif  // SFTE_TERM_SCROLL_THRESHOLD
-_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLL_THRESHOLD, 0.0, DBL_MAX);
-
-/*
-    Determines whether incoming terminal output snaps the scrollback viewport back to the bottom.
-    By default it preserves scroll position when output happens.
-*/
-#ifndef SFTE_TERM_SCROLL_ON_OUTPUT
-#define SFTE_TERM_SCROLL_ON_OUTPUT 0
-#endif  // SFTE_TERM_SCROLL_ON_OUTPUT
-_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLL_ON_OUTPUT, 0, 1);
-
-/*
-    Maximum lines of scrollback history kept in memory.
-    Increasing it WILL affect the memory footprint size.
-    Setting it to 0 disables scrollback logic entirely.
-*/
-#ifndef SFTE_TERM_SCROLLBACK_CAP
-#define SFTE_TERM_SCROLLBACK_CAP 2000
+#ifndef SFTE_TERM_SCROLLBACK
+#define SFTE_TERM_SCROLLBACK 1
 #endif  // SFTE_TERM_SCROLLBACK_CAP
-_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLLBACK_CAP, 0, INT32_MAX);
+_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLLBACK, 0, 1);
+
+/*
+    Enables smooth text scrolling.
+    Essentially enables linear interpolation to closest row, replacing instant snapping.
+    Because it requires polling while scrolling, it will affect CPU usage while scrolling.
+*/
+#ifndef SFTE_TERM_SCROLL_SMOOTH
+#define SFTE_TERM_SCROLL_SMOOTH 0
+#endif  // SFTE_TERM_SCROLL_SMOOTH
+_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLL_SMOOTH, 0, 1);
+_SFTE_ENSURE_DEPS(SFTE_TERM_SCROLL_SMOOTH, SFTE_TERM_SCROLLBACK);
 
 /*
     Determines if `clear` commands (CSI 3 J) actually wipe the scrollback buffer.
@@ -327,36 +274,6 @@ _SFTE_ENSURE_RANGE(SFTE_TERM_SCROLLBACK_CAP, 0, INT32_MAX);
 _SFTE_ENSURE_RANGE(SFTE_TERM_SCROLLBACK_CLEAR, 0, 1);
 
 /*
-    Number of lines to shift per mouse wheel / trackpad scroll tick.
-    NOTE:
-    This doesn't affect the Shift+PgUp/Dn scrolling speed.
-    It can be changed in the default shortcuts, lower in the file.
-*/
-#ifndef SFTE_TERM_SCROLL_STEP
-#define SFTE_TERM_SCROLL_STEP 3
-#endif  // SFTE_TERM_SCROLL_STEP
-_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLL_STEP, 0, INT32_MAX);
-
-/*
-    Enables smooth text scrolling.
-    Essentially enables linear interpolation to closest row, replacing instant snapping.
-    Because it requires polling while scrolling, it will affect CPU usage while scrolling.
-*/
-#ifndef SFTE_TERM_SCROLL_SMOOTH
-#define SFTE_TERM_SCROLL_SMOOTH 1
-#endif  // SFTE_TERM_SCROLL_SMOOTH
-_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLL_SMOOTH, 0, 1);
-_SFTE_ENSURE_DEPS(SFTE_TERM_SCROLL_SMOOTH, SFTE_TERM_SCROLLBACK_CAP);
-
-/*
-    Affects how fast the scroll smooths to its target position.
-*/
-#ifndef SFTE_TERM_SCROLL_DECAY
-#define SFTE_TERM_SCROLL_DECAY 0.05f
-#endif  // SFTE_TERM_SCROLL_DECAY
-_SFTE_ENSURE_RANGE(SFTE_TERM_SCROLL_DECAY, 0.0f, FLT_MAX);
-
-/*
     Narrows the allowed characters range to ASCII, lowering the memory usage.
     Enabling this allows the terminal to store each rune as a `uint8_t` rather than a `uint32_t`.
 */
@@ -366,78 +283,8 @@ _SFTE_ENSURE_RANGE(SFTE_TERM_SCROLL_DECAY, 0.0f, FLT_MAX);
 _SFTE_ENSURE_RANGE(SFTE_TERM_ASCII_CHARSET, 0, 1);
 
 // =================================================================================================
-// >>window macros
-// =================================================================================================
-
-/*
-    Horizontal padding around the terminal grid in pixels.
-*/
-#ifndef SFTE_WINDOW_PAD_X
-#define SFTE_WINDOW_PAD_X 8
-#endif  // SFTE_WINDOW_PAD_X
-_SFTE_ENSURE_RANGE(SFTE_WINDOW_PAD_X, 0, INT32_MAX);
-
-/*
-    Vertical padding around the terminal grid in pixels.
-*/
-#ifndef SFTE_WINDOW_PAD_Y
-#define SFTE_WINDOW_PAD_Y 8
-#endif  // SFTE_WINDOW_PAD_Y
-_SFTE_ENSURE_RANGE(SFTE_WINDOW_PAD_Y, 0, INT32_MAX);
-
-// =================================================================================================
 // >>color macros
 // =================================================================================================
-
-/*
-    Enables parsing of 24-bit TrueColor sequences (CSI 38;2;R;G;B m).
-*/
-#ifndef SFTE_COLOR_TRUECOLOR
-#define SFTE_COLOR_TRUECOLOR 1
-#endif  // SFTE_COLOR_TRUECOLOR
-_SFTE_ENSURE_RANGE(SFTE_COLOR_TRUECOLOR, 0, 1);
-
-/*
-    Default background color (RGB888).
-*/
-#ifndef SFTE_COLOR_BG
-#define SFTE_COLOR_BG 0x000000
-#endif  // SFTE_COLOR_BG
-_SFTE_ENSURE_RANGE(SFTE_COLOR_BG, 0x000000, 0xFFFFFF);
-
-/*
-    Default text foreground color (text and underlines, if applicable).
-    Format RGB888.
-*/
-#ifndef SFTE_COLOR_FG
-#define SFTE_COLOR_FG 0xFFFFFF
-#endif  // SFTE_COLOR_FG
-_SFTE_ENSURE_RANGE(SFTE_COLOR_FG, 0x000000, 0xFFFFFF);
-
-/*
-    Background opacity (0x00 transparent to 0xFF opaque).
-*/
-#ifndef SFTE_COLOR_BG_OPACITY
-#define SFTE_COLOR_BG_OPACITY 0xFF
-#endif  // SFTE_COLOR_BG_OPACITY
-_SFTE_ENSURE_RANGE(SFTE_COLOR_BG_OPACITY, 0x00, 0xFF);
-
-/*
-    16-color ANSI fallback palette.
-    Colors are, in order: black, red, green, yellow, blue, magenta, cyan, white.
-    Indices 0 to 7 are regular colors.
-    Indices 8 to 15 are bright colors.
-
-    WARN:
-    Do NOT wrap the colors in curly braces.
-    These values act as the 0-15 index colors in a 256 color palette.
-*/
-#ifndef SFTE_COLOR_ANSI_PALETTE
-#define SFTE_COLOR_ANSI_PALETTE                                                                    \
-    0x181818, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0xA89984, /* regular */  \
-        0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C,                      \
-        0xEBDBB2 /* bright  */
-#endif           // SFTE_COLOR_ANSI_PALETTE
 
 /*
     A macro helper used to draw pixels.
@@ -446,8 +293,10 @@ _SFTE_ENSURE_RANGE(SFTE_COLOR_BG_OPACITY, 0x00, 0xFF);
 */
 #ifndef SFTE_COLOR_DRAW_PIXEL
 #define SFTE_COLOR_DRAW_PIXEL(buf, x, y, stride, height, color)                                    \
-    if ((x) >= 0 && (x) < (stride) && (y) >= 0 && (y) < (height))                                  \
-        ((uint32_t *)(buf))[(y) * (stride) + (x)] = (color);
+    do {                                                                                           \
+        if ((x) >= 0 && (x) < (stride) && (y) >= 0 && (y) < (height))                              \
+            ((uint32_t *)(buf))[(y) * (stride) + (x)] = (color);                                   \
+    } while (0)
 #endif  // SFTE_COLOR_DRAW_PIXEL
 
 /*
@@ -458,9 +307,17 @@ _SFTE_ENSURE_RANGE(SFTE_COLOR_BG_OPACITY, 0x00, 0xFF);
 */
 #ifndef SFTE_COLOR_BLEND_PIXEL
 #define SFTE_COLOR_BLEND_PIXEL(buf, x, y, stride, rgb_color, alpha)                                \
-    (((uint32_t *)(buf))[(y) * (stride) + (x)] = _sfte_render_blend_argb(                          \
-         ((uint32_t *)(buf))[(y) * (stride) + (x)], (rgb_color), (alpha)))
+    do {                                                                                           \
+        (((uint32_t *)(buf))[(y) * (stride) + (x)] = _sfte_render_blend_argb(                      \
+             ((uint32_t *)(buf))[(y) * (stride) + (x)], (rgb_color), (alpha)));                    \
+    } while (0)
 #endif  // SFTE_COLOR_BLEND_PIXEL
+
+#define SFTE_COLOR_BLEND_PIXEL_SAFE(buf, x, y, stride, height, rgb_color, alpha)                   \
+    do {                                                                                           \
+        if ((x) >= 0 && (x) < (stride) && (y) >= 0 && (y) < (height))                              \
+            SFTE_COLOR_BLEND_PIXEL((buf), (x), (y), (stride), (rgb_color), (alpha));               \
+    } while (0)
 
 #define SFTE_COLOR_ALPHA_MASK 0xFF000000
 
@@ -489,28 +346,11 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune);
 #endif  // SFTE_FONT_CUSTOM_BACKEND
 
 /*
-    Minimum size of the font in pixels.
+    Distance in pixels between each glyph in the atlas 2D texture.
 */
-#ifndef SFTE_FONT_MIN_SIZE
-#define SFTE_FONT_MIN_SIZE 1.0f
-#endif  // SFTE_FONT_MIN_SIZE
-_SFTE_ENSURE_RANGE(SFTE_FONT_MIN_SIZE, 0.1f, FLT_MAX);
-
-/*
-    Maximum size of the font in pixels.
-*/
-#ifndef SFTE_FONT_MAX_SIZE
-#define SFTE_FONT_MAX_SIZE 96.0f
-#endif  // SFTE_FONT_MAX_SIZE
-_SFTE_ENSURE_RANGE(SFTE_FONT_MAX_SIZE, 0.1f, FLT_MAX);
-
-/*
-    Starting font size in pixels.
-*/
-#ifndef SFTE_FONT_DEFAULT_SIZE
-#define SFTE_FONT_DEFAULT_SIZE 12.0f
-#endif  // SFTE_FONT_DEFAULT_SIZE
-_SFTE_ENSURE_RANGE(SFTE_FONT_DEFAULT_SIZE, 0.1f, FLT_MAX);
+#ifndef SFTE_FONT_PADDING
+#define SFTE_FONT_PADDING 1
+#endif  // SFTE_FONT_PADDING
 
 /*
     Enables font ligatures support.
@@ -564,16 +404,6 @@ _SFTE_ENSURE_RANGE(SFTE_FONT_MAX_COUNT, 1, INT8_MAX);
 #define SFTE_FONT_OVERSAMPLE 1
 #endif  // SFTE_FONT_OVERSAMPLE
 _SFTE_ENSURE_RANGE(SFTE_FONT_OVERSAMPLE, 1, 16);
-
-/*
-    Tweaks scaling per-font to match baseline heights.
-    Useful for nerd symbol fonts, where often symbols are too big.
-    With primary font in slot 0 and nerd font in slot 1, something like this can be used:
-    #define SFTE_FONT_SCALES {1.0f, 0.8f}
-*/
-#ifndef SFTE_FONT_SCALES
-#define SFTE_FONT_SCALES {1.0f, 1.0f, 1.0f, 1.0f}
-#endif  // SFTE_FONT_SCALES
 
 /*
     Enables Ctrl +/- font zooming at runtime.
@@ -639,23 +469,6 @@ typedef enum sfte_cursor_style {
 } sfte_cursor_style;
 
 /*
-    Sets the default terminal cursor style.
-    Available options:
-    SFTE_CURSOR_STYLE_BLOCK (default)
-    SFTE_CURSOR_STYLE_UNDERLINE
-    SFTE_CURSOR_STYLE_BAR
-
-    NOTE:
-    This value still can be overwritten by certain applications in runtime,
-    #define SFTE_CURSOR_DYNAMIC 0
-    can be used to keep the cursor at one, default style.
-*/
-#ifndef SFTE_CURSOR_STYLE
-#define SFTE_CURSOR_STYLE SFTE_CURSOR_STYLE_BLOCK
-#endif  // SFTE_CURSOR_STYLE
-_SFTE_ENSURE_RANGE(SFTE_CURSOR_STYLE, SFTE_CURSOR_STYLE_BLOCK, SFTE_CURSOR_STYLE_BAR);
-
-/*
     Allows programs to dynamically change the cursor shape via escape sequences.
     If set to 0, cursor style stays as SFTE_CURSOR_STYLE.
 */
@@ -663,22 +476,6 @@ _SFTE_ENSURE_RANGE(SFTE_CURSOR_STYLE, SFTE_CURSOR_STYLE_BLOCK, SFTE_CURSOR_STYLE
 #define SFTE_CURSOR_DYNAMIC 1
 #endif  // SFTE_CURSOR_DYNAMIC
 _SFTE_ENSURE_RANGE(SFTE_CURSOR_DYNAMIC, 0, 1);
-
-/*
-    Default cursor color (RGB888).
-*/
-#ifndef SFTE_CURSOR_COLOR
-#define SFTE_CURSOR_COLOR 0xFFFFFF
-#endif  // SFTE_CURSOR_COLOR
-_SFTE_ENSURE_RANGE(SFTE_CURSOR_COLOR, 0x000000, 0xFFFFFF);
-
-/*
-    Determines the width of bar cursors and height of underline cursors relative to font size.
-*/
-#ifndef SFTE_CURSOR_THICK_RATIO
-#define SFTE_CURSOR_THICK_RATIO 0.1f
-#endif  // SFTE_CURSOR_THICK_RATIO
-_SFTE_ENSURE_RANGE(SFTE_CURSOR_THICK_RATIO, 0.0f, 1.0f);
 
 /*
     Enables cursor blinking.
@@ -689,36 +486,18 @@ _SFTE_ENSURE_RANGE(SFTE_CURSOR_THICK_RATIO, 0.0f, 1.0f);
 #endif  // SFTE_CURSOR_BLINK
 _SFTE_ENSURE_RANGE(SFTE_CURSOR_BLINK, 0, 1);
 
-#ifndef SFTE_CURSOR_BLINK_RATE_MS
-#define SFTE_CURSOR_BLINK_RATE_MS 500
-#endif  // SFTE_CURSOR_BLINK_RATE_MS
-_SFTE_ENSURE_RANGE(SFTE_CURSOR_BLINK_RATE_MS, 0, UINT32_MAX);
-
 /*
-    Renders an animated smooth-scrolling ghost trail behind the cursor,
+    Enables rendering an animated smooth-scrolling ghost trail behind the cursor,
     similar to cursor_trail from kitty or default (I believe?) neovide cursor trail.
-    INFO:
-    This is NOT a toggle, it defines time (in ms) of movement required for trail to start rendering.
-    If it's set to 0, the value is disabled.
-    Extremely low values may cause flickers when programs render themselves.
-    10 seems like a sensible default for trail enabled.
 
     This affects CPU usage, since it requires polling every 16ms when the trail is visible.
     It requires double buffering, otherwise resulting in terrible rendering artifacts.
 */
 #ifndef SFTE_CURSOR_TRAIL
-#define SFTE_CURSOR_TRAIL 0
+#define SFTE_CURSOR_TRAIL 1
 #endif  // SFTE_CURSOR_TRAIL
-_SFTE_ENSURE_RANGE(SFTE_CURSOR_TRAIL, 0, 1024);
+_SFTE_ENSURE_RANGE(SFTE_CURSOR_TRAIL, 0, 1);
 _SFTE_ENSURE_DEPS(SFTE_CURSOR_TRAIL, SFTE_TERM_DOUBLE_BUFFER);
-
-/*
-    Affects how fast the trail disappears.
-*/
-#ifndef SFTE_CURSOR_TRAIL_DECAY
-#define SFTE_CURSOR_TRAIL_DECAY 0.01f
-#endif  // SFTE_CURSOR_TRAIL_DECAY
-_SFTE_ENSURE_RANGE(SFTE_CURSOR_TRAIL_DECAY, 0.01f, FLT_MAX);
 
 // =================================================================================================
 // >>underline macros
@@ -735,28 +514,12 @@ _SFTE_ENSURE_RANGE(SFTE_UNDERLINE_EXTENDED, 0, 1);
 
 /*
     Enables underlines with custom true-colors distint from the text (CSI 58:2::R:G:B m).
-    Default underline color is SFTE_COLOR_FG.
+    Default underline color is `cfg->color.fg`.
 */
 #ifndef SFTE_UNDERLINE_COLORED
 #define SFTE_UNDERLINE_COLORED 1
 #endif  // SFTE_UNDERLINE_COLORED
 _SFTE_ENSURE_RANGE(SFTE_UNDERLINE_COLORED, 0, 1);
-
-/*
-    Line thickness relative to font cell height.
-*/
-#ifndef SFTE_UNDERLINE_THICK_RATIO
-#define SFTE_UNDERLINE_THICK_RATIO 0.1f
-#endif  // SFTE_UNDERLINE_THICK_RATIO
-_SFTE_ENSURE_RANGE(SFTE_UNDERLINE_THICK_RATIO, 0.0f, 1.0f);
-
-/*
-    Gap between text baseline and the underline relative to cell height.
-*/
-#ifndef SFTE_UNDERLINE_OFFSET_RATIO
-#define SFTE_UNDERLINE_OFFSET_RATIO 0.12f
-#endif  // SFTE_UNDERLINE_OFFSET_RATIO
-_SFTE_ENSURE_RANGE(SFTE_UNDERLINE_OFFSET_RATIO, -1.0f, 1.0f);
 
 // =================================================================================================
 // >>img macros
@@ -875,109 +638,7 @@ _SFTE_ENSURE_RANGE(SFTE_IMG_PLACEMENT_INIT_CAP, 1, SFTE_IMG_PLACEMENT_MAX_CAP);
 #define SFTE_SEARCH 1
 #endif  // SFTE_SEARCH
 _SFTE_ENSURE_RANGE(SFTE_SEARCH, 0, 1);
-_SFTE_ENSURE_DEPS(SFTE_SEARCH, SFTE_TERM_SCROLLBACK_CAP);
-
-/*
-    Prefix of the search bar.
-    Mainly a cosmetic setting, although at extra-small terminal sizes
-    making it shorter will allow to see more of the query on screen at once.
-*/
-#ifndef SFTE_SEARCH_PREFIX
-#define SFTE_SEARCH_PREFIX " search: "
-#endif  // SFTE_SEARCH_PREFIX
-
-/*
-    If enabled, places the search bar at the top.
-*/
-#ifndef SFTE_SEARCH_PLACEMENT_TOP
-#define SFTE_SEARCH_PLACEMENT_TOP 0
-#endif  // SFTE_SEARCH_PLACEMENT_TOP
-
-/*
-    Background color of the search query bar.
-*/
-#ifndef SFTE_SEARCH_BG_BAR
-#define SFTE_SEARCH_BG_BAR 0x000000
-#endif  // SFTE_SEARCH_BG
-_SFTE_ENSURE_RANGE(SFTE_SEARCH_BG_BAR, 0x000000, 0xFFFFFF);
-
-/*
-    Background color opacity of the search query bar.
-*/
-#ifndef SFTE_SEARCH_BG_BAR_OPACITY
-#define SFTE_SEARCH_BG_BAR_OPACITY 0x7F
-#endif  // SFTE_SEARCH_BG_BAR_OPACITY
-_SFTE_ENSURE_RANGE(SFTE_SEARCH_BG_BAR_OPACITY, 0x00, 0xFF);
-
-/*
-    Background color of a highlighted active search result.
-*/
-#ifndef SFTE_SEARCH_BG_ACTIVE
-#define SFTE_SEARCH_BG_ACTIVE SFTE_COLOR_FG
-#endif  // SFTE_SEARCH_BG_ACTIVE
-_SFTE_ENSURE_RANGE(SFTE_SEARCH_BG_ACTIVE, 0x000000, 0xFFFFFF);
-
-/*
-    Background color of a highlighted inactive search result.
-*/
-#ifndef SFTE_SEARCH_BG_MATCH
-#define SFTE_SEARCH_BG_MATCH 0x7F7F7F
-#endif  // SFTE_SEARCH_BG_MATCH
-_SFTE_ENSURE_RANGE(SFTE_SEARCH_BG_MATCH, 0x000000, 0xFFFFFF);
-
-/*
-    Foreground color of a highlighted active search result.
-*/
-#ifndef SFTE_SEARCH_FG_ACTIVE
-#define SFTE_SEARCH_FG_ACTIVE SFTE_COLOR_BG
-#endif  // SFTE_SEARCH_FG_ACTIVE
-_SFTE_ENSURE_RANGE(SFTE_SEARCH_FG_ACTIVE, 0x000000, 0xFFFFFF);
-
-/*
-    Foreground color of a highlighted inactive search result.
-*/
-#ifndef SFTE_SEARCH_FG_MATCH
-#define SFTE_SEARCH_FG_MATCH SFTE_COLOR_BG
-#endif  // SFTE_SEARCH_FG_MATCH
-_SFTE_ENSURE_RANGE(SFTE_SEARCH_FG_MATCH, 0x000000, 0xFFFFFF);
-
-/*
-    Attributes applied to a highlighted active search result.
-
-    Available options:
-
-    SFTE_ATTR_NONE
-    SFTE_ATTR_BOLD
-    SFTE_ATTR_ITALIC
-    SFTE_ATTR_UNDERLINE
-    SFTE_ATTR_REVERSE
-
-    To combine multiple attributes, use the '|' (binary OR) operator.
-*/
-#ifndef SFTE_SEARCH_ATTR_ACTIVE
-#define SFTE_SEARCH_ATTR_ACTIVE SFTE_ATTR_BOLD
-#endif  // SFTE_SEARCH_ATTR_ACTIVE
-_SFTE_ENSURE_RANGE(SFTE_SEARCH_ATTR_ACTIVE, SFTE_ATTR_NONE,
-                   SFTE_ATTR_BOLD | SFTE_ATTR_ITALIC | SFTE_ATTR_UNDERLINE | SFTE_ATTR_REVERSE);
-
-/*
-    Attributes applied to a highlighted inactive search result.
-
-    Available options:
-
-    SFTE_ATTR_NONE
-    SFTE_ATTR_BOLD
-    SFTE_ATTR_ITALIC
-    SFTE_ATTR_UNDERLINE
-    SFTE_ATTR_REVERSE
-
-    To combine multiple attributes, use the '|' (binary OR) operator.
-*/
-#ifndef SFTE_SEARCH_ATTR_MATCH
-#define SFTE_SEARCH_ATTR_MATCH SFTE_ATTR_NONE
-#endif  // SFTE_SEARCH_ATTR_MATCH
-_SFTE_ENSURE_RANGE(SFTE_SEARCH_ATTR_MATCH, SFTE_ATTR_NONE,
-                   SFTE_ATTR_BOLD | SFTE_ATTR_ITALIC | SFTE_ATTR_UNDERLINE | SFTE_ATTR_REVERSE);
+_SFTE_ENSURE_DEPS(SFTE_SEARCH, SFTE_TERM_SCROLLBACK);
 
 /*
     Maximum capacity of the search matches array.
@@ -1012,7 +673,7 @@ _SFTE_ENSURE_RANGE(SFTE_SEARCH_ROW_BUF_CAP, 128, 65536);
     Enables the native terminal multiplexer.
 */
 #ifndef SFTE_MUX
-#define SFTE_MUX 0
+#define SFTE_MUX 1
 #endif  // SFTE_MUX
 _SFTE_ENSURE_RANGE(SFTE_MUX, 0, 1);
 
@@ -1021,187 +682,15 @@ _SFTE_ENSURE_RANGE(SFTE_MUX, 0, 1);
     Visuals of the bar can be customized via options below.
 */
 #ifndef SFTE_MUX_BAR
-#define SFTE_MUX_BAR 0
+#define SFTE_MUX_BAR 1
 #endif  // SFTE_MUX_BAR
 _SFTE_ENSURE_RANGE(SFTE_MUX_BAR, 0, 1);
 _SFTE_ENSURE_DEPS(SFTE_MUX_BAR, SFTE_MUX);
-
-/*
-    If enabled, the multiplexer bar hovers above the grid viewport.
-    This, with SFTE_MUX_BAR_ALIGN set to SFTE_MUX_BAR_ALIGN_RIGHT
-    and opacity set low, can achieve a nice, non-disruptive look
-    that maximizes the vertical space.
-*/
-#ifndef SFTE_MUX_BAR_HOVER
-#define SFTE_MUX_BAR_HOVER 0
-#endif  // SFTE_MUX_BAR_HOVER
-_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_HOVER, 0, 1);
-
-/*
-    If enabled, the multiplexer bar is placed at the top of the window.
-*/
-#ifndef SFTE_MUX_BAR_PLACEMENT_TOP
-#define SFTE_MUX_BAR_PLACEMENT_TOP 0
-#endif  // SFTE_MUX_BAR_PLACEMENT_TOP
-_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_PLACEMENT_TOP, 0, 1);
-_SFTE_ENSURE_DEPS(SFTE_MUX_BAR_PLACEMENT_TOP, SFTE_MUX_BAR);
-
-/*
-    Defines the string format for each multiplexer bar window text.
-    The implementation uses a custom parser to generate the the window text.
-    Use `%u` and `%s` (in any order) to render, in order: index and name of the window.
-    Both can be omitted.
-
-    So, for example, "[ %s : %u ]" where name is 'nvim' and index is 3 generates this window name:
-
-    "[ nvim : 3 ]"
-
-    If one of the values is omitted, e.g., format is set to "| %s |", it becomes:
-
-    "| nvim |"
-*/
-#ifndef SFTE_MUX_BAR_FORMAT
-#define SFTE_MUX_BAR_FORMAT "%u: %s"
-#endif  // SFTE_MUX_BAR_FORMAT
-
-/*
-    Defines the character used to draw the left and right edge of each window on the bar.
-    If set to 0, no character is drawn.
-
-    WARN:
-    Using characters outside of ASCII range with SFTE_TERM_ASCII_CHARSET
-    defined will result in '?' rendered instead.
-*/
-#ifndef SFTE_MUX_BAR_EDGE_LEFT
-#define SFTE_MUX_BAR_EDGE_LEFT 0
-#endif  // SFTE_MUX_BAR_EDGE_LEFT
-_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_EDGE_LEFT, 0, INT32_MAX);
-
-#ifndef SFTE_MUX_BAR_EDGE_RIGHT
-#define SFTE_MUX_BAR_EDGE_RIGHT 0
-#endif  // SFTE_MUX_BAR_EDGE_RIGHT
-_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_EDGE_RIGHT, 0, INT32_MAX);
-
-/*
-    Background color for active multiplexer window on the bar (RGB8888).
-*/
-#ifndef SFTE_MUX_BAR_BG_ACTIVE
-#define SFTE_MUX_BAR_BG_ACTIVE 0xFF444444
-#endif  // SFTE_MUX_BAR_BG_ACTIVE
-_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_BG_ACTIVE, 0x00000000, 0xFFFFFFFF);
-
-/*
-    Background color for inactive multiplexer window on the bar (RGB8888).
-*/
-#ifndef SFTE_MUX_BAR_BG_INACTIVE
-#define SFTE_MUX_BAR_BG_INACTIVE 0xFF000000
-#endif  // SFTE_MUX_BAR_BG_INACTIVE
-_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_BG_INACTIVE, 0x00000000, 0xFFFFFFFF);
-
-/*
-    Background color for hovered multiplexer window on the bar (RGB8888).
-*/
-#ifndef SFTE_MUX_BAR_BG_HOVER
-#define SFTE_MUX_BAR_BG_HOVER 0xFF222222
-#endif  // SFTE_MUX_BAR_BG_HOVER
-_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_BG_HOVER, 0x00000000, 0xFFFFFFFF);
-
-/*
-    Foreground color for active multiplexer window on the bar (RGB888).
-*/
-#ifndef SFTE_MUX_BAR_FG_ACTIVE
-#define SFTE_MUX_BAR_FG_ACTIVE 0xFFFFFF
-#endif  // SFTE_MUX_BAR_FG_ACTIVE
-_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_FG_ACTIVE, 0x000000, 0xFFFFFF);
-
-/*
-    Foreground color for active multiplexer window on the bar (RGB888).
-*/
-#ifndef SFTE_MUX_BAR_FG_INACTIVE
-#define SFTE_MUX_BAR_FG_INACTIVE 0x888888
-#endif  // SFTE_MUX_BAR_FG_INACTIVE
-_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_FG_INACTIVE, 0x000000, 0xFFFFFF);
-
-/*
-    Foreground color for hovered multiplexer window on the bar (RGB888).
-*/
-#ifndef SFTE_MUX_BAR_FG_HOVER
-#define SFTE_MUX_BAR_FG_HOVER 0xAAAAAA
-#endif  // SFTE_MUX_BAR_FG_HOVER
-_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_FG_HOVER, 0x000000, 0xFFFFFF);
-
-/*
-    Attributes applied to an active multiplexer window text on the bar.
-
-    Available options:
-
-    SFTE_ATTR_NONE
-    SFTE_ATTR_BOLD
-    SFTE_ATTR_ITALIC
-    SFTE_ATTR_UNDERLINE
-    SFTE_ATTR_REVERSE
-
-    To combine multiple attributes, use the '|' (binary OR) operator.
-*/
-#ifndef SFTE_MUX_BAR_ATTR_ACTIVE
-#define SFTE_MUX_BAR_ATTR_ACTIVE SFTE_ATTR_NONE
-#endif  // SFTE_MUX_BAR_ATTR_ACTIVE
-_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_ATTR_ACTIVE, SFTE_ATTR_NONE,
-                   SFTE_ATTR_BOLD | SFTE_ATTR_ITALIC | SFTE_ATTR_UNDERLINE | SFTE_ATTR_REVERSE);
-
-/*
-    Attributes applied to an inactive multiplexer window text on the bar.
-
-    Available options:
-
-    SFTE_ATTR_NONE
-    SFTE_ATTR_BOLD
-    SFTE_ATTR_ITALIC
-    SFTE_ATTR_UNDERLINE
-    SFTE_ATTR_REVERSE
-
-    To combine multiple attributes, use the '|' (binary OR) operator.
-*/
-#ifndef SFTE_MUX_BAR_ATTR_INACTIVE
-#define SFTE_MUX_BAR_ATTR_INACTIVE SFTE_ATTR_NONE
-#endif  // SFTE_MUX_BAR_ATTR_INACTIVE
-_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_ATTR_INACTIVE, SFTE_ATTR_NONE,
-                   SFTE_ATTR_BOLD | SFTE_ATTR_ITALIC | SFTE_ATTR_UNDERLINE | SFTE_ATTR_REVERSE);
 
 #define SFTE_MUX_BAR_ALIGN_LEFT 0
 #define SFTE_MUX_BAR_ALIGN_CENTER 1
 #define SFTE_MUX_BAR_ALIGN_RIGHT 2
 #define SFTE_MUX_BAR_ALIGN_FILL 3
-
-/*
-    Alignment of the multiplexer bar tabs.
-    Available options:
-    SFTE_MUX_BAR_ALIGN_LEFT (default)
-    SFTE_MUX_BAR_ALIGN_CENTER
-    SFTE_MUX_BAR_ALIGN_RIGHT
-    SFTE_MUX_BAR_ALIGN_FILL
-*/
-#ifndef SFTE_MUX_BAR_ALIGN
-#define SFTE_MUX_BAR_ALIGN SFTE_MUX_BAR_ALIGN_LEFT
-#endif  // SFTE_MUX_BAR_ALIGN
-_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_ALIGN, SFTE_MUX_BAR_ALIGN_LEFT, SFTE_MUX_BAR_ALIGN_FILL);
-
-/*
-    Defines the horizontal padding (in cells) between each tab on the multiplexer bar.
-*/
-#ifndef SFTE_MUX_BAR_PAD
-#define SFTE_MUX_BAR_PAD 1
-#endif  // SFTE_MUX_BAR_PAD
-_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_PAD, 0, 16);
-
-/*
-    Defines the horizontal margin (in cells) on the left and right side of the multiplexer tab.
-    Does not affect the logic if `SFTE_MUX_BAR_ALIGN == SFTE_MUX_BAR_ALIGN_FILL`.
-*/
-#ifndef SFTE_MUX_BAR_MARGIN
-#define SFTE_MUX_BAR_MARGIN 1
-#endif  // SFTE_MUX_BAR_MARGIN
-_SFTE_ENSURE_RANGE(SFTE_MUX_BAR_MARGIN, 0, 1);
 
 /*
     If enabled, renders a preview of available windows when prefix is clicked.
@@ -1213,14 +702,6 @@ _SFTE_ENSURE_RANGE(SFTE_MUX_BAR_MARGIN, 0, 1);
 #endif  // SFTE_MUX_PREFIX_PREVIEW
 _SFTE_ENSURE_RANGE(SFTE_MUX_PREFIX_PREVIEW, 0, 1);
 _SFTE_ENSURE_DEPS(SFTE_MUX_PREFIX_PREVIEW, SFTE_MUX);
-
-/*
-    Defines the horizontal margin (in cells)
-    on the left and right side of the prefix preview window.
-*/
-#ifndef SFTE_MUX_PREVIEW_MARGIN
-#define SFTE_MUX_PREVIEW_MARGIN 6
-#endif  // SFTE_MUX_PREVIEW_MARGIN
 
 /*
     Set of characters used to render borders for the prefix preview.
@@ -1235,38 +716,6 @@ _SFTE_ENSURE_DEPS(SFTE_MUX_PREFIX_PREVIEW, SFTE_MUX);
 #define SFTE_MUX_PREVIEW_BORDER_TBR 0x251C  // ├
 #define SFTE_MUX_PREVIEW_BORDER_TBL 0x2524  // ┤
 #endif                                      // SFTE_MUX_PREVIEW_BORDER_LR
-
-/*
-    Foreground color of the borders for the prefix preview. (RGB888)
-*/
-#ifndef SFTE_MUX_PREVIEW_BORDER_FG
-#define SFTE_MUX_PREVIEW_BORDER_FG 0xFFFFFF
-#endif  // SFTE_MUX_PREVIEW_BORDER_FG
-_SFTE_ENSURE_RANGE(SFTE_MUX_PREVIEW_BORDER_FG, 0x000000, 0xFFFFFF);
-
-/*
-    Background color for the prefix preview window badge/index (RGB8888).
-*/
-#ifndef SFTE_MUX_PREVIEW_BADGE_BG
-#define SFTE_MUX_PREVIEW_BADGE_BG 0xFF555555
-#endif  // SFTE_MUX_PREVIEW_BADGE_BG
-_SFTE_ENSURE_RANGE(SFTE_MUX_PREVIEW_BADGE_BG, 0x00000000, 0xFFFFFFFF);
-
-/*
-    Background color BEHIND the prefix preview window (RGB8888).
-*/
-#ifndef SFTE_MUX_PREVIEW_BG
-#define SFTE_MUX_PREVIEW_BG 0x44000000
-#endif  // SFTE_MUX_PREVIEW_BG
-_SFTE_ENSURE_RANGE(SFTE_MUX_PREVIEW_BG, 0x00000000, 0xFFFFFFFF);
-
-/*
-    Background color of the hovered prefix preview window (RGB888).
-*/
-#ifndef SFTE_MUX_PREVIEW_HOVER_BG
-#define SFTE_MUX_PREVIEW_HOVER_BG 0x222222
-#endif  // SFTE_MUX_PREVIEW_HOVER_BG
-_SFTE_ENSURE_RANGE(SFTE_MUX_PREVIEW_HOVER_BG, 0x000000, 0xFFFFFF);
 
 /*
     The maximum number concurrent windows the multiplexer can hold.
@@ -1466,9 +915,9 @@ typedef struct sfte_shortcut {
 static inline uint8_t _sfte_wayland_font_resize(sfte_ctx *ctx, const sfte_arg *arg);
 static inline uint8_t _sfte_wayland_font_reset(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_FONT_ZOOM
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
 static inline uint8_t _sfte_wayland_view_scroll(sfte_ctx *ctx, const sfte_arg *arg);
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
 static inline uint8_t _sfte_wayland_clipboard_copy(sfte_ctx *ctx, const sfte_arg *arg);
 static inline uint8_t _sfte_wayland_clipboard_paste(sfte_ctx *ctx, const sfte_arg *arg);
 #endif  // SFTE_WAYLAND
@@ -1560,6 +1009,260 @@ static inline uint8_t _sfte_search_clear_shortcut(sfte_ctx *ctx, const sfte_arg 
     _SFTE_MUX_BINDS _SFTE_SEARCH_BINDS _SFTE_WAYLAND_ZOOM_BINDS _SFTE_WAYLAND_SCROLL_BINDS         \
         _SFTE_WAYLAND_COPY_BIND _SFTE_WAYLAND_PASTE_BIND
 
-#ifndef SFTE_SHORTCUTS
-#define SFTE_SHORTCUTS {SFTE_BASE_SHORTCUTS}
-#endif  // SFTE_SHORTCUTS
+// =================================================================================================
+// >>default configuration
+// =================================================================================================
+
+typedef struct sfte_config {
+    struct {
+        /* An array of paths to regular/bold/italic/bold italic fonts, sorted by priority.
+           Font of index 0 in each array is the primary font, next ones are used as fallback
+           if a glyph is missing.
+           This is most useful when using a font without nerd symbols.
+           Defining cfg->font.regular as:
+           {"/path/to/primary_font.ttf", "/path/to/nerd_symbols.ttf"}
+           allows to have both the wanted font and nerd symbols for TUIs like nvim.
+           */
+        const char *regular[SFTE_FONT_MAX_COUNT];
+#ifdef SFTE_FONT_BOLD
+        const char *bold[SFTE_FONT_MAX_COUNT];
+#endif
+#ifdef SFTE_FONT_ITALIC
+        const char *italic[SFTE_FONT_MAX_COUNT];
+#endif
+#ifdef SFTE_FONT_BOLD_ITALIC
+        const char *bold_italic[SFTE_FONT_MAX_COUNT];
+#endif
+
+        float default_size;  // Initial font size on startup (in pxs).
+        float min_size;      // Minimum achievable font size (in pxs).
+        float max_size;      // Maximum achievable font size (in pxs).
+
+        // Scales array, matching the order of font file paths as specified in the config.
+        // So, if scales={1.0f, 0.8f}, then regular/bold/italic fonts under:
+        //  - index 0 will be scaled by 1.0,
+        //  - index 1 will be scaled by 0.8.
+        float scales[SFTE_FONT_MAX_COUNT];
+    } font;
+    struct {
+        uint32_t bg;                // ARGB 0xAARRGGBB
+        uint32_t fg;                // RGB  0x__RRGGBB
+        uint32_t cursor;            // ARGB 0xAARRGGBB
+        uint32_t ansi_palette[16];  // RGB  0x__RRGGBB
+    } color;
+    struct {
+        uint16_t pad_x;             // Horizontal window padding in pixels.
+        uint16_t pad_y;             // Vertical window padding in pixels.
+        uint16_t init_cols;         // Initial number of columns.
+        uint16_t init_rows;         // Initial number of rows.
+        uint16_t refresh_rate;      // Refresh rate used for animations (e.g. cursor trail).
+        uint8_t tab_width;          // Tab width in characters (columns).
+        const char *default_title;  // Default title set to each window on startup.
+        const char *term_env;       // Terminal environment identifier
+#if SFTE_TERM_ANIMATE_SCREEN
+        float anim_dur_ms;  // Duration of alt-screen swap animation in milliseconds.
+#endif
+    } window;
+    struct {
+        sfte_cursor_style style;  // Default cursor style enum value.
+#if SFTE_CURSOR_BLINK
+        uint32_t blink_rate_ms;  // Half-blink animation duration in milliseconds.
+#endif
+        float thick_ratio;  // Thickness ratio relative to cell dimensions (for bar/underline).
+#if SFTE_CURSOR_TRAIL
+        float trail_decay;         // Decaying speed of the cursor trail.
+        uint16_t trail_threshold;  // Minimum time of cursor movement required to render trail.
+#endif
+    } cursor;
+    struct {
+        float thick_ratio;  // Thickness of underlines relative to cell dimensions.
+        float off_ratio;    // Offset from bottom of the cell, relative to cell dimensions.
+    } underline;
+    struct {
+        int32_t scrollback_cap;  // Maximum scrollback capacity (in rows).
+        uint32_t step;           // Step taken each time a 'scroll' action is toggled.
+#if SFTE_TERM_SCROLL_SMOOTH
+        float decay;  // Speed of smooth scroll decay per frame, where 0.0=none; 1.0=instant.
+#endif
+        double threshold;   // Scroll value required to toggle a 'scroll' action.
+        uint8_t on_output;  // If enabled, moves the viewport to prompt on any output.
+    } scroll;
+    struct {
+        /* If custom shortcuts are defined and any of them are overlapping,
+           the one first defined will be always toggled. */
+        const sfte_shortcut *custom;  // Terminated via a {0} element.
+        uint8_t override_defaults;    // If =0, check custom then defaults; if =1, disable defaults.
+    } shortcuts;
+#if SFTE_SEARCH
+    struct {
+        const char *prefix;    // String prepending the search query.
+        uint8_t top;           // If enabled, the search bar will appear at the top.
+        uint32_t bg_bar;       // ARGB 0xAARRGGBB
+        uint32_t bg_active;    // ARGB 0xAARRGGBB
+        uint32_t bg_match;     // ARGB 0xAARRGGBB
+        uint32_t fg_active;    // RGB  0x__RRGGBB
+        uint32_t fg_match;     // RGB  0x__RRGGBB
+        uint32_t attr_active;  // Attributes applied to active     match, bitmask from SFTE_ATTR_*.
+        uint32_t attr_match;   // Attributes applied to non-active match, bitmask from SFTE_ATTR_*.
+    } search;
+#endif  // SFTE_SEARCH
+#if SFTE_MUX_BAR
+    struct {
+        uint8_t top;    // If enabled, the multiplexer bar will appear at the top.
+        uint8_t hover;  // If enabled, the multiplexer bar will hover over top/bottom row.
+        uint8_t align;  // SFTE_MUX_BAR_ALIGN_LEFT/CENTER/RIGHT/FILL
+
+        /* Defines the string format for each multiplexer bar window text.
+           Use `%u` and `%s` (in any order) to render, in order: index and name of the window.
+           Both can be omitted.
+           So e.g., "[ %s : %u ]" where name is 'nvim' and idx is 3 generates this window name:
+           "[ nvim : 3 ]"
+           If one of the values is omitted, e.g., format is set to "| %s |", it becomes:
+           "| nvim |" */
+        const char *format;
+
+        /* Character used to draw the left and right edge of each window on the bar.
+           If set to 0, no character is drawn. */
+        uint32_t edge_left;
+        uint32_t edge_right;
+
+        uint8_t pad;     // Horizontal padding (in cells) between each tab on the multiplexer bar.
+        uint8_t margin;  // Horizontal margin (in cells) on each side of the multiplexer tab.
+        uint32_t bg_active;      // ARGB 0xAARRGGBB
+        uint32_t bg_inactive;    // ARGB 0xAARRGGBB
+        uint32_t bg_hover;       // ARGB 0xAARRGGBB
+        uint32_t fg_active;      // RGB  0x__RRGGBB
+        uint32_t fg_inactive;    // RGB  0x__RRGGBB
+        uint32_t fg_hover;       // RGB  0x__RRGGBB
+        uint32_t attr_active;    // Attributes applied to active     tab, bitmask from SFTE_ATTR_*.
+        uint32_t attr_inactive;  // Attributes applied to non-active tab, bitmask from SFTE_ATTR_*.
+    } mux_bar;
+#endif  // SFTE_MUX_BAR
+#if SFTE_MUX
+    struct {
+        uint8_t preview_margin;  // Horizontal margin (in cells) on each side of the preview window.
+        uint32_t preview_border_fg;  // RGB  0x__RRGGBB
+        uint32_t preview_badge_bg;   // RGBA 0xAARRGGBB
+        uint32_t preview_bg;         // RGBA 0xAARRGGBB
+        uint32_t preview_hover_bg;   // RGBA 0xAARRGGBB
+    } mux;
+#endif  // SFTE_MUX
+} sfte_config;
+
+static const sfte_config _sfte_default_config = {
+    .font =
+        {
+            .regular = {NULL},
+#ifdef SFTE_FONT_BOLD
+            .bold = {NULL},
+#endif  // defined(SFTE_FONT_BOLD)
+#ifdef SFTE_FONT_ITALIC
+            .italic = {NULL},
+#endif  // defined(SFTE_FONT_ITALIC)
+#ifdef SFTE_FONT_BOLD_ITALIC
+            .bold_italic = {NULL},
+#endif  // defined(SFTE_FONT_BOLD_ITALIC)
+            .default_size = 12.0f,
+            .min_size = 1.0f,
+            .max_size = 96.0f,
+            .scales = {1.0f, 1.0f, 1.0f, 1.0f},
+        },
+    .color =
+        {
+            .bg = 0xFF000000,
+            .fg = 0xFFFFFFFF,
+            .cursor = 0xFFFFFFFF,
+            .ansi_palette = {0xFF181818, 0xFFCC241D, 0xFF98971A, 0xFFD79921, 0xFF458588, 0xFFB16286,
+                             0xFF689D6A, 0xFFA89984, 0xFF928374, 0xFFFB4934, 0xFFB8BB26, 0xFFFABD2F,
+                             0xFF83A598, 0xFFD3869B, 0xFF8EC07C, 0xFFEBDBB2},
+        },
+    .window =
+        {
+            .pad_x = 8,
+            .pad_y = 8,
+            .init_cols = 80,
+            .init_rows = 24,
+            .refresh_rate = 60,
+            .tab_width = 8,
+            .default_title = "sh",
+            .term_env = "xterm-256color",
+#if SFTE_TERM_ANIMATE_SCREEN
+            .anim_dur_ms = 250.0f,
+#endif  // SFTE_TERM_ANIMATE_SCREEN
+        },
+    .cursor =
+        {
+            .style = SFTE_CURSOR_STYLE_BLOCK,
+            .blink_rate_ms = 500,
+            .thick_ratio = 0.1f,
+#if SFTE_CURSOR_TRAIL
+            .trail_decay = 0.01f,
+            .trail_threshold = 10,
+#endif  // SFTE_CURSOR_TRAIL
+        },
+    .underline =
+        {
+            .thick_ratio = 0.1f,
+            .off_ratio = 0.12f,
+        },
+    .scroll =
+        {
+            .scrollback_cap = 2000,
+            .step = 3,
+#if SFTE_TERM_SCROLL_SMOOTH
+            .decay = 0.05f,
+#endif  // SFTE_TERM_SCROLL_SMOOTH
+            .threshold = 10.0,
+            .on_output = 0,
+        },
+    .shortcuts =
+        {
+            .custom = NULL,
+            .override_defaults = 0,
+        },
+#if SFTE_SEARCH
+    .search =
+        {
+            .prefix = " search: ",
+            .top = 0,
+            .bg_bar = 0x7F000000,
+            .bg_active = 0xFFFFFFFF,
+            .fg_active = 0xFF000000,
+            .attr_active = SFTE_ATTR_BOLD,
+            .bg_match = 0xFF7F7F7F,
+            .fg_match = 0xFF000000,
+            .attr_match = SFTE_ATTR_NONE,
+        },
+#endif  // SFTE_SEARCH
+#if SFTE_MUX_BAR
+    .mux_bar =
+        {
+            .top = 0,
+            .hover = 0,
+            .align = SFTE_MUX_BAR_ALIGN_LEFT,
+            .format = "%u: %s",
+            .edge_left = 0,
+            .edge_right = 0,
+            .pad = 1,
+            .margin = 1,
+            .bg_active = 0xFF444444,
+            .bg_inactive = 0xFF000000,
+            .bg_hover = 0xFF222222,
+            .fg_active = 0xFFFFFFFF,
+            .fg_inactive = 0xFF888888,
+            .fg_hover = 0xFFAAAAAA,
+            .attr_active = SFTE_ATTR_NONE,
+            .attr_inactive = SFTE_ATTR_NONE,
+        },
+#endif  // SFTE_MUX_BAR
+#if SFTE_MUX
+    .mux =
+        {
+            .preview_margin = 6,
+            .preview_border_fg = 0xFFFFFFFF,
+            .preview_badge_bg = 0xFF555555,
+            .preview_bg = 0x44000000,
+            .preview_hover_bg = 0xFF222222,
+        },
+#endif  // SFTE_MUX
+};

@@ -435,7 +435,8 @@ static inline void _sfte_kitty_gc_pool(sfte_term *term) {
     Returns a error message used for acknowledgements if 'img' is NULL or placement pool is OOM.
     Returns NULL on success.
 */
-static inline const char *_sfte_kitty_apply_placement(sfte_term *term, sfte_img *img) {
+static inline const char *_sfte_kitty_apply_placement(sfte_term *term, sfte_img *img,
+                                                      const sfte_config *cfg) {
     const sfte_kitty_state *kitty = &term->kitty;
     const sfte_viewport_state *vp = &term->viewport;
     const sfte_cursor_state *cursor = &term->cursor;
@@ -465,7 +466,7 @@ static inline const char *_sfte_kitty_apply_placement(sfte_term *term, sfte_img 
     img->ref_cnt++;
     int16_t cols = _sfte_grid_span(img->width, kitty->x_off, vp->cell_width);
     int16_t rows = _sfte_grid_span(img->height, kitty->y_off, vp->cell_height);
-    _sfte_grid_dirty_rect(term, cursor->col, cursor->row, cols, rows);
+    _sfte_grid_dirty_rect(term, cursor->col, cursor->row, cols, rows, cfg);
     return NULL;
 }
 
@@ -492,7 +493,7 @@ static inline const char *_sfte_kitty_exec_query(const sfte_term *term) {
     Returns a error message used for acknowledgements if no image is found to delete.
     Returns NULL on success.
 */
-static inline const char *_sfte_kitty_exec_delete(sfte_term *term) {
+static inline const char *_sfte_kitty_exec_delete(sfte_term *term, const sfte_config *cfg) {
     const sfte_viewport_state *vp = &term->viewport;
     sfte_image_state *images = &term->images;
 #if SFTE_TERM_ALT_SCREEN
@@ -514,7 +515,7 @@ static inline const char *_sfte_kitty_exec_delete(sfte_term *term) {
             int16_t cols = _sfte_grid_span(img->width, p->x_off, vp->cell_width);
             int16_t rows = _sfte_grid_span(img->height, p->y_off, vp->cell_height);
 
-            _sfte_grid_dirty_rect(term, p->start_col, p->start_row, cols, rows);
+            _sfte_grid_dirty_rect(term, p->start_col, p->start_row, cols, rows, cfg);
 
             images->placements[i--] = images->placements[--images->placements_len];
         }
@@ -614,13 +615,13 @@ static inline const char *_sfte_kitty_exec_transmit(sfte_term *term, sfte_img **
     was never transmitted or has been garbage collected, OR if `_sfte_kitty_apply_placement`
    fails. Returns NULL on success.
 */
-static inline const char *_sfte_kitty_exec_place(sfte_term *term) {
+static inline const char *_sfte_kitty_exec_place(sfte_term *term, const sfte_config *cfg) {
     const sfte_kitty_state *kitty = &term->kitty;
     sfte_image_state *images = &term->images;
 
     for (uint32_t j = 0; j < images->pool_len; ++j)
         if (images->pool[j].id == kitty->id)
-            return _sfte_kitty_apply_placement(term, &images->pool[j]);
+            return _sfte_kitty_apply_placement(term, &images->pool[j], cfg);
     return "ENOENT: image id not found in pool";
 }
 
@@ -659,7 +660,8 @@ static inline void _sfte_kitty_send_ack(const sfte_term *term, const char *err_m
     The base64 string is accumulated in `kitty->b64_buf` across multiple calls,
     and the evalutaion is triggered the moment a sequence with `m=0` is received.
 */
-static inline void _sfte_kitty_parse_graphics(sfte_term *term, const char *payload) {
+static inline void _sfte_kitty_parse_graphics(sfte_term *term, const char *payload,
+                                              const sfte_config *cfg) {
     sfte_kitty_state *kitty = &term->kitty;
 
     const char *semi = strchr(payload, ';');
@@ -749,16 +751,16 @@ static inline void _sfte_kitty_parse_graphics(sfte_term *term, const char *paylo
 
     switch (kitty->action) {
     case 'q': err_msg = _sfte_kitty_exec_query(term); break;
-    case 'd': err_msg = _sfte_kitty_exec_delete(term); break;
+    case 'd': err_msg = _sfte_kitty_exec_delete(term, cfg); break;
     case 't': err_msg = _sfte_kitty_exec_transmit(term, NULL); break;
     case 'T': {
         sfte_img *img = NULL;
         err_msg = _sfte_kitty_exec_transmit(term, &img);
         if (err_msg || !img) break;
-        _sfte_kitty_apply_placement(term, img);
+        _sfte_kitty_apply_placement(term, img, cfg);
         break;
     }
-    case 'p': _sfte_kitty_exec_place(term); break;
+    case 'p': _sfte_kitty_exec_place(term, cfg); break;
     default: err_msg = "EINVAL: unknown action"; break;
     }
 

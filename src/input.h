@@ -10,6 +10,26 @@
 #include <xkbcommon/xkbcommon.h>
 #endif  // SFTE_XKB_COMMON
 
+#if SFTE_INPUT_MOUSE
+
+// Tracking modes (DECSET)
+#define SFTE_INPUT_MOUSE_MODE_CLICK 1000   // Report button press/release only
+#define SFTE_INPUT_MOUSE_MODE_DRAG 1002    // Report clicks and drag motion
+#define SFTE_INPUT_MOUSE_MODE_MOTION 1003  // Report all hover and drag motion
+
+// Formatting extensions (DECSET)
+#define SFTE_INPUT_MOUSE_EXT_DEFAULT 0  // Legacy X10 encoding
+#define SFTE_INPUT_MOUSE_EXT_SGR 1006   // Modern SGR encoding
+
+// Encoding offsets
+#define SFTE_INPUT_MOUSE_BTN_RELEASE 3     // The default "button released" state in legacy modes
+#define SFTE_INPUT_MOUSE_MOTION_OFFSET 32  // Added to the button state to indicate motion/dragging
+#define SFTE_INPUT_MOUSE_X10_OFFSET                                                                \
+    32  // Added to coords to ensure they are printable ASCII characters
+#define SFTE_INPUT_MOUSE_X10_MAX_COORD 223  // 255 (max byte) - 32 (offset)
+
+#endif  // SFTE_INPUT_MOUSE
+
 /*
     Converts physical pixel coordinates into discrete grid coordinates.
     `out_logical_row` includes scrollback offset (can be negative).
@@ -17,12 +37,12 @@
 */
 static inline void _sfte_grid_from_px(const sfte_viewport_state *vp, int32_t px_x, int32_t px_y,
                                       int16_t *out_col, int32_t *out_logical_row,
-                                      int16_t *out_screen_row) {
-    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
+                                      int16_t *out_screen_row, const sfte_config *cfg) {
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp, cfg);
     int32_t off_y = layout.grid_off_y;
 
-    int16_t c = _SFTE_CLAMP((px_x - SFTE_WINDOW_PAD_X) / vp->cell_width, 0, vp->cols - 1);
-    int16_t r = _SFTE_CLAMP((px_y - SFTE_WINDOW_PAD_Y - off_y) / vp->cell_height, 0, vp->rows - 1);
+    int16_t c = _SFTE_CLAMP((px_x - cfg->window.pad_x) / vp->cell_width, 0, vp->cols - 1);
+    int16_t r = _SFTE_CLAMP((px_y - cfg->window.pad_y - off_y) / vp->cell_height, 0, vp->rows - 1);
 
     if (out_col) *out_col = c;
     if (out_screen_row) *out_screen_row = r;
@@ -64,22 +84,6 @@ static inline uint8_t _sfte_input_is_selected(const sfte_mouse_state *mouse, int
 #endif  // SFTE_INPUT_SELECTION
 
 #if SFTE_INPUT_MOUSE
-// Tracking modes (DECSET)
-#define SFTE_INPUT_MOUSE_MODE_CLICK 1000   // Report button press/release only
-#define SFTE_INPUT_MOUSE_MODE_DRAG 1002    // Report clicks and drag motion
-#define SFTE_INPUT_MOUSE_MODE_MOTION 1003  // Report all hover and drag motion
-
-// Formatting extensions (DECSET)
-#define SFTE_INPUT_MOUSE_EXT_DEFAULT 0  // Legacy X10 encoding
-#define SFTE_INPUT_MOUSE_EXT_SGR 1006   // Modern SGR encoding
-
-// Encoding offsets
-#define SFTE_INPUT_MOUSE_BTN_RELEASE 3     // The default "button released" state in legacy modes
-#define SFTE_INPUT_MOUSE_MOTION_OFFSET 32  // Added to the button state to indicate motion/dragging
-#define SFTE_INPUT_MOUSE_X10_OFFSET                                                                \
-    32  // Added to coords to ensure they are printable ASCII characters
-#define SFTE_INPUT_MOUSE_X10_MAX_COORD 223  // 255 (max byte) - 32 (offset)
-
 /*
     Encodes and flushes mouse events back to the host application via terminal escape sequences.
     Supports both legacy X10 (max coords 223) and modern SGR 1006 formats.
@@ -193,6 +197,30 @@ static inline uint8_t _sfte_input_text_handle(sfte_text_input_state *text_input,
     return 0;
 }
 
+/*
+    Evaluates non-case sensitive key shortcuts and executes matched.
+    Returns a non-zero integer if the shortcut wants the input to be consumed.
+*/
+static inline uint8_t _sfte_match_and_exec_shortcut(sfte_ctx *ctx, const sfte_shortcut *list,
+                                                    sfte_key key, uint32_t mod_mask) {
+    if (!list) return 0;
+    sfte_key lower_key = (key >= 'A' && key <= 'Z') ? (sfte_key)(key + ('a' - 'A')) : key;
+
+    for (size_t i = 0; list[i].func != NULL; ++i) {
+        sfte_key shortcut_key = (sfte_key)list[i].key;
+        sfte_key lower_shortcut_key = (shortcut_key >= 'A' && shortcut_key <= 'Z')
+                                          ? (sfte_key)(shortcut_key + ('a' - 'A'))
+                                          : shortcut_key;
+
+        if (lower_shortcut_key == lower_key && list[i].mod_mask == mod_mask) {
+            uint8_t res = list[i].func(ctx, &list[i].arg);
+            if (res != 0) return res;
+        }
+    }
+
+    return 0;
+}
+
 // =================================================================================================
 // >>public api
 // =================================================================================================
@@ -220,7 +248,7 @@ void sfte_input_text(sfte_ctx *ctx, const char *text, size_t len) {
 
     if (search->is_active) {
         if (_sfte_input_text_handle(&search->text_input, SFTE_KEY_NONE, text, len)) {
-            _sfte_search_exec(term, search->text_input.buf);
+            _sfte_search_exec(ctx, search->text_input.buf);
             search->ui_dirty = 1;
         }
 
@@ -228,35 +256,31 @@ void sfte_input_text(sfte_ctx *ctx, const char *text, size_t len) {
     }
 #endif  // SFTE_SEARCH
 
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
     if (vp->sb_off > 0) {
         vp->sb_off = 0;
         _sfte_grid_dirty_range(term, 0, vp->cols * vp->rows);
     }
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
 
     if (cb->write) cb->write(cb->user_data, text, len);
 }
 
 uint8_t sfte_input_shortcut(sfte_ctx *ctx, sfte_key key, uint32_t mod_mask) {
-    const sfte_shortcut _sfte_shortcuts[] = SFTE_SHORTCUTS;
+    static const sfte_shortcut _sfte_default_shortcuts[] = {SFTE_BASE_SHORTCUTS{0}};
+
+    const sfte_config *cfg = &ctx->cfg;
+    uint8_t handled = 0;
 
 #if SFTE_MUX
     sfte_mux *mux = &ctx->mux;
 #endif  // SFTE_MUX
 
-    uint8_t handled = 0;
-    sfte_key lower_key = (key >= 'A' && key <= 'Z') ? (sfte_key)(key + ('a' - 'A')) : key;
+    if (cfg->shortcuts.custom)
+        handled = _sfte_match_and_exec_shortcut(ctx, cfg->shortcuts.custom, key, mod_mask);
 
-    for (size_t i = 0; i < _SFTE_ARRAY_LEN(_sfte_shortcuts); ++i) {
-        sfte_key sc_key = (sfte_key)_sfte_shortcuts[i].key;
-        sfte_key lower_sc_key = (sc_key >= 'A' && sc_key <= 'Z') ? (sfte_key)(sc_key + ('a' - 'A'))
-                                                                 : sc_key;
-        if (lower_sc_key == lower_key && _sfte_shortcuts[i].mod_mask == mod_mask) {
-            handled = _sfte_shortcuts[i].func(ctx, &_sfte_shortcuts[i].arg);
-            break;
-        }
-    }
+    if (!handled && !cfg->shortcuts.override_defaults)
+        handled = _sfte_match_and_exec_shortcut(ctx, _sfte_default_shortcuts, key, mod_mask);
 
 #if SFTE_MUX
     // If the shortcut returned 2, it's explicitly asking to keep the prefix active.
@@ -319,7 +343,7 @@ void sfte_input_key(sfte_ctx *ctx, sfte_key key, uint32_t mod_mask) {
     if (search->is_active) {
         if (key == SFTE_KEY_LEFT || key == SFTE_KEY_RIGHT || key == SFTE_KEY_BACKSPACE)
             if (_sfte_input_text_handle(&search->text_input, key, NULL, 0)) {
-                _sfte_search_exec(term, search->text_input.buf);
+                _sfte_search_exec(ctx, search->text_input.buf);
                 search->ui_dirty = 1;
             }
 
@@ -540,13 +564,14 @@ void sfte_input_key(sfte_ctx *ctx, sfte_key key, uint32_t mod_mask) {
 
 #if SFTE_INPUT_MOUSE
 void sfte_mouse_move(sfte_ctx *ctx, int32_t px_x, int32_t px_y) {
+    const sfte_config *cfg = &ctx->cfg;
     sfte_term *term = sfte_term_get_active(ctx);
     sfte_parser_state *parser = &term->parser;
     sfte_mouse_state *mouse = &term->mouse;
     const sfte_viewport_state *vp = &term->viewport;
 
 #if SFTE_MUX_BAR
-    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp, cfg);
     sfte_mux *mux = &ctx->mux;
 
     int32_t bar_y = layout.bar_y;
@@ -572,11 +597,8 @@ void sfte_mouse_move(sfte_ctx *ctx, int32_t px_x, int32_t px_y) {
         if (!mouse->sel_dragging)
 #endif  // SFTE_INPUT_SELECTION
         {
-#if SFTE_MUX_BAR_HOVER
+            if (!cfg->mux_bar.hover) return;
             if (hit_idx != -1) return;
-#else   // !SFTE_MUX_BAR_HOVER
-            return;
-#endif  // !SFTE_MUX_BAR_HOVER
         }
     } else if (mux->hovered_idx != -1) {
         mux->hovered_idx = -1;
@@ -586,9 +608,9 @@ void sfte_mouse_move(sfte_ctx *ctx, int32_t px_x, int32_t px_y) {
 
     int16_t c, screen_r;
     int32_t logical_r;
-    _sfte_grid_from_px(vp, px_x, px_y, &c, &logical_r, &screen_r);
+    _sfte_grid_from_px(vp, px_x, px_y, &c, &logical_r, &screen_r, cfg);
 
-#if SFTE_INPUT_SELECTION && SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_INPUT_SELECTION && SFTE_TERM_SCROLLBACK
     if (mouse->sel_dragging && !mouse->mode) {
         int8_t new_dir = (screen_r <= 0) ? 1 : (screen_r >= vp->rows - 1) ? -1 : 0;
         if (new_dir != mouse->sel_scroll_dir) {
@@ -598,7 +620,7 @@ void sfte_mouse_move(sfte_ctx *ctx, int32_t px_x, int32_t px_y) {
     } else {
         mouse->sel_scroll_dir = 0;
     }
-#endif  // SFTE_INPUT_SELECTION && SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_INPUT_SELECTION && SFTE_TERM_SCROLLBACK
 
     if (parser->mouse_hover_col == c && parser->mouse_hover_row == screen_r) return;
 
@@ -615,16 +637,17 @@ void sfte_mouse_move(sfte_ctx *ctx, int32_t px_x, int32_t px_y) {
 
     if (mouse->sel_end_col == parser->mouse_hover_col && mouse->sel_end_row == logical_r) return;
 
-    _sfte_grid_dirty_rows(term, mouse->sel_start_row, mouse->sel_end_row);
+    _sfte_grid_dirty_rows(term, mouse->sel_start_row, mouse->sel_end_row, cfg);
     mouse->sel_active = 1;
     mouse->sel_end_col = parser->mouse_hover_col;
     mouse->sel_end_row = logical_r;
-    _sfte_grid_dirty_rows(term, mouse->sel_start_row, mouse->sel_end_row);
+    _sfte_grid_dirty_rows(term, mouse->sel_start_row, mouse->sel_end_row, cfg);
 #endif  // SFTE_INPUT_SELECTION
 }
 
 void sfte_mouse_click(sfte_ctx *ctx, sfte_mouse_button btn, uint8_t pressed, int32_t px_x,
                       int32_t px_y) {
+    const sfte_config *cfg = &ctx->cfg;
     sfte_term *term = sfte_term_get_active(ctx);
     const sfte_callbacks *cb = term->cb;
     const sfte_viewport_state *vp = &term->viewport;
@@ -632,7 +655,7 @@ void sfte_mouse_click(sfte_ctx *ctx, sfte_mouse_button btn, uint8_t pressed, int
     sfte_mouse_state *mouse = &term->mouse;
 
 #if SFTE_MUX_BAR
-    const sfte_mux_layout layout = _sfte_mux_get_layout(vp);
+    const sfte_mux_layout layout = _sfte_mux_get_layout(vp, cfg);
     sfte_mux *mux = &ctx->mux;
 
     int32_t bar_y = layout.bar_y;
@@ -655,19 +678,17 @@ void sfte_mouse_click(sfte_ctx *ctx, sfte_mouse_button btn, uint8_t pressed, int
             return;
         }
 
-#if !SFTE_MUX_BAR_HOVER
-        return;
-#endif  // !SFTE_MUX_BAR_HOVER
+        if (!cfg->mux_bar.hover) return;
     }
 #endif  // SFTE_MUX_BAR
 
     int16_t c, screen_r;
     int32_t logical_r;
-    _sfte_grid_from_px(vp, px_x, px_y, &c, &logical_r, &screen_r);
+    _sfte_grid_from_px(vp, px_x, px_y, &c, &logical_r, &screen_r, cfg);
 
 #if SFTE_INPUT_HYPERLINKS
     if (pressed && btn == SFTE_MOUSE_BUTTON_LEFT && cb->open_link) {
-        const char *uri = sfte_get_link_at(term, c, logical_r);
+        const char *uri = sfte_get_link_at(ctx, c, logical_r);
         if (uri) {
             cb->open_link(cb->user_data, uri);
             return;
@@ -688,7 +709,7 @@ void sfte_mouse_click(sfte_ctx *ctx, sfte_mouse_button btn, uint8_t pressed, int
 #if SFTE_INPUT_SELECTION
     if (pressed && btn == SFTE_MOUSE_BUTTON_LEFT) {
         if (mouse->sel_active)
-            _sfte_grid_dirty_rows(term, mouse->sel_start_row, mouse->sel_end_row);
+            _sfte_grid_dirty_rows(term, mouse->sel_start_row, mouse->sel_end_row, cfg);
 
         parser->mouse_hover_col = c;
         parser->mouse_hover_row = screen_r;
@@ -699,51 +720,55 @@ void sfte_mouse_click(sfte_ctx *ctx, sfte_mouse_button btn, uint8_t pressed, int
         mouse->sel_end_row = logical_r;
         mouse->sel_active = 1;
         mouse->sel_dragging = 1;
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
         mouse->sel_scroll_dir = 0;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
 
-        _sfte_grid_dirty_rows(term, mouse->sel_start_row, mouse->sel_end_row);
+        _sfte_grid_dirty_rows(term, mouse->sel_start_row, mouse->sel_end_row, cfg);
     } else {
         mouse->sel_dragging = 0;
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
         mouse->sel_scroll_dir = 0;
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
         if (mouse->sel_start_col == mouse->sel_end_col &&
             mouse->sel_start_row == mouse->sel_end_row) {
             mouse->sel_active = 0;
-            _sfte_grid_dirty_rows(term, mouse->sel_start_row, mouse->sel_end_row);
+            _sfte_grid_dirty_rows(term, mouse->sel_start_row, mouse->sel_end_row, cfg);
         }
     }
 #endif  // SFTE_INPUT_SELECTION
 }
 
-void sfte_mouse_scroll(sfte_term *term, int8_t dir, int32_t px_x, int32_t px_y) {
+void sfte_mouse_scroll(sfte_ctx *ctx, int8_t dir, int32_t px_x, int32_t px_y) {
+    const sfte_config *cfg = &ctx->cfg;
+    sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
     sfte_mouse_state *mouse = &term->mouse;
 
     int16_t c, screen_r;
-    _sfte_grid_from_px(vp, px_x, px_y, &c, NULL, &screen_r);
+    _sfte_grid_from_px(vp, px_x, px_y, &c, NULL, &screen_r, cfg);
 
     if (mouse->mode) {
         uint8_t btn = (dir > 0) ? 64 : 65;
         _sfte_input_send_mouse_event(term, btn, 0, c, screen_r, 0);
     }
 
-#if SFTE_TERM_SCROLLBACK_CAP
-    sfte_view_scroll(term, (dir > 0) ? SFTE_TERM_SCROLL_STEP : -SFTE_TERM_SCROLL_STEP);
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
+    sfte_view_scroll(ctx, (dir > 0) ? cfg->scroll.step : -cfg->scroll.step);
+#endif  // SFTE_TERM_SCROLLBACK
 }
 #endif  // SFTE_INPUT_MOUSE
 
 #if SFTE_INPUT_HYPERLINKS
-const char *sfte_get_link_at(sfte_term *term, int16_t col, int16_t row) {
+const char *sfte_get_link_at(sfte_ctx *ctx, int16_t col, int16_t row) {
+    const sfte_config *cfg = &ctx->cfg;
+    const sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
     const sfte_link_state *links = &term->links;
 
     if (col < 0 || col >= vp->cols || row < 0 || row >= vp->rows) return NULL;
 
-    sfte_cell *c = _sfte_grid_get_cell(term, col, _sfte_grid_vis2log(vp, row));
+    sfte_cell *c = _sfte_grid_get_cell(term, col, _sfte_grid_vis2log(vp, row), cfg);
     if (!c || c->link_idx == 0 || c->link_idx >= links->pool_len) return NULL;
 
     return links->pool[c->link_idx];
@@ -751,7 +776,9 @@ const char *sfte_get_link_at(sfte_term *term, int16_t col, int16_t row) {
 #endif  // SFTE_INPUT_HYPERLINKS
 
 #if SFTE_INPUT_SELECTION
-size_t sfte_get_selection(const sfte_term *term, char *out_buf, size_t max_bytes) {
+size_t sfte_get_selection(sfte_ctx *ctx, char *out_buf, size_t max_bytes) {
+    const sfte_config *cfg = &ctx->cfg;
+    const sfte_term *term = sfte_term_get_active(ctx);
     const sfte_viewport_state *vp = &term->viewport;
     const sfte_mouse_state *mouse = &term->mouse;
 
@@ -784,14 +811,14 @@ size_t sfte_get_selection(const sfte_term *term, char *out_buf, size_t max_bytes
         int16_t actual_end = row_end;
         if (actual_end == vp->cols - 1) {
             while (actual_end >= row_start) {
-                sfte_cell *vcell = _sfte_grid_get_cell(term, actual_end, logical_r);
+                sfte_cell *vcell = _sfte_grid_get_cell(term, actual_end, logical_r, cfg);
                 if (vcell->rune != ' ' && vcell->rune != 0) break;
                 actual_end--;
             }
         }
 
         for (int16_t c = row_start; c <= actual_end; ++c) {
-            sfte_cell *vcell = _sfte_grid_get_cell(term, c, logical_r);
+            sfte_cell *vcell = _sfte_grid_get_cell(term, c, logical_r, cfg);
             sfte_rune rune = (vcell->rune && vcell->rune != ' ') ? vcell->rune : ' ';
 
 // UTF-8 encoding
@@ -819,7 +846,7 @@ size_t sfte_get_selection(const sfte_term *term, char *out_buf, size_t max_bytes
         // Inject newlines for multi-line selections, unless the line soft-wrapped
         if (logical_r < er) {
 #if SFTE_TERM_REFLOW
-            if (!_sfte_grid_get_cell(term, vp->cols - 1, logical_r)->wrapped)
+            if (!_sfte_grid_get_cell(term, vp->cols - 1, logical_r, cfg)->wrapped)
 #endif
                 _SFTE_WRITE_CHAR('\n');
         }
@@ -831,8 +858,10 @@ size_t sfte_get_selection(const sfte_term *term, char *out_buf, size_t max_bytes
 }
 #endif  // SFTE_INPUT_SELECTION
 
-#if SFTE_TERM_SCROLLBACK_CAP
-void sfte_view_scroll(sfte_term *term, int32_t delta) {
+#if SFTE_TERM_SCROLLBACK
+void sfte_view_scroll(sfte_ctx *ctx, int32_t delta) {
+    const sfte_config *cfg = &ctx->cfg;
+    sfte_term *term = sfte_term_get_active(ctx);
 #if SFTE_TERM_ALT_SCREEN
     const sfte_modes_state *modes = &term->modes;
 #endif  // SFTE_TERM_ALT_SCREEN
@@ -845,7 +874,8 @@ void sfte_view_scroll(sfte_term *term, int32_t delta) {
     int32_t new_off = vp->sb_off + delta;
     if (new_off < 0) new_off = 0;
 
-    int32_t max_scroll = vp->sb_len < vp->sb_cap ? vp->sb_len : vp->sb_cap;
+    int32_t max_scroll = vp->sb_len < cfg->scroll.scrollback_cap ? vp->sb_len
+                                                                 : cfg->scroll.scrollback_cap;
     if (new_off > max_scroll) new_off = max_scroll;
 
     if (new_off != vp->sb_off) {
@@ -854,15 +884,16 @@ void sfte_view_scroll(sfte_term *term, int32_t delta) {
         int32_t top_logical_r = -vp->sb_off;
         int32_t bot_logical_r = top_logical_r + vp->rows - 1;
 
-        _sfte_grid_dirty_rows(term, top_logical_r, bot_logical_r);
+        _sfte_grid_dirty_rows(term, top_logical_r, bot_logical_r, cfg);
     }
 }
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
 
 #if SFTE_TERM_FOCUS
 void sfte_set_focus(sfte_ctx *ctx, uint8_t focused) {
     if (!ctx || ctx->window.is_focused == focused) return;
 
+    const sfte_config *cfg = &ctx->cfg;
     sfte_window_state *win = &ctx->window;
     sfte_term *term = sfte_term_get_active(ctx);
     sfte_viewport_state *vp = &term->viewport;
@@ -877,7 +908,7 @@ void sfte_set_focus(sfte_ctx *ctx, uint8_t focused) {
 #if SFTE_CURSOR_BLINK
     // Force the cursor to be visible when changing focus states
     cursor->blink_visible = 1;
-    cursor->next_blink_ms = SFTE_TIME_MS() + SFTE_CURSOR_BLINK_RATE_MS;
+    cursor->next_blink_ms = SFTE_TIME_MS() + cfg->cursor.blink_rate_ms;
 #endif  // SFTE_CURSOR_BLINK
 
 #if SFTE_TERM_SCROLL_SMOOTH
@@ -888,7 +919,7 @@ void sfte_set_focus(sfte_ctx *ctx, uint8_t focused) {
 #endif  // SFTE_TERM_SCROLL_SMOOTH
 
     int16_t vis_col = cursor->col >= vp->cols ? vp->cols - 1 : cursor->col;
-    _sfte_grid_get_cell(term, vis_col, cursor->row)->dirty = 1;
+    _sfte_grid_get_cell(term, vis_col, cursor->row, cfg)->dirty = 1;
 
     if (modes->report_focus && cb->write) {
         if (focused)
@@ -902,6 +933,8 @@ void sfte_set_focus(sfte_ctx *ctx, uint8_t focused) {
 #ifdef SFTE_XKB_COMMON
 void sfte_xkb_process_key(sfte_ctx *ctx, struct xkb_state *state, uint32_t keycode) {
     if (!ctx || !state) return;
+
+    const sfte_config *cfg = &ctx->cfg;
 
     xkb_keysym_t sym = xkb_state_key_get_one_sym(state, keycode);
 
@@ -967,7 +1000,7 @@ void sfte_xkb_process_key(sfte_ctx *ctx, struct xkb_state *state, uint32_t keyco
     sfte_term *term = sfte_term_get_active(ctx);
     if (term && term->mouse.sel_active && !term->mouse.sel_dragging) {
         term->mouse.sel_active = 0;
-        _sfte_grid_dirty_rows(term, term->mouse.sel_start_row, term->mouse.sel_end_row);
+        _sfte_grid_dirty_rows(term, term->mouse.sel_start_row, term->mouse.sel_end_row, cfg);
     }
 #endif  // SFTE_INPUT_SELECTION
 

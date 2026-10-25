@@ -1,5 +1,6 @@
 #pragma once
 
+#include "src/font.h"
 #include "src/grid.h"
 #include "src/kitty.h"
 #include "src/sixel.h"
@@ -28,13 +29,12 @@ static inline int8_t _sfte_term_get_new_idx(sfte_ctx *ctx) {
 /*
     Initializes the provided `term` terminal context struct.
 */
-static inline void _sfte_term_init(sfte_term *term, const sfte_callbacks *cb, int16_t cols,
-                                   int16_t rows) {
+static inline void _sfte_term_init(sfte_ctx *ctx, sfte_term *term, int16_t cols, int16_t rows) {
     if (!term) return;
 
-#if SFTE_TERM_SCROLLBACK_CAP
-    const sfte_viewport_state *vp = &term->viewport;
-#endif  // SFTE_TERM_SCROLLBACK_CAPA
+    const sfte_config *cfg = &ctx->cfg;
+    const sfte_callbacks *cb = &ctx->cb;
+    sfte_viewport_state *vp = &term->viewport;
     const sfte_parser_state *parser = &term->parser;
 #if SFTE_INPUT_HYPERLINKS
     const sfte_link_state *links = &term->links;
@@ -44,20 +44,21 @@ static inline void _sfte_term_init(sfte_term *term, const sfte_callbacks *cb, in
 #endif  // SFTE_IMG_SIXEL
     sfte_stack *stack = &term->stack;
     sfte_render_buffers *render = &term->render;
+    sfte_modes_state *modes = &term->modes;
 
     memset(term, 0, sizeof(sfte_term));
 
     void *stack_back_buf = SFTE_MALLOC(SFTE_MEM_STACK_SIZE);
     _sfte_mem_stack_init(stack, stack_back_buf, SFTE_MEM_STACK_SIZE);
 
-    term->tab_width = SFTE_TERM_TAB_WIDTH;
-    _sfte_grid_resize_tabs(term, 0, cols);
+    term->tab_width = cfg->window.tab_width;
+    _sfte_grid_resize_tabs(term, 0, cols, cfg);
 
     term->is_allocated = 1;
-    term->viewport.cols = cols;
-    term->viewport.rows = rows;
-    term->modes.auto_wrap = 1;
-    term->viewport.scroll_bot = rows - 1;
+    vp->cols = cols;
+    vp->rows = rows;
+    modes->auto_wrap = 1;
+    vp->scroll_bot = rows - 1;
 
     term->cb = cb;
 
@@ -71,28 +72,30 @@ static inline void _sfte_term_init(sfte_term *term, const sfte_callbacks *cb, in
     render->target_caches = (sfte_font_cache **)SFTE_CALLOC(cols, sizeof(sfte_font_cache *));
 
 #if SFTE_IMG_SIXEL
-    memcpy(sixel->palette, _sfte_palette_256, 256 * sizeof(uint32_t));
+    memcpy(sixel->palette, ctx->palette, sizeof(ctx->palette));
 #endif  // SFTE_IMG_SIXEL
 
-#if SFTE_TERM_SCROLLBACK_CAP
-    term->viewport.sb_cap = SFTE_TERM_SCROLLBACK_CAP;
-    term->scrollback = (sfte_cell *)SFTE_CALLOC(vp->sb_cap * vp->cols, sizeof(sfte_cell));
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
+    term->scrollback = (sfte_cell *)SFTE_CALLOC(cfg->scroll.scrollback_cap * vp->cols,
+                                                sizeof(sfte_cell));
+#endif  // SFTE_TERM_SCROLLBACK
 
 #if SFTE_CURSOR_BLINK
     term->cursor.blink_enabled = 1;
     term->cursor.blink_visible = 1;
-    term->cursor.next_blink_ms = SFTE_TIME_MS() + SFTE_CURSOR_BLINK_RATE_MS;
+    term->cursor.next_blink_ms = SFTE_TIME_MS() + cfg->cursor.blink_rate_ms;
 #endif  // SFTE_CURSOR_BLINK
 
 #if SFTE_CURSOR_DYNAMIC
-    term->cursor.color = SFTE_CURSOR_COLOR;
-    term->cursor.style = SFTE_CURSOR_STYLE;
+    term->cursor.color = cfg->color.cursor;
+    term->cursor.style = cfg->cursor.style;
 #endif  // SFTE_CURSOR_DYNAMIC
 
 #if SFTE_UNDERLINE_COLORED
-    term->sgr.ul_color = _SFTE_COLOR_FG_DEFAULT;
+    term->sgr.ul_color = cfg->color.fg;
 #endif  // SFTE_UNDERLINE_COLORED
+    term->sgr.fg = cfg->color.fg;
+    term->sgr.bg = cfg->color.bg;
 
     term->parser.osc_cap = SFTE_OSC_INIT_CAP;
     term->parser.osc_payload = (char *)SFTE_MALLOC(parser->osc_cap);
@@ -152,9 +155,9 @@ static inline void _sfte_term_free(sfte_term *term) {
     SFTE_FREE(term->alt_cells);
 #endif  // SFTE_TERM_ALT_SCREEN
 
-#if SFTE_TERM_SCROLLBACK_CAP
+#if SFTE_TERM_SCROLLBACK
     SFTE_FREE(term->scrollback);
-#endif  // SFTE_TERM_SCROLLBACK_CAP
+#endif  // SFTE_TERM_SCROLLBACK
 
 #if SFTE_INPUT_HYPERLINKS
     if (links->pool) {
@@ -182,15 +185,17 @@ static inline void _sfte_term_free(sfte_term *term) {
 #if SFTE_CURSOR_TRAIL
 #define _SFTE_MUX_SWITCH_FOCUS(ctx_ptr, old_idx, new_idx)                                          \
     do {                                                                                           \
+        const sfte_config *_cfg = &(ctx_ptr)->cfg;                                                 \
         sfte_term *_old = &(ctx_ptr)->mux.terms[old_idx];                                          \
         sfte_term *_new = &(ctx_ptr)->mux.terms[new_idx];                                          \
+        const sfte_viewport_state *_new_vp = &(_new)->viewport;                                    \
         if ((old_idx) != (new_idx)) {                                                              \
             _new->cursor.trail = _old->cursor.trail;                                               \
             _new->cursor.trail.is_trailing = 1;                                                    \
             _new->cursor.trail.last_move_ms = SFTE_TIME_MS();                                      \
         }                                                                                          \
-        _sfte_grid_dirty_rows(_new, -_new->viewport.sb_off,                                        \
-                              -_new->viewport.sb_off + _new->viewport.rows - 1);                   \
+        int32_t sb_off = _sfte_grid_get_sb_off(_new_vp);                                           \
+        _sfte_grid_dirty_rows(_new, -sb_off, -sb_off + _new->viewport.rows - 1, _cfg);             \
         (ctx_ptr)->window.pad_dirty = 1;                                                           \
         (ctx_ptr)->mux.active_idx = (new_idx);                                                     \
     } while (0)
@@ -198,8 +203,9 @@ static inline void _sfte_term_free(sfte_term *term) {
 #define _SFTE_MUX_SWITCH_FOCUS(ctx_ptr, old_idx, new_idx)                                          \
     do {                                                                                           \
         sfte_term *_new = &(ctx_ptr)->mux.terms[new_idx];                                          \
-        _sfte_grid_dirty_rows(_new, -_new->viewport.sb_off,                                        \
-                              -_new->viewport.sb_off + _new->viewport.rows - 1);                   \
+        const sfte_viewport_state *_new_vp = &(_new)->viewport;                                    \
+        int32_t sb_off = _sfte_grid_get_sb_off(_new_vp);                                           \
+        _sfte_grid_dirty_rows(_new, -sb_off, -sb_off + _new->viewport.rows - 1);                   \
         (ctx_ptr)->window.pad_dirty = 1;                                                           \
         (ctx_ptr)->mux.active_idx = (new_idx);                                                     \
     } while (0)
@@ -218,29 +224,14 @@ static inline int8_t _sfte_mux_slot_to_pos(const sfte_mux *mux, uint8_t slot) {
     Evaluates and returns multiplexer layout information based on bar configuration.
     Returns 0-ed struct if `SFTE_MUX_BAR` is 0.
 */
-static inline sfte_mux_layout _sfte_mux_get_layout(const sfte_viewport_state *vp) {
+static inline sfte_mux_layout _sfte_mux_get_layout(const sfte_viewport_state *vp,
+                                                   const sfte_config *cfg) {
     sfte_mux_layout l = {0};
 #if SFTE_MUX_BAR
-    int16_t bar_row;  // relative to the top of the unshifted grid
-
-#if SFTE_MUX_BAR_HOVER
-    l.overlay = 1;
-#else  // !SFTE_MUX_BAR_HOVER
-    l.reserved_rows = 1;
-#if SFTE_MUX_BAR_PLACEMENT_TOP
-    l.grid_off_y = vp->cell_height;
-#endif  // SFTE_MUX_BAR_PLACEMENT_TOP
-#endif  // !SFTE_MUX_BAR_HOVER
-
-#if SFTE_MUX_BAR_PLACEMENT_TOP
-    bar_row = -1;
-#elif SFTE_MUX_BAR_HOVER
-    bar_row = vp->rows - 2;
-#else   // !SFTE_MUX_BAR_PLACEMENT_TOP && !SFTE_MUX_BAR_HOVER
-    bar_row = vp->rows - 1;
-#endif  // !SFTE_MUX_BAR_PLACEMENT_TOP && !SFTE_MUX_BAR_HOVER
-
-    l.bar_y = (bar_row + 1) * vp->cell_height + SFTE_WINDOW_PAD_Y;
+    l.reserved_rows = cfg->mux_bar.hover ? 0 : 1;
+    if (cfg->mux_bar.top && !cfg->mux_bar.hover) l.grid_off_y = vp->cell_height;
+    int16_t bar_row = cfg->mux_bar.top ? -1 : cfg->mux_bar.hover ? vp->rows - 2 : vp->rows - 1;
+    l.bar_y = (bar_row + 1) * vp->cell_height + cfg->window.pad_y;
 #else   // !SFTE_MUX_BAR
     (void)vp;
 #endif  // !SFTE_MUX_BAR
@@ -412,6 +403,7 @@ int8_t sfte_term_get_idx(sfte_ctx *ctx, sfte_term *term) {
 }
 
 sfte_term *sfte_term_spawn(sfte_ctx *ctx) {
+    const sfte_config *cfg = &ctx->cfg;
     sfte_mux *mux = &ctx->mux;
 
     int8_t idx = _sfte_term_get_new_idx(ctx);
@@ -420,15 +412,17 @@ sfte_term *sfte_term_spawn(sfte_ctx *ctx) {
 
     sfte_term *active_term = sfte_term_get_active(ctx);
     if (active_term && !active_term->is_allocated) active_term = NULL;
-    int16_t cols = active_term ? active_term->viewport.cols : SFTE_TERM_INIT_COLS;
-    int16_t rows = active_term ? active_term->viewport.rows : SFTE_TERM_INIT_ROWS;
+    int16_t cols = active_term ? active_term->viewport.cols : cfg->window.init_cols;
+    int16_t rows = active_term ? active_term->viewport.rows : cfg->window.init_rows;
     int16_t cell_w = active_term ? active_term->viewport.cell_width : 0;
     int16_t cell_h = active_term ? active_term->viewport.cell_height : 0;
 
-    _sfte_term_init(term, &ctx->cb, cols, rows);
+    _sfte_term_init(ctx, term, cols, rows);
     term->viewport.cell_width = cell_w;
     term->viewport.cell_height = cell_h;
     mux->tab_order[mux->tab_cnt++] = idx;
+
+    if (ctx->font.regular.num_fonts > 0) _sfte_font_reset_cache(ctx);
 
     return term;
 }

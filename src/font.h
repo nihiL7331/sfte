@@ -18,8 +18,6 @@
 #define SFTE_FONT_GET_ID _sfte_stb_get_id
 #endif  // !SFTE_FONT_CUSTOM_BACKEND
 
-static const float _sfte_font_scales[SFTE_FONT_MAX_COUNT] = SFTE_FONT_SCALES;
-
 // =================================================================================================
 // >>shaper
 // =================================================================================================
@@ -526,11 +524,6 @@ static inline int _sfte_stb_get_id(sfte_font_backend_info *info, uint32_t rune) 
 #endif  // !SFTE_FONT_CUSTOM_BACKEND
 
 /*
-    Distance in pixels between each glyph in the atlas 2D texture.
-*/
-#define _SFTE_FONT_PADDING 1
-
-/*
     Retrieves the active cache pool for a specific font style (regular/bold/italic/bold italic).
 */
 static inline sfte_font_cache *_sfte_font_get_cache(sfte_ctx *ctx, sfte_font_style style) {
@@ -553,7 +546,7 @@ static inline sfte_font_cache *_sfte_font_get_cache(sfte_ctx *ctx, sfte_font_sty
 */
 static inline void _sfte_font_clear_cache(sfte_font_cache *cache) {
     if (cache->atlas_pxs) {
-        size_t used_rows = (size_t)cache->atlas_y + cache->atlas_row_h + _SFTE_FONT_PADDING;
+        size_t used_rows = (size_t)cache->atlas_y + cache->atlas_row_h + SFTE_FONT_PADDING;
         if (used_rows > SFTE_FONT_ATLAS_SIZE) used_rows = SFTE_FONT_ATLAS_SIZE;
         if (used_rows > 0) memset(cache->atlas_pxs, 0, used_rows * SFTE_FONT_ATLAS_SIZE);
     }
@@ -566,9 +559,10 @@ static inline void _sfte_font_clear_cache(sfte_font_cache *cache) {
 /*
     Recalculates font scales for the primary font and all fallbacks based on current size.
 */
-static inline void _sfte_font_update_scales(sfte_font_cache *cache, float cur_size) {
+static inline void _sfte_font_update_scales(sfte_font_cache *cache, float cur_size,
+                                            const sfte_config *cfg) {
     for (uint8_t i = 0; i < cache->num_fonts; ++i) {
-        float tweak = _sfte_font_scales[i];
+        float tweak = cfg->font.scales[i];
         if (tweak <= 0.0f) tweak = 1.0f;
         cache->scales[i] = SFTE_FONT_GET_SCALE(&cache->info[i], cur_size * tweak);
     }
@@ -584,7 +578,7 @@ static inline void _sfte_font_pack_and_bake(sfte_stack *stack, sfte_font_cache *
                                             int32_t gw, int32_t gh) {
     if (cache->atlas_x + gw >= SFTE_FONT_ATLAS_SIZE) {
         cache->atlas_x = 0;
-        cache->atlas_y += cache->atlas_row_h + _SFTE_FONT_PADDING;
+        cache->atlas_y += cache->atlas_row_h + SFTE_FONT_PADDING;
         cache->atlas_row_h = 0;
     }
 
@@ -603,7 +597,7 @@ static inline void _sfte_font_pack_and_bake(sfte_stack *stack, sfte_font_cache *
                        &cache->atlas_pxs[atlas_idx], gw, gh, SFTE_FONT_ATLAS_SIZE);
     }
 
-    cache->atlas_x += gw + _SFTE_FONT_PADDING;
+    cache->atlas_x += gw + SFTE_FONT_PADDING;
 }
 
 /*
@@ -672,13 +666,14 @@ static inline void _sfte_font_resolve_rune(sfte_font_cache *cache, sfte_rune run
     Must be called on startup, and whenever the DPI or font size changes.
 */
 static inline void _sfte_font_reset_cache(sfte_ctx *ctx) {
+    const sfte_config *cfg = &ctx->cfg;
     sfte_mux *mux = &ctx->mux;
     sfte_font_state *font = &ctx->font;
     sfte_term *term = sfte_term_get_active(ctx);
     sfte_stack *stack = &term->stack;
 
     _sfte_font_clear_cache(&font->regular);
-    _sfte_font_update_scales(&font->regular, font->cur_size);
+    _sfte_font_update_scales(&font->regular, font->cur_size, cfg);
 
 #ifdef SFTE_FONT_BOLD
     _sfte_font_clear_cache(&font->bold);
@@ -725,6 +720,7 @@ static inline void _sfte_font_reset_cache(sfte_ctx *ctx) {
 // =================================================================================================
 
 void sfte_font_load_mem(sfte_ctx *ctx, sfte_font_style style, const uint8_t *ttf_data) {
+    const sfte_config *cfg = &ctx->cfg;
     sfte_font_state *font = &ctx->font;
 
     sfte_font_cache *cache = _sfte_font_get_cache(ctx, style);
@@ -735,7 +731,7 @@ void sfte_font_load_mem(sfte_ctx *ctx, sfte_font_style style, const uint8_t *ttf
     cache->owns_ttf_buf[idx] = 0;
 
     if (idx == 0) {
-        if (style == SFTE_FONT_STYLE_REGULAR && idx == 0) font->cur_size = SFTE_FONT_DEFAULT_SIZE;
+        if (style == SFTE_FONT_STYLE_REGULAR && idx == 0) font->cur_size = cfg->font.default_size;
 
         if (!cache->atlas_pxs) {
             cache->atlas_pxs = (uint8_t *)SFTE_MALLOC(SFTE_FONT_ATLAS_SIZE * SFTE_FONT_ATLAS_SIZE);
@@ -757,7 +753,7 @@ void sfte_font_load_mem(sfte_ctx *ctx, sfte_font_style style, const uint8_t *ttf
     if (style == SFTE_FONT_STYLE_REGULAR && idx == 0)
         _sfte_font_reset_cache(ctx);
     else {
-        float tweak = _sfte_font_scales[idx];
+        float tweak = cfg->font.scales[idx];
         if (tweak <= 0.0f) tweak = 1.0f;
         cache->scales[idx] = SFTE_FONT_GET_SCALE(&cache->info[idx], font->cur_size * tweak);
     }
