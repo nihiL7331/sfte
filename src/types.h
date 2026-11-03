@@ -604,6 +604,7 @@ struct sfte_wayland_app {
     struct xkb_context *xkb_context;
     struct xkb_keymap *xkb_keymap;
     struct xkb_state *xkb_state;
+    struct wl_callback *frame_callback;
 #if SFTE_INPUT_SELECTION
     struct wl_pointer *pointer;
 #endif  // SFTE_INPUT_SELECTION

@@ -153,6 +153,7 @@ static inline void _sfte_wayland_callback_listener_done(void *data, struct wl_ca
     (void)time;
     sfte_wayland_app *app = (sfte_wayland_app *)data;
     wl_callback_destroy(cb);
+    app->frame_callback = NULL;
     app->frame_pending = 0;
 }
 
@@ -752,6 +753,7 @@ static inline void _sfte_wayland_unload(sfte_wayland_app *app) {
     SFTE_FREE(app->back_buffer);
 #endif  // SFTE_TERM_DOUBLE_BUFFER
 
+    if (app->frame_callback) wl_callback_destroy(app->frame_callback);
     if (app->buffer) wl_buffer_destroy(app->buffer);
     if (app->shm_data) munmap(app->shm_data, app->shm_size);
     if (app->xdg_toplevel) xdg_toplevel_destroy(app->xdg_toplevel);
@@ -1074,8 +1076,10 @@ static inline void _sfte_wayland_loop(sfte_wayland_app *app) {
 
                 wl_surface_damage_buffer(app->surface, dmg.x, dmg.y, dmg.w, dmg.h);
                 wl_surface_attach(app->surface, app->buffer, 0, 0);
-                struct wl_callback *cb = wl_surface_frame(app->surface);
-                wl_callback_add_listener(cb, &_sfte_wayland_callback_listener, app);
+                if (app->frame_callback) wl_callback_destroy(app->frame_callback);
+                app->frame_callback = wl_surface_frame(app->surface);
+                wl_callback_add_listener(app->frame_callback, &_sfte_wayland_callback_listener,
+                                         app);
                 app->frame_pending = 1;
                 wl_surface_commit(app->surface);
             }
