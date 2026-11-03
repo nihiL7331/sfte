@@ -542,6 +542,8 @@ static inline const char *_sfte_kitty_exec_transmit(sfte_term *term, sfte_img **
     sfte_stack *stack = &term->stack;
     sfte_image_state *images = &term->images;
 
+    if (!kitty->b64_buf || kitty->b64_len == 0) return "EINVAL: missing payload";
+
     size_t raw_len = 0;
     size_t pre_b64_off = _sfte_mem_stack_save(stack);
     uint8_t *raw_data = _sfte_b64_decode(stack, (uint8_t *)kitty->b64_buf, kitty->b64_len,
@@ -672,7 +674,7 @@ static inline void _sfte_kitty_parse_graphics(sfte_term *term, const char *paylo
     uint8_t is_new = 0;
 
     // Lookahead to check if its a new transmission
-    for (const char *p = payload; p < semi; ++p) {
+    for (const char *p = payload; p < dict_end; ++p) {
         if (*p == 'a' || *p == 'f' || *p == 'i' || *p == 's' || *p == 'v' || *p == 'z')
             if (p + 1 < dict_end && p[1] == '=') {
                 is_new = 1;
@@ -746,7 +748,7 @@ static inline void _sfte_kitty_parse_graphics(sfte_term *term, const char *paylo
 
     if (more) return;  // Abort and wait for next sequence
 
-    kitty->b64_buf[kitty->b64_len] = '\0';
+    if (kitty->b64_buf) kitty->b64_buf[kitty->b64_len] = '\0';
     const char *err_msg = NULL;
 
     switch (kitty->action) {
