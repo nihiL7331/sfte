@@ -572,17 +572,18 @@ static inline void _sfte_font_update_scales(sfte_font_cache *cache, float cur_si
     Allocates space in the 2D texture atlas for a new glyph and bakes the pixels.
     Glyphs are packed sequentially into rows. If a row runs out of horizontal space,
     we step down by the height of the tallest glyph in that row.
+    Returns 1 on success, or 0 if atlas is full.
 */
-static inline void _sfte_font_pack_and_bake(sfte_stack *stack, sfte_font_cache *cache,
-                                            sfte_glyph *g, int32_t font_idx, int32_t glyph_id,
-                                            int32_t gw, int32_t gh) {
+static inline uint8_t _sfte_font_pack_and_bake(sfte_stack *stack, sfte_font_cache *cache,
+                                               sfte_glyph *g, int32_t font_idx, int32_t glyph_id,
+                                               int32_t gw, int32_t gh) {
     if (cache->atlas_x + gw >= SFTE_FONT_ATLAS_SIZE) {
         cache->atlas_x = 0;
         cache->atlas_y += cache->atlas_row_h + SFTE_FONT_PADDING;
         cache->atlas_row_h = 0;
     }
 
-    SFTE_ASSERT(cache->atlas_y + gh < SFTE_FONT_ATLAS_SIZE, "glyph atlas full");
+    if (cache->atlas_y + gh >= SFTE_FONT_ATLAS_SIZE) return 0;
 
     if (gh > cache->atlas_row_h) cache->atlas_row_h = gh;
 
@@ -598,6 +599,8 @@ static inline void _sfte_font_pack_and_bake(sfte_stack *stack, sfte_font_cache *
     }
 
     cache->atlas_x += gw + SFTE_FONT_PADDING;
+
+    return 1;
 }
 
 /*
@@ -625,18 +628,23 @@ static inline sfte_glyph *_sfte_font_get_glyph(sfte_stack *stack, sfte_font_cach
                          &x1, &y1);
 
         sfte_glyph *g = &cache->glyphs[idx];
+        if (!_sfte_font_pack_and_bake(stack, cache, g, font_idx, glyph_id, x1 - x0, y1 - y0)) {
+            _sfte_font_clear_cache(cache);
+            return _sfte_font_get_glyph(stack, cache, glyph_id, font_idx);
+        }
+
         g->glyph_id = glyph_id;
         g->xadvance = (int)(adv * cache->scales[font_idx] + 0.5f);
         g->xoff = x0;
         g->yoff = y0;
         g->font_idx = font_idx;
 
-        _sfte_font_pack_and_bake(stack, cache, g, font_idx, glyph_id, x1 - x0, y1 - y0);
-
         return g;
     }
 
-    return NULL;
+    // hash map full - flush cache and recurse
+    _sfte_font_clear_cache(cache);
+    return _sfte_font_get_glyph(stack, cache, glyph_id, font_idx);
 }
 
 /*
