@@ -685,15 +685,15 @@ static inline void _sfte_font_reset_cache(sfte_ctx *ctx) {
 
 #ifdef SFTE_FONT_BOLD
     _sfte_font_clear_cache(&font->bold);
-    _sfte_font_update_scales(&font->bold, font->cur_size);
+    _sfte_font_update_scales(&font->bold, font->cur_size, cfg);
 #endif  // SFTE_FONT_BOLD
 #ifdef SFTE_FONT_ITALIC
     _sfte_font_clear_cache(&font->italic);
-    _sfte_font_update_scales(&font->italic, font->cur_size);
+    _sfte_font_update_scales(&font->italic, font->cur_size, cfg);
 #endif  // SFTE_FONT_ITALIC
 #ifdef SFTE_FONT_BOLD_ITALIC
     _sfte_font_clear_cache(&font->bold_italic);
-    _sfte_font_update_scales(&font->bold_italic, font->cur_size);
+    _sfte_font_update_scales(&font->bold_italic, font->cur_size, cfg);
 #endif  // SFTE_FONT_BOLD_ITALIC
 
     int32_t ascent_u, descent_u, line_gap_u;
