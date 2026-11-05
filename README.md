@@ -11,11 +11,12 @@
 ## Features
 
 - **Lightweight** - as low as 60KB binary size with <10MB RAM usage
-- **Customizable** - over 80 configurable macros that actually affect performance
+- **Built-in Multiplexer** - tmux-like tabs, status bar, prefix keybindings, thumbnail previews, and tab reordering
+- **Declarative & Modular** - clean runtime `sfte_config` struct paired with compile-time zero-overhead macro toggles
 - **One-size-fits-all** - can be used on everything from microcontrollers to daily-driven machines
-- ***(Almost)* dependency-free** - dependencies are minimized with crucial ones being inlined.
-- **Capable** - supports Kitty graphics, Sixel images, True Color, font fallbacks, styled and colored underlines.
-- **Smooth** - supports multiple 'eye-candy' features: buffer transitions, cursor trail, etc.
+- ***(Almost)* dependency-free** - dependencies are minimized with crucial ones being inlined
+- **Capable** - supports Kitty graphics, Kitty keyboard protocol, Sixel images, True Color, font fallbacks, styled and colored underlines
+- **Smooth** - dynamic font atlas cache eviction, smooth scrolling with accumulation, buffer transitions, and cursor trail
 
 ## Platforms
 
@@ -58,24 +59,26 @@ cc nob.c -o nob
 
 ## Customization
 
-**sfte** relies heavily on customization.
-By default, it comes with minimal, sensible configuration.
+**sfte** combines compile-time optimization with declarative runtime configuration.
 
-It is configured by defining macros inside `config.c`, taking inspiration from `st`.
-When you build the project for the first time, a `config.c` is generated.
-A complete description of all override macros can be found directly inside `sfte.h`.
+1. **Compile-time macros** (e.g. `#define SFTE_MUX 1`, `#define SFTE_FONT_BOLD`):
+   Enable or disable features before including the header, allowing the compiler to strip unused code and maximize performance.
+2. **Runtime `sfte_config`**:
+   Visual and behavioral settings—such as font paths, colors, window padding, multiplexer bar format, and scrollback limits—are cleanly configured via a `static const sfte_config cfg` in `config.c` and passed to `sfte_wayland_init(&cfg)`.
 
-When any changes are done, **sfte** needs to be recompiled for it to apply.
+When you build the project for the first time, a default `config.c` is generated from `config.def.c`. A complete description of all options and macros can be found directly inside `src/config.h` (or in `sfte.h`).
 
-### Why handle the customization this way?
+Whenever changes are made to `config.c`, recompile using:
 
-It's extremely simple. No parsing is needed, and everything is handled during the compilation time.
-It allows the compiler to strip away any disabled portions of code, maximizing the performance.
-The terminal only does what it has to do, nothing more.
+```sh
+./nob install
+```
 
-It also fits the single-file premise of this project, to compile and run **sfte** all that is needed
-are the prerequisites, `nob` binary, `sfte.h` and `config.c`. There's no massive 100MB artifact,
-so everything e.g. can be stored in a dotfiles repository.
+### Why handle customization this way?
+
+Zero-cost abstractions: compile-time macros eliminate unused subsystems completely, while the declarative `sfte_config` struct avoids complex config file parsing at runtime.
+
+It also fits the single-file premise of this project: all that is needed to compile and run **sfte** are the prerequisites, the `nob` build tool, `sfte.h`, and `config.c`. Everything fits cleanly in a dotfiles repository without bloated dependencies.
 
 ## Dependencies
 
